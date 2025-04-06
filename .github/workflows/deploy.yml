@@ -1,0 +1,31 @@
+name: Deploy to Apps Script
+
+on:
+  push:
+    branches:
+      - main  # or whichever branch you want to trigger the deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install clasp
+        run: npm install -g @google/clasp
+
+      - name: Set up authentication
+        env:
+          CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
+        run: |
+          mkdir ~/.clasprc.json
+          echo "$CLASP_TOKEN" > ~/.clasprc.json
+
+      - name: Push to Apps Script
+        run: |
+          clasp push
