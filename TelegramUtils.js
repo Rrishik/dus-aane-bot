@@ -38,6 +38,7 @@ function answerCallbackQuery(callbackQueryId, text = "✅ Updated Successfully!"
   };
 
   sendRequest(BOT_ANSWER_CALLBACK_QUERY_URL, "post", payload);
+  console.log("Callback query answered");
 }
 
 function sendRequest(url, method, payload) {
