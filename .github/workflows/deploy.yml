@@ -23,7 +23,7 @@ jobs:
         env:
           CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
         run: |
-          echo '${{ secrets.CLASP_TOKEN }}' > ~/.clasprc.json
+          echo '${{ secrets.CLASP_TOKEN }}' | base64 -d > ~/.clasprc.json
           cat ~/.clasprc.json
 
       - name: Push to Apps Script
