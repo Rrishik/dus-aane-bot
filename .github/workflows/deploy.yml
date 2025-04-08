@@ -27,4 +27,4 @@ jobs:
           cat ~/.clasprc.json
 
       - name: Push to Apps Script
-        run: clasp push
+        run: npx clasp push -f
