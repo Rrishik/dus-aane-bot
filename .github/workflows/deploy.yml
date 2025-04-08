@@ -26,5 +26,4 @@ jobs:
           echo '{"access_token":"${{ secrets.CLASP_TOKEN }}","refresh_token":"${{ secrets.CLASP_TOKEN }}","scope":"https://www.googleapis.com/auth/script.projects https://www.googleapis.com/auth/script.deployments https://www.googleapis.com/auth/drive.metadata.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/service.management","token_type":"Bearer","expiry_date":9999999999999}' > ~/.clasprc.json
 
       - name: Push to Apps Script
-        run: |
-          clasp push
+        run: clasp push
