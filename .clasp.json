@@ -1,5 +1,6 @@
 {
   "scriptId": "17nMZx9yKtqjz2EemPNZy0DXxRfmoscMW3H6ejtU4QAAlLjKEiPOOQOkQ",
+  "rootDir": "",
   "scriptExtensions": [
     ".js",
     ".gs"
@@ -11,11 +12,5 @@
     ".json"
   ],
   "filePushOrder": [],
-  "skipSubdirectories": false,
-  "files": [
-    "Code.js",
-    "GoogleSheetUtils.js",
-    "TelegramUtils.js",
-    "Constants.js"
-  ]
+  "skipSubdirectories": true
 }
