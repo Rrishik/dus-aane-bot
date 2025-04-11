@@ -36,7 +36,6 @@ function sendTelegramMessage(chatId, message, options = {}) {
   sendRequest(messageURL, "post", payload);
 }
 
-
 // Utility to acknowledge a callback query
 function answerCallbackQuery(callbackQueryId, text = "✅ Updated Successfully!", showAlert = false) {
   var payload = {
