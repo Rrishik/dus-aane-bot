@@ -294,11 +294,10 @@ function extractTransactionsWithGemini2Formatted() {
     console.log("Headers added to the sheet.");
   }
 
+  threads.reverse();
+
   threads.forEach(thread => {
     var messages = thread.getMessages();
-    // Reverse the messages array to process from oldest to newest
-    messages.reverse();
-    
     messages.forEach(message => {
       var emailText = message.getPlainBody();
       var emailDate = message.getDate();
@@ -312,13 +311,7 @@ function extractTransactionsWithGemini2Formatted() {
         }]
       };
 
-      var options = {
-        method: "post",
-        contentType: "application/json",
-        payload: JSON.stringify(payload)
-      };
-
-      var response = UrlFetchApp.fetch(GEMINI_BASE_URL + "?key=" + GEMINI_API_KEY, options);
+      var response = sendRequest(GEMINI_BASE_URL + "?key=" + GEMINI_API_KEY, "post", payload);
       var json = JSON.parse(response.getContentText());
 
       if (json.candidates && json.candidates.length > 0) {
@@ -344,7 +337,7 @@ function extractTransactionsWithGemini2Formatted() {
           // Send Telegram message with the row number
           sendTransactionMessage(transactionData, rowNumber, user);
         } catch (e) {
-          console.log("Failed to parse JSON: " + e);
+          console.log("Failed to parse Gemini response JSON: " + e);
         }
       }
     });
