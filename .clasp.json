@@ -15,6 +15,7 @@
   "files": [
     "Code.js",
     "GoogleSheetUtils.js",
-    "TelegramUtils.js"
+    "TelegramUtils.js",
+    "Constants.js"
   ]
 }

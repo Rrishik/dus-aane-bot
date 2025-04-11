@@ -1,7 +1,15 @@
+function deleteWebhook() {
+  var url = "https://api.telegram.org/bot" + BOT_TOKEN + "/deleteWebhook";
+  sendRequest(url, "post", {});
+}
+
 // Set up webhook (Run this once)
 function setTelegramWebhook() {
+  // First delete any existing webhook
+  deleteWebhook();
+
   var url = "https://api.telegram.org/bot" + BOT_TOKEN + "/setWebhook";
-  var webhookUrl = "https://script.google.com/macros/s/AKfycbzia6ZMpsfBklC2fTlDR8d2tEYt-ACrxvs6xHBKvHAf6dzUbhMbYsK66h-7zo5yW4qO/exec";
+  var webhookUrl = ScriptApp.getService().getUrl();
   
   var payload = {
     url: webhookUrl,
@@ -49,6 +57,7 @@ function sendRequest(url, method, payload) {
   };
   var response = UrlFetchApp.fetch(url, options);
   if (DEBUG) console.log(response.getContentText());
+  return response;
 }
 
 function getReplyMarkup(text, callbackData) {
