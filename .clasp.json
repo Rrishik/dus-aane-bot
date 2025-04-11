@@ -12,5 +12,10 @@
     ".json"
   ],
   "filePushOrder": [],
-  "skipSubdirectories": false
+  "skipSubdirectories": false,
+  "files": [
+    "Code.js",
+    "GoogleSheetUtils.js",
+    "TelegramUtils.js"
+  ]
 }
