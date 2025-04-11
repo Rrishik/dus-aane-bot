@@ -17,7 +17,7 @@ jobs:
           node-version: '18'
 
       - name: Install clasp
-        run: npm install -g @google/clasp@3.0.3-alpha
+        run: npm install -g @google/clasp@2.4.2
 
       - name: Set up authentication
         env:
@@ -27,4 +27,4 @@ jobs:
           cat ~/.clasprc.json
 
       - name: Push to Apps Script
-        run: npx clasp push -f
+        run: clasp push
