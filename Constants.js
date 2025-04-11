@@ -1,3 +1,5 @@
+import { BOT_TOKEN, PERSONAL_CHAT_ID, GROUP_CHAT_ID, TEST_SHEET_ID, PROD_SHEET_ID } from './Lol.js';
+
 // Debug flag
 const DEBUG = true;
 
