@@ -3,7 +3,7 @@ name: Deploy to Apps Script
 on:
   push:
     branches:
-      - main  # or whichever branch you want to trigger the deploy
+      - main
 
 jobs:
   deploy:
@@ -17,7 +17,7 @@ jobs:
           node-version: '18'
 
       - name: Install clasp
-        run: npm install -g @google/clasp
+        run: npm install -g @google/clasp@3.0.3-alpha
 
       - name: Set up authentication
         env:
