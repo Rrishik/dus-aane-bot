@@ -19,6 +19,10 @@ jobs:
       - name: Install clasp
         run: npm install -g @google/clasp@2.4.2
 
+      - name: Create Lol.js from secrets
+        run: |
+          printf "// Telegram\nconst BOT_TOKEN = \"${{ secrets.BOT_TOKEN }}\";\nconst PERSONAL_CHAT_ID = \"${{ secrets.PERSONAL_CHAT_ID }}\";\nconst GROUP_CHAT_ID = \"${{ secrets.GROUP_CHAT_ID }}\";\n\n// Google Sheets\nconst TEST_SHEET_ID = \"${{ secrets.TEST_SHEET_ID }}\";\nconst PROD_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\nconst SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n\n// Gemini\nconst GEMINI_BASE_URL = \"${{ secrets.GEMINI_BASE_URL }}\";\nconst GEMINI_API_KEY = \"${{ secrets.GEMINI_API_KEY }}\";\n\n// Gmail\nconst GMAIL_LABEL = \"${{ secrets.GMAIL_LABEL }}\";" > Lol.js
+
       - name: Set up authentication
         env:
           CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
