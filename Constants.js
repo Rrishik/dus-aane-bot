@@ -1,5 +1,6 @@
 // Debug flag
-const DEBUG = true;
+const DEBUG = false;
+const BACKFILL = true;
 
 const CHAT_ID = DEBUG ? PERSONAL_CHAT_ID : GROUP_CHAT_ID; // Use Rishik's chat ID for debugging
 const BOT_UPDATE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates`;
@@ -15,4 +16,4 @@ const SPLIT_COLUMN = 8; // Column H
 
 
 // Gmail
-const MAILS_LOOKBACK_PERIOD = DEBUG ? '1d' : '1h';
+const MAILS_LOOKBACK_PERIOD = DEBUG ? '1d' : BACKFILL ? '6d' : '1h';
