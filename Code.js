@@ -166,7 +166,6 @@ function addTransaction(chatId, messageText, username) {
 function handleCallbackQuery(update) {
   if (update.callback_query) {
     var callbackQueryId = update.callback_query.id;
-
     var chatId = update.callback_query.message.chat.id;
     var messageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
