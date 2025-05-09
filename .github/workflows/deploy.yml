@@ -21,7 +21,20 @@ jobs:
 
       - name: Create Lol.js from secrets
         run: |
-          printf "// Telegram\nconst BOT_TOKEN = \"${{ secrets.BOT_TOKEN }}\";\nconst PERSONAL_CHAT_ID = \"${{ secrets.PERSONAL_CHAT_ID }}\";\nconst GROUP_CHAT_ID = \"${{ secrets.GROUP_CHAT_ID }}\";\n\n// Google Sheets\nconst TEST_SHEET_ID = \"${{ secrets.TEST_SHEET_ID }}\";\nconst PROD_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\nconst SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n\n// Gemini\nconst GEMINI_BASE_URL = \"${{ secrets.GEMINI_BASE_URL }}\";\nconst GEMINI_API_KEY = \"${{ secrets.GEMINI_API_KEY }}\";\n\n// Gmail\nconst GMAIL_LABEL = \"${{ secrets.GMAIL_LABEL }}\";" > Lol.js
+            printf "// Telegram\n" > Lol.js
+            printf "const BOT_TOKEN = \"${{ secrets.BOT_TOKEN }}\";\n" >> Lol.js
+            printf "const PERSONAL_CHAT_ID = \"${{ secrets.PERSONAL_CHAT_ID }}\";\n" >> Lol.js
+            printf "const GROUP_CHAT_ID = \"${{ secrets.GROUP_CHAT_ID }}\";\n\n" >> Lol.js
+            printf "const SCRIPT_APP_URL = \"${{ secrets.SCRIPT_APP_URL }}\";\n\n" >> Lol.js
+            printf "// Google Sheets\n" >> Lol.js
+            printf "const TEST_SHEET_ID = \"${{ secrets.TEST_SHEET_ID }}\";\n" >> Lol.js
+            printf "const PROD_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> Lol.js
+            printf "const SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n\n" >> Lol.js
+            printf "// Gemini\n" >> Lol.js
+            printf "const GEMINI_BASE_URL = \"${{ secrets.GEMINI_BASE_URL }}\";\n" >> Lol.js
+            printf "const GEMINI_API_KEY = \"${{ secrets.GEMINI_API_KEY }}\";\n\n" >> Lol.js
+            printf "// Gmail\n" >> Lol.js
+            printf "const GMAIL_LABEL = \"${{ secrets.GMAIL_LABEL }}\";" >> Lol.js
 
       - name: Set up authentication
         env:
