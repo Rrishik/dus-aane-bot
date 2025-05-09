@@ -313,6 +313,7 @@ function extractTransactionsWithGemini2Formatted() {
           // Send Telegram message with the row number
           sendTransactionMessage(transactionData, rowNumber, user);
         } catch (e) {
+          console.log("Extracted text from Gemini response: \n" + extractedText);
           console.log("Failed to parse Gemini response JSON: " + e);
         }
       }
