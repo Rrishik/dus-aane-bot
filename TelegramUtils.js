@@ -69,5 +69,8 @@ function getReplyMarkup(text, callbackData) {
 
 // Function to escape special characters for Markdown
 function escapeMarkdown(text) {
+  if (typeof text !== 'string' || text === null) {
+    return text;
+  }
   return text.replace(/([_*\[\]()~`>#+=|{}.!])/g, '\\$1');
 }
