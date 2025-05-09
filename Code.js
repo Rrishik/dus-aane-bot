@@ -294,7 +294,9 @@ function extractTransactionsWithGemini2Formatted() {
         var extractedText = json.candidates[0].content.parts[0].text;
 
         try {
-          extractedText = extractedText.replace(/```json|```/g, '').trim();
+          if (extractedText.startsWith("```json") && extractedText.endsWith("```")) {
+            extractedText = extractedText.replace(/```json|```/g, '').trim();
+          }
           var transactionData = JSON.parse(extractedText);
 
           var transactionDate = transactionData.transaction_date || "N/A";
