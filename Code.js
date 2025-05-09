@@ -198,30 +198,6 @@ ${messageText}`;
 // function getSplitMessage()
 
 function getTransactionMessage(transactionDetails, user) {
-  // Function to escape special characters for Markdown
-  function escapeMarkdown(text) {
-    if (!text) return '';
-    return text.toString()
-      .replace(/_/g, '\\_')
-      .replace(/\*/g, '\\*')
-      .replace(/\[/g, '\\[')
-      .replace(/\]/g, '\\]')
-      .replace(/\(/g, '\\(')
-      .replace(/\)/g, '\\)')
-      .replace(/~/g, '\\~')
-      .replace(/`/g, '\\`')
-      .replace(/>/g, '\\>')
-      .replace(/#/g, '\\#')
-      .replace(/\+/g, '\\+')
-      .replace(/-/g, '\\-')
-      .replace(/=/g, '\\=')
-      .replace(/\|/g, '\\|')
-      .replace(/{/g, '\\{')
-      .replace(/}/g, '\\}')
-      .replace(/\./g, '\\.')
-      .replace(/!/g, '\\!');
-  }
-
   // Escape all transaction details
   var amount = escapeMarkdown(transactionDetails.amount);
   var date = escapeMarkdown(transactionDetails.transaction_date);
@@ -284,7 +260,8 @@ ${emailText}`;
 
 function extractTransactionsWithGemini2Formatted() {
   var sheet = SpreadsheetApp.openById(SHEET_ID);
-  var threads = GmailApp.search(`label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`);
+  var search_query = BACKFILL_FROM ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}` : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
+  var threads = GmailApp.search(search_query);
   var userEmail = Session.getActiveUser().getEmail();
 
   // Add headers if the sheet is empty
