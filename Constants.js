@@ -1,6 +1,7 @@
 // Debug flag
 const DEBUG = true;
-const BACKFILL = '7d';
+const BACKFILL = '';
+const BACKFILL_FROM = '';
 
 const CHAT_ID = DEBUG ? PERSONAL_CHAT_ID : GROUP_CHAT_ID; // Use Rishik's chat ID for debugging
 const BOT_UPDATE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates`;
