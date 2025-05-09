@@ -9,10 +9,9 @@ function setTelegramWebhook() {
   deleteWebhook();
 
   var url = "https://api.telegram.org/bot" + BOT_TOKEN + "/setWebhook";
-  var webhookUrl = ScriptApp.getService().getUrl();
   
   var payload = {
-    url: webhookUrl,
+    url: SCRIPT_APP_URL,
   }
 
   sendRequest(url, "post", payload);
