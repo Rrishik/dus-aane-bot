@@ -258,7 +258,7 @@ ${emailText}`;
 
 
 
-function extractTransactionsWithGemini2Formatted() {
+function extractTransactionsWithGemini() {
   var sheet = SpreadsheetApp.openById(SHEET_ID);
   var search_query = BACKFILL_FROM ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}` : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
   var threads = GmailApp.search(search_query);
