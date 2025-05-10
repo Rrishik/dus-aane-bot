@@ -26,7 +26,6 @@ jobs:
             printf "const PERSONAL_CHAT_ID = \"${{ secrets.PERSONAL_CHAT_ID }}\";\n" >> Lol.js
             printf "const GROUP_CHAT_ID = \"${{ secrets.GROUP_CHAT_ID }}\";\n\n" >> Lol.js
             printf "const SCRIPT_APP_URL = \"${{ secrets.SCRIPT_APP_URL }}\";\n\n" >> Lol.js
-            printf "const TEST_SCRIPT_APP_URL = \"${{ secrets.TEST_SCRIPT_APP_URL }}\";\n\n" >> Lol.js
             printf "// Google Sheets\n" >> Lol.js
             printf "const TEST_SHEET_ID = \"${{ secrets.TEST_SHEET_ID }}\";\n" >> Lol.js
             printf "const PROD_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> Lol.js
