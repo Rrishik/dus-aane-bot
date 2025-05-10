@@ -1,5 +1,5 @@
 // Debug flag
-const DEBUG = true;
+const DEBUG = false;
 const BACKFILL = '';
 // use format YYYY/MM/DD
 const BACKFILL_FROM = '';
