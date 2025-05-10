@@ -5,233 +5,79 @@ function doPost(e) {
   var update = JSON.parse(e.postData.contents);
   
   if (update.callback_query) {
-    handleCallbackQuery(update);
+    handleCallbackQuery(update); // Keep as is, `update` is a common name for the whole object
     console.log("Callback processed!");
-  } else if (update.message) {
-    handleMessage(update);
-    console.log("Message processed!");
   }
   return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
 }
 
-// Function to set bot commands
-function setBotCommands() {
-  var commands = [
-    { command: "start", description: "Start the bot" },
-    { command: "addtransaction", description: "Add a new transaction" },
-    { command: "summary", description: "View transaction summary" },
-    { command: "recent", description: "View recent transactions" },
-    { command: "help", description: "Show help information" }
-  ];
-
-  var payload = {
-    method: "setMyCommands",
-    commands: commands
-  };
-
-  var options = {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(payload)
-  };
-
-  var response = UrlFetchApp.fetch(BOT_API_URL + "/setMyCommands", options);
-  console.log("Bot commands set:", response.getContentText());
-}
-
-// Method to handle messages sent to the Telegram bot.
-function handleMessage(update) {
-  if (update.message) {
-    var chatId = update.message.chat.id;
-    var messageText = update.message.text;
-    var username = update.message.from.first_name || update.message.from.username;
-
-    // Handle commands
-    if (messageText.startsWith('/')) {
-      var command = messageText.split(' ')[0].toLowerCase();
-      
-      switch(command) {
-        case '/start':
-          handleStartCommand(chatId, username);
-          break;
-        case '/help':
-          handleHelpCommand(chatId);
-          break;
-        case '/summary':
-          showTransactionSummary(chatId);
-          break;
-        case '/recent':
-          showRecentTransactions(chatId);
-          break;
-        case '/addtransaction':
-          if (messageText.split(' ').length < 4) {
-            sendTelegramMessage(chatId, "❌ *Invalid format!* Use: `/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`");
-          } else {
-            addTransaction(chatId, messageText, username);
-          }
-          break;
-        default:
-          sendTelegramMessage(chatId, "❌ *Unknown command!*\n\nUse /help to see available commands.");
-      }
-    }
-    // Handle menu button clicks
-    else if (messageText === '➕ Add Transaction') {
-      sendTelegramMessage(chatId, "To add a transaction, use the format:\n`/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`");
-    }
-    else if (messageText === '📊 View Summary') {
-      showTransactionSummary(chatId);
-    }
-    else if (messageText === '📅 Recent Transactions') {
-      showRecentTransactions(chatId);
-    }
-  }
-}
-
-// Method to handle the /start command and show menu options
-function handleStartCommand(chatId, username) {
-  var message = `👋 *Welcome ${username}!*\n\nI'm your transaction management bot. Here's what I can do:\n\n` +
-    `📝 *Commands:*\n` +
-    `• /addtransaction - Add a new transaction\n` +
-    `• /summary - View transaction summary\n` +
-    `• /recent - View recent transactions\n` +
-    `• /help - Show help information\n\n` +
-    `💡 *Tip:* Type / to see all available commands!`;
-  
-  var keyboard = {
-    keyboard: [
-      ["➕ Add Transaction"],
-      ["📊 View Summary", "📅 Recent Transactions"]
-    ],
-    resize_keyboard: true,
-    one_time_keyboard: false
-  };
-  
-  var options = {
-    parse_mode: "Markdown",
-    reply_markup: JSON.stringify(keyboard)
-  };
-  
-  sendTelegramMessage(chatId, message, options);
-}
-
-// Method to handle the /help command
-function handleHelpCommand(chatId) {
-  var message = `📚 *Help Guide*\n\n` +
-    `*Available Commands:*\n` +
-    `• /start - Start the bot\n` +
-    `• /addtransaction - Add a new transaction\n` +
-    `• /summary - View transaction summary\n` +
-    `• /recent - View recent transactions\n` +
-    `• /help - Show this help message\n\n` +
-    `*Adding a Transaction:*\n` +
-    `Use the format: /addtransaction <amount> <category> <merchant>\n` +
-    `Example: /addtransaction 1000 Food Zomato\n\n` +
-    `*Features:*\n` +
-    `• Automatic email transaction parsing\n` +
-    `• Transaction splitting\n` +
-    `• Category-wise spending analysis\n` +
-    `• Recent transaction history`;
-  
-  sendTelegramMessage(chatId, message);
-}
-
-// Method to add a manual transaction via the Telegram bot.
-function addTransaction(chatId, messageText, username) {
-  var parts = messageText.split(" "); // Split the message
-  if (parts.length < 3) {
-    sendTelegramMessage(chatId, "❌ *Invalid format!* Use: `/addtransaction <amount> <category> <merchant>`");
-    return;
-  }
-
-  var amount = parts[1];
-  var category = parts[2];
-  var merchant = parts.slice(3).join(" "); // Join remaining words as merchant name
-  var date = new Date().toLocaleDateString();
-  
-  appendRowToGoogleSheet(SHEET_ID, [date, date, merchant, amount, category, "Debit", username, "Personal"]);
-
-  var rowNumber = SpreadsheetApp.openById(SHEET_ID).getActiveSheet().getLastRow(); // Get the last row number
-  var message = `✅ *Transaction Added!*\n💰 *Amount:* INR ${amount}\n📂 *Category:* ${category}\n🏪 *Merchant:* ${merchant}\n👤 *Added by:* ${username}`;
-  var replyMarkup = getReplyMarkup("✂️ Split Transaction", `split_${rowNumber}`);
-  var options = {
-    parseMode: "Markdown",
-    replyMarkup: replyMarkup
-  };
-
-  // Send a confirmation message
-  sendTelegramMessage(chatId, message, options);
-}
 
 // Method to handle the callback queries sent from the Telegram message reply buttons.
 function handleCallbackQuery(update) {
   if (update.callback_query) {
-    var callbackQueryId = update.callback_query.id;
-    var chatId = update.callback_query.message.chat.id;
-    var messageId = update.callback_query.message.message_id;
-    var messageText = update.callback_query.message.text;
+    var callback_query_id = update.callback_query.id;
+    var chat_id = update.callback_query.message.chat.id;
+    var message_id = update.callback_query.message.message_id;
+    var message_text = update.callback_query.message.text;
     var data = update.callback_query.data; // Example: "personal_5" or "split_8"
-    console.log([chatId, messageId, data]);
+    console.log([chat_id, message_id, data]);
     if (data) {
       var action = data.split("_")[0]; // "personal" or "split"
-      var toggleAction = action === "personal" ? "split" : "personal"; // Toggle between personal and split
-      var rowNumber = parseInt(data.split("_")[1]); // Extract row number
+      var toggle_action = action === "personal" ? "split" : "personal"; // Toggle between personal and split
+      var row_number = parseInt(data.split("_")[1]); // Extract row number
 
       // Update the existing row in Google Sheets
-      updateGoogleSheetCell(SHEET_ID, rowNumber, SPLIT_COLUMN, action === "personal" ? "Personal" : "Split");
+      updateGoogleSheetCell(SHEET_ID, row_number, SPLIT_COLUMN, action === "personal" ? "Personal" : "Split");
 
       var options = {
-        parseMode: "Markdown",
-        replyMarkup: getReplyMarkup(`🔄 Update to ${toggleAction}`, `${toggleAction}_${rowNumber}`),
-        messageId: messageId
+        parse_mode: "Markdown", // Changed from parseMode
+        reply_markup: getReplyMarkup(`🔄 Update to ${toggle_action}`, `${toggle_action}_${row_number}`), // Changed from replyMarkup
+        message_id: message_id // Changed from messageId
       };
       var message = `✅ *Marked ${action}*
 
-${messageText}`;
-      sendTelegramMessage(chatId, message, options);
+${message_text}`;
+      sendTelegramMessage(chat_id, message, options);
 
       // Acknowledge callback to Telegram
-      answerCallbackQuery(callbackQueryId);
+      answerCallbackQuery(callback_query_id);
     }
   }
 }
 
-// function getSplitMessage()
 
-function getTransactionMessage(transactionDetails, user) {
+function getTransactionMessageAsString(transaction_details, user) {
   // Escape all transaction details
-  var amount = escapeMarkdown(transactionDetails.amount);
-  var date = escapeMarkdown(transactionDetails.transaction_date);
-  var merchant = escapeMarkdown(transactionDetails.merchant);
-  var category = escapeMarkdown(transactionDetails.category);
-  var userEscaped = escapeMarkdown(user);
+  var amount = escapeMarkdown(transaction_details.amount);
+  var date = escapeMarkdown(transaction_details.transaction_date);
+  var merchant = escapeMarkdown(transaction_details.merchant);
+  var category = escapeMarkdown(transaction_details.category);
+  var user_escaped = escapeMarkdown(user);
 
-  var message = `💸 *INR ${amount} ${transactionDetails.transaction_type}ed* :
+  var message = `💸 *INR ${amount} ${transaction_details.transaction_type}ed* :
 🗓 *Date:* ${date}
 🏪 *Merchant:* ${merchant}
 ${category ? `📂 *Category:* ${category}\n` : ""}
-👤 *By:* ${userEscaped}
+👤 *By:* ${user_escaped}
 
 `;
-
   return message;
 }
 
 
-function sendTransactionMessage(transactionDetails, rowNumber, user) {
-
-  var message = getTransactionMessage(transactionDetails, user);
-
-  var reply_markup = getReplyMarkup("✂️ Want to split ?", `split_${rowNumber}`);
+function sendTransactionMessage(transaction_details, row_number, user) {
+  var message = getTransactionMessageAsString(transaction_details, user);
+  var reply_markup_data = getReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
   var options = {
-    parseMode: "Markdown",
-    replyMarkup: reply_markup
+    parse_mode: "Markdown",    // Changed from parseMode
+    reply_markup: reply_markup_data // Changed from replyMarkup
   };
   sendTelegramMessage(CHAT_ID, message, options);
   console.log("Telegram message sent successfully.");
 }
 
-function getPromptforGemini(emailText) {
-  promptText = `Extract structured transaction details from this email in JSON format with fields: 
+function getPromptforGemini(email_text) {
+  var prompt_text = `Extract structured transaction details from this email in JSON format with fields: 
 - transaction_date (YYYY-MM-DD)
 - merchant
 - amount (only numeric, no currency symbols)
@@ -252,177 +98,88 @@ Example JSON Output:
 }
 
 Here is the email content:
-${emailText}`;
-  return promptText;
+${email_text}`;
+  return prompt_text;
 }
-
 
 
 function extractTransactionsWithGemini() {
   var sheet = SpreadsheetApp.openById(SHEET_ID);
-  var search_query = BACKFILL_FROM ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}` : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
-  var threads = GmailApp.search(search_query);
-  var userEmail = Session.getActiveUser().getEmail();
+  var gmail_search_query = BACKFILL_FROM ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}` : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
+  var gmail_search_results = GmailApp.search(gmail_search_query).reverse();
+  var user_email = Session.getActiveUser().getEmail();
 
   // Add headers if the sheet is empty
-  if (sheet.getLastRow() === 0) {
-    appendRowToGoogleSheet(SHEET_ID, ["Email Date", "Transaction Date", "Merchant", "Amount", "Category", "Transaction Type", "User", "Split"]);
-    console.log("Headers added to the sheet.");
-  }
+  ensureSheetHeaders(SHEET_ID);
 
-  threads.reverse();
-
-  threads.forEach(thread => {
+  gmail_search_results.forEach(thread => {
     var messages = thread.getMessages();
-    messages.forEach(message => {
-      var emailText = message.getPlainBody();
-      var emailDate = message.getDate();
+    messages.forEach(message_item => { // Renamed message to message_item to avoid conflict with outer scope 'message' variable if any
+      var email_text = message_item.getPlainBody();
+      var email_date = message_item.getDate();
 
       var payload = {
         contents: [{
           role: "user",
           parts: [{ 
-            text: getPromptforGemini(emailText),
+            text: getPromptforGemini(email_text),
           }]
         }]
       };
 
       var response = sendRequest(GEMINI_BASE_URL + "?key=" + GEMINI_API_KEY, "post", payload);
-      var json = JSON.parse(response.getContentText());
+      var json_response = JSON.parse(response.getContentText()); // Renamed json to json_response
 
-      if (json.candidates && json.candidates.length > 0) {
-        var extractedText = json.candidates[0].content.parts[0].text;
-
+      if (json_response.candidates && json_response.candidates.length > 0 && json_response.candidates[0].content && json_response.candidates[0].content.parts && json_response.candidates[0].content.parts.length > 0) {
+        var extracted_text = json_response.candidates[0].content.parts[0].text;
+        
         try {
-          if (extractedText.startsWith("```json") && extractedText.endsWith("```")) {
-            extractedText = extractedText.replace(/```json|```/g, '').trim();
+          let processed_text = extracted_text; 
+
+          if (typeof processed_text !== 'string') {
+            console.log("Error: extracted_text from Gemini is not a string. Value:", processed_text);
+            return; 
           }
-          var transactionData = JSON.parse(extractedText);
 
-          var transactionDate = transactionData.transaction_date || "N/A";
-          var merchant = transactionData.merchant || "Unknown";
-          var amount = transactionData.amount || 0;
-          var category = transactionData.category || "Uncategorized";
-          var transactionType = transactionData.transaction_type || "Unknown";  // Debit or Credit
-          var user = userEmail.split("@")[0];
-          var split = "personal";
+          if (processed_text.startsWith("```json") && processed_text.endsWith("```")) {
+            processed_text = processed_text.replace(/```json|```/g, '').trim();
+          }
 
-          // Append structured data to the sheet
-          appendRowToGoogleSheet(SHEET_ID, [emailDate, transactionDate, merchant, amount, category, transactionType, user, split]);
+          if (processed_text.trim().startsWith("{") && processed_text.trim().endsWith("}")) {
+            var transaction_data = JSON.parse(processed_text);
 
-          var rowNumber = sheet.getLastRow(); 
+            var transaction_date = transaction_data.transaction_date || "N/A";
+            var merchant = transaction_data.merchant || "Unknown";
+            var amount = transaction_data.amount || 0;
+            var category = transaction_data.category || "Uncategorized";
+            var transaction_type = transaction_data.transaction_type || "Unknown";
+            var user = user_email.split("@")[0];
+            var split_status = "personal"; // Renamed split to split_status
 
-          // Send Telegram message with the row number
-          sendTransactionMessage(transactionData, rowNumber, user);
+            appendRowToGoogleSheet(SHEET_ID, [email_date, transaction_date, merchant, amount, category, transaction_type, user, split_status]);
+
+            var row_number = sheet.getLastRow(); 
+
+            sendTransactionMessage(transaction_data, row_number, user);
+          } else {
+            console.log("Gemini response was not in the expected JSON format. Original response from Gemini: \n" + extracted_text);
+            if (processed_text.toLowerCase().includes("no transaction details") ||
+                processed_text.toLowerCase().includes("cannot provide a json output") ||
+                processed_text.toLowerCase().includes("no transaction was found")) {
+              console.log("Gemini explicitly stated no transaction details were found in the email.");
+            }
+          }
         } catch (e) {
-          console.log("Extracted text from Gemini response: \n" + extractedText);
-          console.log("Failed to parse Gemini response JSON: " + e);
+          console.log("Failed to parse or process Gemini response. Original response from Gemini: \n" + extracted_text);
+          console.log("Error details: " + e.toString() + (e.stack ? "\nStack: " + e.stack : ""));
         }
+      } else {
+        console.log("Gemini response did not contain candidates or parts. Full response: " + JSON.stringify(json_response));
       }
     });
   });
   
   console.log("Transactions parsed and formatted successfully.");
-}
-
-// Function to show transaction summary
-function showTransactionSummary(chatId) {
-  try {
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
-    var data = sheet.getDataRange().getValues();
-    
-    // Check if sheet is empty
-    if (data.length <= 1) {
-      sendTelegramMessage(chatId, "📊 *No transactions found yet!*\n\nStart adding transactions to see your summary.");
-      return;
-    }
-    
-    // Skip header row
-    data.shift();
-    
-    var totalSpent = 0;
-    var totalReceived = 0;
-    var categorySpending = {};
-    var transactionCount = 0;
-    
-    data.forEach(function(row) {
-      var amount = parseFloat(row[3]) || 0; // Amount column with fallback to 0
-      var type = row[5]; // Transaction Type column
-      var category = row[4] || "Uncategorized"; // Category column with fallback
-      
-      if (type === "Debit") {
-        totalSpent += amount;
-        categorySpending[category] = (categorySpending[category] || 0) + amount;
-      } else if (type === "Credit") {
-        totalReceived += amount;
-      }
-      transactionCount++;
-    });
-    
-    var message = `📊 *Transaction Summary*\n\n`;
-    message += `📈 *Total Transactions:* ${transactionCount}\n`;
-    message += `💰 *Total Spent:* INR ${totalSpent.toFixed(2)}\n`;
-    message += `💵 *Total Received:* INR ${totalReceived.toFixed(2)}\n`;
-    message += `📉 *Net Balance:* INR ${(totalReceived - totalSpent).toFixed(2)}\n\n`;
-    message += `📂 *Category-wise Spending:*\n`;
-    
-    // Sort categories by amount spent
-    var sortedCategories = Object.keys(categorySpending).sort(function(a, b) {
-      return categorySpending[b] - categorySpending[a];
-    });
-    
-    sortedCategories.forEach(function(category) {
-      var amount = categorySpending[category];
-      var percentage = ((amount / totalSpent) * 100).toFixed(1);
-      message += `• ${category}: INR ${amount.toFixed(2)} (${percentage}%)\n`;
-    });
-    
-    sendTelegramMessage(chatId, message);
-  } catch (error) {
-    console.error("Error in showTransactionSummary:", error);
-    sendTelegramMessage(chatId, "❌ *Error generating summary*\n\nPlease try again later.");
-  }
-}
-
-// Function to show recent transactions
-function showRecentTransactions(chatId) {
-  try {
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
-    var data = sheet.getDataRange().getValues();
-    
-    // Check if sheet is empty
-    if (data.length <= 1) {
-      sendTelegramMessage(chatId, "📅 *No transactions found yet!*\n\nStart adding transactions to see your history.");
-      return;
-    }
-    
-    // Skip header row
-    data.shift();
-    
-    // Get last 5 transactions
-    var recentTransactions = data.slice(-5).reverse();
-    
-    var message = `📅 *Recent Transactions*\n\n`;
-    
-    recentTransactions.forEach(function(row) {
-      var date = row[1] || "Unknown Date"; // Transaction Date
-      var merchant = row[2] || "Unknown Merchant"; // Merchant
-      var amount = parseFloat(row[3]) || 0; // Amount
-      var type = row[5] || "Unknown"; // Transaction Type
-      var category = row[4] || "Uncategorized"; // Category
-      
-      var emoji = type === "Debit" ? "💸" : "💰";
-      message += `${emoji} *${date}*\n`;
-      message += `🏪 ${merchant}\n`;
-      message += `💰 INR ${amount.toFixed(2)}\n`;
-      message += `📂 ${category}\n\n`;
-    });
-    
-    sendTelegramMessage(chatId, message);
-  } catch (error) {
-    console.error("Error in showRecentTransactions:", error);
-    sendTelegramMessage(chatId, "❌ *Error fetching recent transactions*\n\nPlease try again later.");
-  }
 }
 
 

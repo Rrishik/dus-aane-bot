@@ -1,46 +1,59 @@
 function deleteWebhook() {
-  var url = "https://api.telegram.org/bot" + BOT_TOKEN + "/deleteWebhook";
-  sendRequest(url, "post", {});
+  sendRequest(BOT_DELETE_WEBHOOK_URL, "post", {});
 }
 
 // Set up webhook (Run this once)
 function setTelegramWebhook() {
   // First delete any existing webhook
   deleteWebhook();
-
-  var url = "https://api.telegram.org/bot" + BOT_TOKEN + "/setWebhook";
-  
   var payload = {
-    url: SCRIPT_APP_URL,
+    url: DEBUG ? TEST_SCRIPT_APP_URL : SCRIPT_APP_URL,
   }
 
-  sendRequest(url, "post", payload);
+  sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
 }
 
-// Utility to send a Telegram message
-function sendTelegramMessage(chatId, message, options = {}) {
+function setTelegramCommands() {
+  var commands = [
+    { command: "/start", description: "Start the bot" },
+    { command: "/help", description: "Get help" } ];
   var payload = {
-    chat_id: chatId,
+    commands: commands
+  };
+  sendRequest(BOT_SET_COMMANDS_URL, "post", payload);
+  if (DEBUG) console.log("Telegram commands set successfully.");
+}
+
+function deleteTelegramCommands() {
+  sendRequest(BOT_DELETE_COMMANDS_URL, "post", {});
+  if (DEBUG) console.log("Telegram commands deleted successfully.");
+}
+
+
+// Utility to send a Telegram message
+function sendTelegramMessage(chat_id, message, options = {}) {
+  var payload = {
+    chat_id: chat_id,
     text: message,
-    parse_mode: options.parseMode || "Markdown",
-    reply_markup: options.replyMarkup ? JSON.stringify(options.replyMarkup) : undefined
+    parse_mode: options.parse_mode || "Markdown",
+    reply_markup: options.reply_markup ? JSON.stringify(options.reply_markup) : undefined
   };
 
-  var messageURL = BOT_SEND_MESSAGE_URL;
-  if (options.messageId) {
-    payload.message_id = options.messageId;
-    messageURL = BOT_EDIT_MESSAGE_URL;
+  var message_url = BOT_SEND_MESSAGE_URL;
+  if (options.message_id) {
+    payload.message_id = options.message_id;
+    message_url = BOT_EDIT_MESSAGE_URL;
   }
 
-  sendRequest(messageURL, "post", payload);
+  sendRequest(message_url, "post", payload);
 }
 
 // Utility to acknowledge a callback query
-function answerCallbackQuery(callbackQueryId, text = "✅ Updated Successfully!", showAlert = false) {
+function answerCallbackQuery(callback_query_id, text = "✅ Updated Successfully!", show_alert = false) {
   var payload = {
-    callback_query_id: callbackQueryId,
+    callback_query_id: callback_query_id,
     text: text,
-    show_alert: showAlert
+    show_alert: show_alert
   };
 
   sendRequest(BOT_ANSWER_CALLBACK_QUERY_URL, "post", payload);
@@ -60,53 +73,53 @@ function sendRequest(url, method, payload) {
     };
 
     var response = UrlFetchApp.fetch(url, options);
-    var responseCode = response.getResponseCode();
-    var responseBody = response.getContentText();
+    var response_code = response.getResponseCode();
+    var response_body = response.getContentText();
 
-    if (responseCode === 200) {
+    if (response_code === 200) {
       if (DEBUG) {
-        console.log("Telegram API request successful for URL: " + url + "\nResponse: " + responseBody);
+        console.log("Telegram API request successful for URL: " + url + "\nResponse: " + response_body);
       }
       return response; // Success
-    } else if (responseCode === 429) {
+    } else if (response_code === 429) {
       console.warn("Telegram API rate limit hit (429) for URL: " + url + ". Attempt " + (attempt + 1) + " of " + MAX_RETRIES + ".");
-      console.warn("Response body: " + responseBody);
+      console.warn("Response body: " + response_body);
       
-      var retryAfterSeconds = 0;
+      var retry_after_seconds = 0;
       try {
-        var errorData = JSON.parse(responseBody);
-        if (errorData && errorData.parameters && errorData.parameters.retry_after) {
-          retryAfterSeconds = parseInt(errorData.parameters.retry_after, 10);
-          console.log("Telegram API suggested retry_after: " + retryAfterSeconds + " seconds.");
+        var error_data = JSON.parse(response_body);
+        if (error_data && error_data.parameters && error_data.parameters.retry_after) {
+          retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
+          console.log("Telegram API suggested retry_after: " + retry_after_seconds + " seconds.");
         }
       } catch (e) {
         console.error("Could not parse retry_after from 429 response: " + e);
       }
 
-      var delayMs = (retryAfterSeconds * 1000) || INITIAL_RETRY_DELAY_MS;
+      var delay_ms = (retry_after_seconds * 1000) || INITIAL_RETRY_DELAY_MS;
 
       if (attempt < MAX_RETRIES - 1) {
-        console.log("Waiting for " + (delayMs / 1000) + " seconds before retrying...");
-        Utilities.sleep(delayMs);
+        console.log("Waiting for " + (delay_ms / 1000) + " seconds before retrying...");
+        Utilities.sleep(delay_ms);
       } else {
         console.error("Max retries (" + MAX_RETRIES + ") reached for URL: " + url + ". Giving up on this request.");
         // Throw an error to indicate persistent failure, which will be caught by the calling function's try-catch
-        throw new Error("Telegram API request failed after " + MAX_RETRIES + " attempts due to rate limiting. Last response code: " + responseCode + ", body: " + responseBody);
+        throw new Error("Telegram API request failed after " + MAX_RETRIES + " attempts due to rate limiting. Last response code: " + response_code + ", body: " + response_body);
       }
     } else {
       // Handle other non-200, non-429 errors
-      console.error("Telegram API request failed for URL: " + url + ". Response Code: " + responseCode + ". Response Body: " + responseBody);
-      throw new Error("Telegram API request failed. Response Code: " + responseCode + ", body: " + responseBody);
+      console.error("Telegram API request failed for URL: " + url + ". Response Code: " + response_code + ". Response Body: " + response_body);
+      throw new Error("Telegram API request failed. Response Code: " + response_code + ", body: " + response_body);
     }
   }
   // Fallback, should ideally not be reached if logic above is correct
   throw new Error("Telegram API request failed unexpectedly after all retries for URL: " + url);
 }
 
-function getReplyMarkup(text, callbackData) {
+function getReplyMarkup(text, callback_data) {
   return {
     inline_keyboard: [
-      [{ text: text, callback_data: callbackData }]
+      [{ text: text, callback_data: callback_data }]
     ]
   };
 }
@@ -116,5 +129,5 @@ function escapeMarkdown(text) {
   if (typeof text !== 'string' || text === null) {
     return text;
   }
-  return text.replace(/([_*\[\]()~`>#+=|{}.!])/g, '\\$1');
+  return text.replace(/([_*\[\]()~`>#+=|{}!])/g, '\\$1');
 }

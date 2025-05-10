@@ -1,5 +1,5 @@
 // Debug flag
-const DEBUG = false;
+const DEBUG = true;
 const BACKFILL = '';
 // use format YYYY/MM/DD
 const BACKFILL_FROM = '';
@@ -9,6 +9,10 @@ const BOT_UPDATE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates`;
 const BOT_EDIT_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`;
 const BOT_SEND_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
 const BOT_ANSWER_CALLBACK_QUERY_URL = `https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`;
+const BOT_SET_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setMyCommands`;
+const BOT_DELETE_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteMyCommands`;
+const BOT_DELETE_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`;
+const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
 const BOT_ADD_TRANSACTION_KEYWORD = 'addTransaction';
 
 
