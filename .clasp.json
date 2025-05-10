@@ -16,7 +16,10 @@
     "Code.js",
     "Constants.js",
     "GoogleSheetUtils.js",
-    "TelegramUtils.js"
+    "TelegramUtils.js",
+    "BotHandlers.js",
+    "MessageUtils.js",
+    "TransactionProcessor.js"
   ],
   "skipSubdirectories": true
 }
