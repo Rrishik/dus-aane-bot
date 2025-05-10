@@ -17,7 +17,7 @@ function handleCallbackQuery(update) {
 
       var options = {
         parse_mode: "Markdown", // Changed from parseMode
-        reply_markup: getReplyMarkup(`🔄 Update to ${toggle_action}`, `${toggle_action}_${row_number}`), // Changed from replyMarkup
+        reply_markup: buildReplyMarkup(`🔄 Update to ${toggle_action}`, `${toggle_action}_${row_number}`), // Changed from replyMarkup
         message_id: message_id // Changed from messageId
       };
       var message = `✅ *Marked ${action}*

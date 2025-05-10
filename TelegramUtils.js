@@ -13,6 +13,11 @@ function setTelegramWebhook() {
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
 }
 
+function deleteTelegramCommands() {
+  sendRequest(BOT_DELETE_COMMANDS_URL, "post", {});
+  if (DEBUG) console.log("Telegram commands deleted successfully.");
+}
+
 function setTelegramCommands() {
   var commands = [
     { command: "/start", description: "Start the bot" },
@@ -23,12 +28,6 @@ function setTelegramCommands() {
   sendRequest(BOT_SET_COMMANDS_URL, "post", payload);
   if (DEBUG) console.log("Telegram commands set successfully.");
 }
-
-function deleteTelegramCommands() {
-  sendRequest(BOT_DELETE_COMMANDS_URL, "post", {});
-  if (DEBUG) console.log("Telegram commands deleted successfully.");
-}
-
 
 // Utility to send a Telegram message
 function sendTelegramMessage(chat_id, message, options = {}) {
@@ -116,7 +115,7 @@ function sendRequest(url, method, payload) {
   throw new Error("Telegram API request failed unexpectedly after all retries for URL: " + url);
 }
 
-function getReplyMarkup(text, callback_data) {
+function buildReplyMarkup(text, callback_data) {
   return {
     inline_keyboard: [
       [{ text: text, callback_data: callback_data }]
