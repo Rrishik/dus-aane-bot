@@ -3,7 +3,7 @@
 function doPost(e) {
   console.log("Webhook data received:", e.postData.contents);
   var update = JSON.parse(e.postData.contents);
-  
+
   if (update.callback_query) {
     handleCallbackQuery(update);
     console.log("Callback processed!");
@@ -49,8 +49,8 @@ function handleMessage(update) {
     // Handle commands
     if (messageText.startsWith('/')) {
       var command = messageText.split(' ')[0].toLowerCase();
-      
-      switch(command) {
+
+      switch (command) {
         case '/start':
           handleStartCommand(chatId, username);
           break;
@@ -96,7 +96,7 @@ function handleStartCommand(chatId, username) {
     `• /recent - View recent transactions\n` +
     `• /help - Show help information\n\n` +
     `💡 *Tip:* Type / to see all available commands!`;
-  
+
   var keyboard = {
     keyboard: [
       ["➕ Add Transaction"],
@@ -105,12 +105,12 @@ function handleStartCommand(chatId, username) {
     resize_keyboard: true,
     one_time_keyboard: false
   };
-  
+
   var options = {
     parse_mode: "Markdown",
     reply_markup: JSON.stringify(keyboard)
   };
-  
+
   sendTelegramMessage(chatId, message, options);
 }
 
@@ -131,7 +131,7 @@ function handleHelpCommand(chatId) {
     `• Transaction splitting\n` +
     `• Category-wise spending analysis\n` +
     `• Recent transaction history`;
-  
+
   sendTelegramMessage(chatId, message);
 }
 
@@ -147,10 +147,10 @@ function addTransaction(chatId, messageText, username) {
   var category = parts[2];
   var merchant = parts.slice(3).join(" "); // Join remaining words as merchant name
   var date = new Date().toLocaleDateString();
-  
+
   appendRowToGoogleSheet(SHEET_ID, [date, date, merchant, amount, category, "Debit", username, "Personal"]);
 
-  var rowNumber = SpreadsheetApp.openById(SHEET_ID).getActiveSheet().getLastRow(); // Get the last row number
+  var rowNumber = SpreadsheetApp.openById(SHEET_ID).getSheets()[0].getLastRow(); // Get the last row number
   var message = `✅ *Transaction Added!*\n💰 *Amount:* INR ${amount}\n📂 *Category:* ${category}\n🏪 *Merchant:* ${merchant}\n👤 *Added by:* ${username}`;
   var replyMarkup = getReplyMarkup("✂️ Split Transaction", `split_${rowNumber}`);
   var options = {
@@ -259,7 +259,7 @@ ${emailText}`;
 
 
 function extractTransactionsWithGemini() {
-  var sheet = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   var search_query = BACKFILL_FROM ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}` : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
   var threads = GmailApp.search(search_query);
   var userEmail = Session.getActiveUser().getEmail();
@@ -281,7 +281,7 @@ function extractTransactionsWithGemini() {
       var payload = {
         contents: [{
           role: "user",
-          parts: [{ 
+          parts: [{
             text: getPromptforGemini(emailText),
           }]
         }]
@@ -310,7 +310,7 @@ function extractTransactionsWithGemini() {
           // Append structured data to the sheet
           appendRowToGoogleSheet(SHEET_ID, [emailDate, transactionDate, merchant, amount, category, transactionType, user, split]);
 
-          var rowNumber = sheet.getLastRow(); 
+          var rowNumber = sheet.getLastRow();
 
           // Send Telegram message with the row number
           sendTransactionMessage(transactionData, rowNumber, user);
@@ -321,35 +321,35 @@ function extractTransactionsWithGemini() {
       }
     });
   });
-  
+
   console.log("Transactions parsed and formatted successfully.");
 }
 
 // Function to show transaction summary
 function showTransactionSummary(chatId) {
   try {
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
+    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
     var data = sheet.getDataRange().getValues();
-    
+
     // Check if sheet is empty
     if (data.length <= 1) {
       sendTelegramMessage(chatId, "📊 *No transactions found yet!*\n\nStart adding transactions to see your summary.");
       return;
     }
-    
+
     // Skip header row
     data.shift();
-    
+
     var totalSpent = 0;
     var totalReceived = 0;
     var categorySpending = {};
     var transactionCount = 0;
-    
-    data.forEach(function(row) {
+
+    data.forEach(function (row) {
       var amount = parseFloat(row[3]) || 0; // Amount column with fallback to 0
       var type = row[5]; // Transaction Type column
       var category = row[4] || "Uncategorized"; // Category column with fallback
-      
+
       if (type === "Debit") {
         totalSpent += amount;
         categorySpending[category] = (categorySpending[category] || 0) + amount;
@@ -358,25 +358,25 @@ function showTransactionSummary(chatId) {
       }
       transactionCount++;
     });
-    
+
     var message = `📊 *Transaction Summary*\n\n`;
     message += `📈 *Total Transactions:* ${transactionCount}\n`;
     message += `💰 *Total Spent:* INR ${totalSpent.toFixed(2)}\n`;
     message += `💵 *Total Received:* INR ${totalReceived.toFixed(2)}\n`;
     message += `📉 *Net Balance:* INR ${(totalReceived - totalSpent).toFixed(2)}\n\n`;
     message += `📂 *Category-wise Spending:*\n`;
-    
+
     // Sort categories by amount spent
-    var sortedCategories = Object.keys(categorySpending).sort(function(a, b) {
+    var sortedCategories = Object.keys(categorySpending).sort(function (a, b) {
       return categorySpending[b] - categorySpending[a];
     });
-    
-    sortedCategories.forEach(function(category) {
+
+    sortedCategories.forEach(function (category) {
       var amount = categorySpending[category];
       var percentage = ((amount / totalSpent) * 100).toFixed(1);
       message += `• ${category}: INR ${amount.toFixed(2)} (${percentage}%)\n`;
     });
-    
+
     sendTelegramMessage(chatId, message);
   } catch (error) {
     console.error("Error in showTransactionSummary:", error);
@@ -387,37 +387,37 @@ function showTransactionSummary(chatId) {
 // Function to show recent transactions
 function showRecentTransactions(chatId) {
   try {
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
+    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
     var data = sheet.getDataRange().getValues();
-    
+
     // Check if sheet is empty
     if (data.length <= 1) {
       sendTelegramMessage(chatId, "📅 *No transactions found yet!*\n\nStart adding transactions to see your history.");
       return;
     }
-    
+
     // Skip header row
     data.shift();
-    
+
     // Get last 5 transactions
     var recentTransactions = data.slice(-5).reverse();
-    
+
     var message = `📅 *Recent Transactions*\n\n`;
-    
-    recentTransactions.forEach(function(row) {
+
+    recentTransactions.forEach(function (row) {
       var date = row[1] || "Unknown Date"; // Transaction Date
       var merchant = row[2] || "Unknown Merchant"; // Merchant
       var amount = parseFloat(row[3]) || 0; // Amount
       var type = row[5] || "Unknown"; // Transaction Type
       var category = row[4] || "Uncategorized"; // Category
-      
+
       var emoji = type === "Debit" ? "💸" : "💰";
       message += `${emoji} *${date}*\n`;
       message += `🏪 ${merchant}\n`;
       message += `💰 INR ${amount.toFixed(2)}\n`;
       message += `📂 ${category}\n\n`;
     });
-    
+
     sendTelegramMessage(chatId, message);
   } catch (error) {
     console.error("Error in showRecentTransactions:", error);
