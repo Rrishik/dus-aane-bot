@@ -1,6 +1,6 @@
 // Utility to update a Google Sheet cell
 function updateGoogleSheetCell(sheetId, rowNumber, columnNumber, value) {
-  var sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
+  var sheet = SpreadsheetApp.openById(sheetId).getSheets()[0];
 
   if (isNaN(rowNumber) || rowNumber <= 0) {
     console.log("Error: Invalid row number:", rowNumber);
@@ -16,7 +16,7 @@ function updateGoogleSheetCell(sheetId, rowNumber, columnNumber, value) {
 
 // Utility to append a row to a Google Sheet
 function appendRowToGoogleSheet(sheetId, rowData) {
-  var sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
+  var sheet = SpreadsheetApp.openById(sheetId).getSheets()[0];
 
   try {
     sheet.appendRow(rowData);
