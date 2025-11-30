@@ -14,30 +14,6 @@ function doPost(e) {
   return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
 }
 
-// Function to set bot commands
-function setBotCommands() {
-  var commands = [
-    { command: "start", description: "Start the bot" },
-    { command: "addtransaction", description: "Add a new transaction" },
-    { command: "summary", description: "View transaction summary" },
-    { command: "recent", description: "View recent transactions" },
-    { command: "help", description: "Show help information" }
-  ];
-
-  var payload = {
-    method: "setMyCommands",
-    commands: commands
-  };
-
-  var options = {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(payload)
-  };
-
-  var response = UrlFetchApp.fetch(BOT_API_URL + "/setMyCommands", options);
-  console.log("Bot commands set:", response.getContentText());
-}
 
 // Method to handle messages sent to the Telegram bot.
 function handleMessage(update) {
@@ -423,6 +399,11 @@ function showRecentTransactions(chatId) {
     console.error("Error in showRecentTransactions:", error);
     sendTelegramMessage(chatId, "❌ *Error fetching recent transactions*\n\nPlease try again later.");
   }
+  // Function for time based triggers
+  function triggerEmailProcessing() {
+    console.log("Triggered email processing started");
+    extractTransactionsWithGemini();
+    console.log("Triggered email processing completed");
+  }
+
 }
-
-
