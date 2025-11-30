@@ -1,6 +1,6 @@
 // Utility to update a Google Sheet cell
 function updateGoogleSheetCell(sheet_id, row_number, column_number, value) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getActiveSheet();
+  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
 
   if (isNaN(row_number) || row_number <= 0) {
     console.log("Error: Invalid row number:", row_number);
@@ -21,7 +21,7 @@ function updateGoogleSheetCell(sheet_id, row_number, column_number, value) {
 
 // Utility to append a row to a Google Sheet
 function appendRowToGoogleSheet(sheet_id, row_data) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getActiveSheet();
+  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
 
   try {
     sheet.appendRow(row_data);
@@ -32,7 +32,7 @@ function appendRowToGoogleSheet(sheet_id, row_data) {
 
 // Utility to ensure headers are present in the Google Sheet
 function ensureSheetHeaders(sheet_id) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getActiveSheet();
+  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
   if (sheet.getLastRow() === 0) {
     appendRowToGoogleSheet(sheet_id, ["Email Date", "Transaction Date", "Merchant", "Amount", "Category", "Transaction Type", "User", "Split"]);
     if (DEBUG) {
