@@ -21,12 +21,18 @@ function updateGoogleSheetCell(sheet_id, row_number, column_number, value) {
 
 // Utility to append a row to a Google Sheet
 function appendRowToGoogleSheet(sheet_id, row_data) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
-
   try {
+    var ss = SpreadsheetApp.openById(sheet_id);
+    var sheet = ss.getSheets()[0];
+    console.log(`[GoogleSheets] Opening Spreadsheet: ${ss.getName()} (ID: ${sheet_id})`);
+    console.log(`[GoogleSheets] Target Sheet Tab: ${sheet.getName()}`);
+    console.log(`[GoogleSheets] Appending Data: ${JSON.stringify(row_data)}`);
+
     sheet.appendRow(row_data);
+    console.log("[GoogleSheets] Row appended successfully.");
   } catch (error) {
-    console.log("Error appending row to sheet:", error.message);
+    console.error(`[GoogleSheets] Error appending row: ${error.message}`);
+    console.error(`[GoogleSheets] Stack Trace: ${error.stack}`);
   }
 }
 
