@@ -21,7 +21,7 @@ function deleteTelegramCommands() {
 function setTelegramCommands() {
   var commands = [
     { command: "/start", description: "Start the bot" },
-    { command: "/help", description: "Get help" } ];
+    { command: "/help", description: "Get help" }];
   var payload = {
     commands: commands
   };
@@ -83,19 +83,54 @@ function sendRequest(url, method, payload) {
     } else if (response_code === 429) {
       console.warn("Telegram API rate limit hit (429) for URL: " + url + ". Attempt " + (attempt + 1) + " of " + MAX_RETRIES + ".");
       console.warn("Response body: " + response_body);
-      
+
       var retry_after_seconds = 0;
       try {
         var error_data = JSON.parse(response_body);
+
+        // 1. Check for standard Telegram `parameters.retry_after`
         if (error_data && error_data.parameters && error_data.parameters.retry_after) {
           retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
           console.log("Telegram API suggested retry_after: " + retry_after_seconds + " seconds.");
         }
+
+        // 2. Check for Gemini `error.message` containing "Please retry in Xs"
+        else if (error_data && error_data.error && error_data.error.message) {
+          var message = error_data.error.message;
+          var match = message.match(/Please retry in\s+([\d\.]+)\s*s/);
+          if (match && match[1]) {
+            retry_after_seconds = Math.ceil(parseFloat(match[1]));
+            console.log("Gemini API error message suggested retry_after: " + retry_after_seconds + " seconds.");
+          }
+        }
+
+        // 3. Check for Google RPC RetryInfo in `error.details`
+        if (!retry_after_seconds && error_data && error_data.error && error_data.error.details) {
+          error_data.error.details.forEach(function (detail) {
+            if (detail["@type"] && detail["@type"].includes("RetryInfo") && detail.retryDelay) {
+              // detail.retryDelay might be "52s"
+              var delayStr = detail.retryDelay;
+              if (delayStr.endsWith('s')) {
+                retry_after_seconds = Math.ceil(parseFloat(delayStr));
+                console.log("Gemini API details suggested retry_after: " + retry_after_seconds + " seconds.");
+              }
+            }
+          });
+        }
+
       } catch (e) {
         console.error("Could not parse retry_after from 429 response: " + e);
       }
 
       var delay_ms = (retry_after_seconds * 1000) || INITIAL_RETRY_DELAY_MS;
+
+      // If we got a specific 429, we should probably wait closer to the suggestion + buffer
+      if (retry_after_seconds > 0) {
+        delay_ms += 1000; // Add 1s buffer
+      } else {
+        // Exponential backoff if no specific time given
+        delay_ms = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+      }
 
       if (attempt < MAX_RETRIES - 1) {
         console.log("Waiting for " + (delay_ms / 1000) + " seconds before retrying...");

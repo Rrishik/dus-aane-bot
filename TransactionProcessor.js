@@ -31,6 +31,7 @@ function extractTransactionsWithGemini() {
   var gmail_search_query = BACKFILL_FROM ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}` : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
   var gmail_search_results = GmailApp.search(gmail_search_query).reverse();
   var user_email = Session.getActiveUser().getEmail();
+  var emailsProcessedCount = 0;
 
   // Add headers if the sheet is empty
   ensureSheetHeaders(SHEET_ID);
@@ -44,7 +45,7 @@ function extractTransactionsWithGemini() {
       var payload = {
         contents: [{
           role: "user",
-          parts: [{ 
+          parts: [{
             text: getPromptforGemini(email_text),
           }]
         }]
@@ -55,13 +56,13 @@ function extractTransactionsWithGemini() {
 
       if (json_response.candidates && json_response.candidates.length > 0 && json_response.candidates[0].content && json_response.candidates[0].content.parts && json_response.candidates[0].content.parts.length > 0) {
         var extracted_text = json_response.candidates[0].content.parts[0].text;
-        
+
         try {
-          let processed_text = extracted_text; 
+          let processed_text = extracted_text;
 
           if (typeof processed_text !== 'string') {
             console.log("Error: extracted_text from Gemini is not a string. Value:", processed_text);
-            return; 
+            return;
           }
 
           if (processed_text.startsWith("```json") && processed_text.endsWith("```")) {
@@ -81,14 +82,14 @@ function extractTransactionsWithGemini() {
 
             appendRowToGoogleSheet(SHEET_ID, [email_date, transaction_date, merchant, amount, category, transaction_type, user, split_status]);
 
-            var row_number = sheet.getLastRow(); 
+            var row_number = sheet.getLastRow();
 
             sendTransactionMessage(transaction_data, row_number, user);
           } else {
             console.log("Gemini response was not in the expected JSON format. Original response from Gemini: \n" + extracted_text);
             if (processed_text.toLowerCase().includes("no transaction details") ||
-                processed_text.toLowerCase().includes("cannot provide a json output") ||
-                processed_text.toLowerCase().includes("no transaction was found")) {
+              processed_text.toLowerCase().includes("cannot provide a json output") ||
+              processed_text.toLowerCase().includes("no transaction was found")) {
               console.log("Gemini explicitly stated no transaction details were found in the email.");
             }
           }
@@ -99,8 +100,11 @@ function extractTransactionsWithGemini() {
       } else {
         console.log("Gemini response did not contain candidates or parts. Full response: " + JSON.stringify(json_response));
       }
+      // Add a delay to prevent hitting API rate limits (15 RPM for Gemini Free Tier)
+      Utilities.sleep(5000); // 5 seconds delay
+      emailsProcessedCount++;
     });
   });
-  
-  console.log("Transactions parsed and formatted successfully.");
+
+  console.log("Transactions parsed and formatted successfully. Total emails processed: " + emailsProcessedCount);
 }
