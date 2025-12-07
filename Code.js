@@ -399,11 +399,13 @@ function showRecentTransactions(chatId) {
     console.error("Error in showRecentTransactions:", error);
     sendTelegramMessage(chatId, "❌ *Error fetching recent transactions*\n\nPlease try again later.");
   }
-  // Function for time based triggers
-  function triggerEmailProcessing() {
-    console.log("Triggered email processing started");
-    extractTransactionsWithGemini();
-    console.log("Triggered email processing completed");
-  }
 
+
+}
+
+// Function for time based triggers
+function triggerEmailProcessing() {
+  console.log("Triggered email processing started");
+  extractTransactionsWithGemini();
+  console.log("Triggered email processing completed");
 }
