@@ -60,7 +60,7 @@ function answerCallbackQuery(callback_query_id, text = "✅ Updated Successfully
 }
 
 function sendRequest(url, method, payload) {
-  var MAX_RETRIES = 3; // Maximum number of retries for rate-limited requests
+  var MAX_RETRIES = 5; // Maximum number of retries for rate-limited requests
   var INITIAL_RETRY_DELAY_MS = 1000; // Initial delay in milliseconds if retry_after is not provided
 
   for (var attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -77,11 +77,11 @@ function sendRequest(url, method, payload) {
 
     if (response_code === 200) {
       if (DEBUG) {
-        console.log("Telegram API request successful for URL: " + url + "\nResponse: " + response_body);
+        console.log("API request successful for URL: " + url + "\nResponse: " + response_body);
       }
       return response; // Success
     } else if (response_code === 429) {
-      console.warn("Telegram API rate limit hit (429) for URL: " + url + ". Attempt " + (attempt + 1) + " of " + MAX_RETRIES + ".");
+      console.warn("API rate limit hit (429) for URL: " + url + ". Attempt " + (attempt + 1) + " of " + MAX_RETRIES + ".");
       console.warn("Response body: " + response_body);
 
       var retry_after_seconds = 0;
@@ -91,7 +91,8 @@ function sendRequest(url, method, payload) {
         // 1. Check for standard Telegram `parameters.retry_after`
         if (error_data && error_data.parameters && error_data.parameters.retry_after) {
           retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
-          console.log("Telegram API suggested retry_after: " + retry_after_seconds + " seconds.");
+          retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
+          console.log("API suggested retry_after (Telegram format): " + retry_after_seconds + " seconds.");
         }
 
         // 2. Check for Gemini `error.message` containing "Please retry in Xs"
@@ -138,16 +139,16 @@ function sendRequest(url, method, payload) {
       } else {
         console.error("Max retries (" + MAX_RETRIES + ") reached for URL: " + url + ". Giving up on this request.");
         // Throw an error to indicate persistent failure, which will be caught by the calling function's try-catch
-        throw new Error("Telegram API request failed after " + MAX_RETRIES + " attempts due to rate limiting. Last response code: " + response_code + ", body: " + response_body);
+        throw new Error("API request failed after " + MAX_RETRIES + " attempts due to rate limiting. Last response code: " + response_code + ", body: " + response_body);
       }
     } else {
       // Handle other non-200, non-429 errors
-      console.error("Telegram API request failed for URL: " + url + ". Response Code: " + response_code + ". Response Body: " + response_body);
-      throw new Error("Telegram API request failed. Response Code: " + response_code + ", body: " + response_body);
+      console.error("API request failed for URL: " + url + ". Response Code: " + response_code + ". Response Body: " + response_body);
+      throw new Error("API request failed. Response Code: " + response_code + ", body: " + response_body);
     }
   }
   // Fallback, should ideally not be reached if logic above is correct
-  throw new Error("Telegram API request failed unexpectedly after all retries for URL: " + url);
+  throw new Error("API request failed unexpectedly after all retries for URL: " + url);
 }
 
 function buildReplyMarkup(text, callback_data) {
