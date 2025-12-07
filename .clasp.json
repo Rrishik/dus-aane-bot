@@ -13,13 +13,12 @@
   ],
   "filePushOrder": [
     "Lol.js",
-    "Code.js",
     "Constants.js",
-    "GoogleSheetUtils.js",
     "TelegramUtils.js",
+    "GoogleSheetUtils.js",
+    "TransactionProcessor.js",
     "BotHandlers.js",
-    "MessageUtils.js",
-    "TransactionProcessor.js"
+    "Code.js"
   ],
   "skipSubdirectories": true
 }
