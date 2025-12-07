@@ -57,7 +57,7 @@ function extractTransactionsWithGemini() {
       }]
     };
 
-    var response = sendRequest("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_API_KEY, "post", payload);
+    var response = sendRequest(GEMINI_BASE_URL + "?key=" + GEMINI_API_KEY, "post", payload);
     var json_response = JSON.parse(response.getContentText()); // Renamed json to json_response
 
     if (json_response.candidates && json_response.candidates.length > 0 && json_response.candidates[0].content && json_response.candidates[0].content.parts && json_response.candidates[0].content.parts.length > 0) {
