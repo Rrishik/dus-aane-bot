@@ -156,9 +156,9 @@ function handleCallbackQuery(update) {
       updateGoogleSheetCell(SHEET_ID, rowNumber, SPLIT_COLUMN, action === "personal" ? "Personal" : "Split");
 
       var options = {
-        parseMode: "Markdown",
-        replyMarkup: getReplyMarkup(`🔄 Update to ${toggleAction}`, `${toggleAction}_${rowNumber}`),
-        messageId: messageId
+        parse_mode: "Markdown",
+        reply_markup: buildReplyMarkup(`🔄 Update to ${toggleAction}`, `${toggleAction}_${rowNumber}`),
+        message_id: messageId
       };
       var message = `✅ *Marked ${action}*
 
@@ -197,10 +197,10 @@ function sendTransactionMessage(transactionDetails, rowNumber, user) {
 
   var message = getTransactionMessage(transactionDetails, user);
 
-  var reply_markup = getReplyMarkup("✂️ Want to split ?", `split_${rowNumber}`);
+  var reply_markup = buildReplyMarkup("✂️ Want to split ?", `split_${rowNumber}`);
   var options = {
-    parseMode: "Markdown",
-    replyMarkup: reply_markup
+    parse_mode: "Markdown",
+    reply_markup: reply_markup
   };
   sendTelegramMessage(CHAT_ID, message, options);
   console.log("Telegram message sent successfully.");
