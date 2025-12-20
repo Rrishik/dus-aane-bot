@@ -135,65 +135,127 @@ function addTransaction(chatId, messageText, username) {
 
 // Method to handle the callback queries sent from the Telegram message reply buttons.
 function handleCallbackQuery(update) {
-  if (update.callback_query) {
+  try {
+    if (!update.callback_query) {
+      console.log("[handleCallbackQuery] Error: No callback_query in update");
+      return;
+    }
+    
     var callbackQueryId = update.callback_query.id;
     var chatId = update.callback_query.message.chat.id;
     var messageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
     var data = update.callback_query.data; // Example: "personal_5" or "split_8"
-    console.log("Callback query received:", {chatId: chatId, messageId: messageId, data: data});
     
-    if (data) {
-      var parts = data.split("_");
-      if (parts.length < 2) {
-        console.log("Error: Invalid callback data format:", data);
-        answerCallbackQuery(callbackQueryId, "❌ Error: Invalid request", false);
-        return;
-      }
-      
-      var action = parts[0]; // "personal" or "split"
-      var rowNumber = parseInt(parts[1]); // Extract row number
-      
-      console.log("Processing callback - Action:", action, "Row:", rowNumber);
+    console.log("[handleCallbackQuery] Callback query received:", {
+      callbackQueryId: callbackQueryId,
+      chatId: chatId, 
+      messageId: messageId, 
+      data: data,
+      SHEET_ID: SHEET_ID,
+      SPLIT_COLUMN: SPLIT_COLUMN
+    });
+    
+    if (!data) {
+      console.log("[handleCallbackQuery] Error: No callback data received");
+      answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
+      return;
+    }
+    
+    var parts = data.split("_");
+    if (parts.length < 2) {
+      console.log("[handleCallbackQuery] Error: Invalid callback data format:", data);
+      answerCallbackQuery(callbackQueryId, "❌ Error: Invalid request", false);
+      return;
+    }
+    
+    var action = parts[0]; // "personal" or "split"
+    var rowNumber = parseInt(parts[1]); // Extract row number
+    
+    console.log("[handleCallbackQuery] Processing callback - Action:", action, "Row:", rowNumber, "Type:", typeof rowNumber);
 
-      if (isNaN(rowNumber) || rowNumber <= 0) {
-        console.log("Error: Invalid row number:", rowNumber);
-        answerCallbackQuery(callbackQueryId, "❌ Error: Invalid row number", false);
-        return;
-      }
+    if (isNaN(rowNumber) || rowNumber <= 0) {
+      console.log("[handleCallbackQuery] Error: Invalid row number:", rowNumber, "Parsed from:", parts[1]);
+      answerCallbackQuery(callbackQueryId, "❌ Error: Invalid row number", false);
+      return;
+    }
 
-      // Determine the value to set based on action
-      var valueToSet = action === "personal" ? SPLIT_STATUS.PERSONAL : SPLIT_STATUS.SPLIT;
-      console.log("Updating sheet - Row:", rowNumber, "Column:", SPLIT_COLUMN, "Value:", valueToSet);
+    // Determine the value to set based on action
+    var valueToSet = action === "personal" ? SPLIT_STATUS.PERSONAL : SPLIT_STATUS.SPLIT;
+    
+    // First, verify the row exists and get current value
+    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    var lastRow = sheet.getLastRow();
+    var currentValue = "";
+    var errorMessage = "";
+    
+    // Check if row exists
+    if (rowNumber > lastRow) {
+      errorMessage = "❌ *Error:* Row " + rowNumber + " doesn't exist. Last row is " + lastRow + ".";
+      answerCallbackQuery(callbackQueryId, "Row doesn't exist", false);
+      sendTelegramMessage(chatId, errorMessage);
+      return;
+    }
+    
+    if (rowNumber <= 1) {
+      errorMessage = "❌ *Error:* Cannot update header row (row 1).";
+      answerCallbackQuery(callbackQueryId, "Invalid row", false);
+      sendTelegramMessage(chatId, errorMessage);
+      return;
+    }
+    
+    // Read current value
+    try {
+      currentValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
+    } catch (e) {
+      errorMessage = "❌ *Error reading cell:* " + e.message;
+      answerCallbackQuery(callbackQueryId, "Read error", false);
+      sendTelegramMessage(chatId, errorMessage);
+      return;
+    }
 
-      // Update the existing row in Google Sheets
-      var updateSuccess = updateGoogleSheetCell(SHEET_ID, rowNumber, SPLIT_COLUMN, valueToSet);
+    // Update the existing row in Google Sheets
+    var updateResult = updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, SPLIT_COLUMN, valueToSet, currentValue);
 
-      if (!updateSuccess) {
-        console.log("Failed to update sheet for row:", rowNumber);
-        answerCallbackQuery(callbackQueryId, "❌ Error updating transaction", false);
-        sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\nPlease try again or contact support.");
-        return;
-      }
+    if (!updateResult.success) {
+      answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
+      sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\n" + updateResult.message + "\n\n*Details:*\nRow: " + rowNumber + "\nColumn: " + SPLIT_COLUMN + "\nCurrent: " + currentValue + "\nTrying to set: " + valueToSet);
+      return;
+    }
 
-      var toggleAction = action === "personal" ? "split" : "personal"; // Toggle between personal and split
-      var toggleText = toggleAction === "split" ? "✂️ Split Transaction" : "🔄 Mark as Personal";
-      
-      var options = {
-        parse_mode: "Markdown",
-        reply_markup: buildReplyMarkup(toggleText, `${toggleAction}_${rowNumber}`),
-        message_id: messageId
-      };
-      var message = `✅ *Marked as ${valueToSet}*
+    var toggleAction = action === "personal" ? "split" : "personal"; // Toggle between personal and split
+    var toggleText = toggleAction === "split" ? "✂️ Split Transaction" : "🔄 Mark as Personal";
+    
+    // Verify the update by reading back the value
+    var verifyValue = "";
+    try {
+      verifyValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
+    } catch (e) {
+      verifyValue = "Could not verify: " + e.message;
+    }
+    
+    var options = {
+      parse_mode: "Markdown",
+      reply_markup: buildReplyMarkup(toggleText, `${toggleAction}_${rowNumber}`),
+      message_id: messageId
+    };
+    
+    var statusMessage = verifyValue === valueToSet 
+      ? `✅ *Marked as ${valueToSet}*` 
+      : `⚠️ *Update sent* (Current: ${verifyValue}, Expected: ${valueToSet})`;
+    
+    var message = `${statusMessage}
 
 ${messageText}`;
-      sendTelegramMessage(chatId, message, options);
+    sendTelegramMessage(chatId, message, options);
 
-      // Acknowledge callback to Telegram
-      answerCallbackQuery(callbackQueryId, `✅ Marked as ${valueToSet}`, false);
-    } else {
-      console.log("Error: No callback data received");
-      answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
+    // Acknowledge callback to Telegram
+    answerCallbackQuery(callbackQueryId, `✅ Marked as ${valueToSet}`, false);
+  } catch (error) {
+    console.error("[handleCallbackQuery] Error processing callback:", error.message);
+    console.error("[handleCallbackQuery] Stack trace:", error.stack);
+    if (update.callback_query && update.callback_query.id) {
+      answerCallbackQuery(update.callback_query.id, "❌ Error: " + error.message, false);
     }
   }
 }
