@@ -109,7 +109,19 @@ function addTransaction(chatId, messageText, username) {
 
   appendRowToGoogleSheet(SHEET_ID, [date, date, merchant, amount, category, "Debit", username, "Personal"]);
 
-  var rowNumber = SpreadsheetApp.openById(SHEET_ID).getSheets()[0].getLastRow(); // Get the last row number
+  // Get the row number after appending
+  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  var rowNumber = sheet.getLastRow(); // Get the last row number
+  
+  // Validate row number
+  if (rowNumber <= 1) {
+    console.log("Warning: Invalid row number after append:", rowNumber);
+    var message = `✅ *Transaction Added!*\n💰 *Amount:* INR ${amount}\n📂 *Category:* ${category}\n🏪 *Merchant:* ${merchant}\n👤 *Added by:* ${username}`;
+    sendTelegramMessage(chatId, message);
+    return;
+  }
+  
+  console.log("Manual transaction saved to row:", rowNumber);
   var message = `✅ *Transaction Added!*\n💰 *Amount:* INR ${amount}\n📂 *Category:* ${category}\n🏪 *Merchant:* ${merchant}\n👤 *Added by:* ${username}`;
   var reply_markup = buildReplyMarkup("✂️ Split Transaction", `split_${rowNumber}`);
   var options = {
@@ -129,27 +141,59 @@ function handleCallbackQuery(update) {
     var messageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
     var data = update.callback_query.data; // Example: "personal_5" or "split_8"
-    console.log([chatId, messageId, data]);
+    console.log("Callback query received:", {chatId: chatId, messageId: messageId, data: data});
+    
     if (data) {
-      var action = data.split("_")[0]; // "personal" or "split"
-      var toggleAction = action === "personal" ? "split" : "personal"; // Toggle between personal and split
-      var rowNumber = parseInt(data.split("_")[1]); // Extract row number
+      var parts = data.split("_");
+      if (parts.length < 2) {
+        console.log("Error: Invalid callback data format:", data);
+        answerCallbackQuery(callbackQueryId, "❌ Error: Invalid request", false);
+        return;
+      }
+      
+      var action = parts[0]; // "personal" or "split"
+      var rowNumber = parseInt(parts[1]); // Extract row number
+      
+      console.log("Processing callback - Action:", action, "Row:", rowNumber);
+
+      if (isNaN(rowNumber) || rowNumber <= 0) {
+        console.log("Error: Invalid row number:", rowNumber);
+        answerCallbackQuery(callbackQueryId, "❌ Error: Invalid row number", false);
+        return;
+      }
+
+      // Determine the value to set based on action
+      var valueToSet = action === "personal" ? "Personal" : "Split";
+      console.log("Updating sheet - Row:", rowNumber, "Column:", SPLIT_COLUMN, "Value:", valueToSet);
 
       // Update the existing row in Google Sheets
-      updateGoogleSheetCell(SHEET_ID, rowNumber, SPLIT_COLUMN, action === "personal" ? "Personal" : "Split");
+      var updateSuccess = updateGoogleSheetCell(SHEET_ID, rowNumber, SPLIT_COLUMN, valueToSet);
 
+      if (!updateSuccess) {
+        console.log("Failed to update sheet for row:", rowNumber);
+        answerCallbackQuery(callbackQueryId, "❌ Error updating transaction", false);
+        sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\nPlease try again or contact support.");
+        return;
+      }
+
+      var toggleAction = action === "personal" ? "split" : "personal"; // Toggle between personal and split
+      var toggleText = toggleAction === "split" ? "✂️ Split Transaction" : "🔄 Mark as Personal";
+      
       var options = {
         parse_mode: "Markdown",
-        reply_markup: buildReplyMarkup(`🔄 Update to ${toggleAction}`, `${toggleAction}_${rowNumber}`),
+        reply_markup: buildReplyMarkup(toggleText, `${toggleAction}_${rowNumber}`),
         message_id: messageId
       };
-      var message = `✅ *Marked ${action}*
+      var message = `✅ *Marked as ${valueToSet}*
 
 ${messageText}`;
       sendTelegramMessage(chatId, message, options);
 
       // Acknowledge callback to Telegram
-      answerCallbackQuery(callbackQueryId);
+      answerCallbackQuery(callbackQueryId, `✅ Marked as ${valueToSet}`, false);
+    } else {
+      console.log("Error: No callback data received");
+      answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
     }
   }
 }
