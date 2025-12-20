@@ -4,35 +4,78 @@ function updateGoogleSheetCell(sheet_id, row_number, column_number, value) {
     var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
 
     if (isNaN(row_number) || row_number <= 0) {
-      console.log("Error: Invalid row number:", row_number);
       return false;
     }
 
     if (isNaN(column_number) || column_number <= 0) {
-      console.log("Error: Invalid column number:", column_number);
       return false;
     }
 
     // Check if row exists (row should be <= last row with data)
     var lastRow = sheet.getLastRow();
+    
     if (row_number > lastRow) {
-      console.log("Error: Row number " + row_number + " exceeds last row " + lastRow);
       return false;
     }
 
     // Check if row is header row (row 1) - we shouldn't update headers
     if (row_number === 1) {
-      console.log("Error: Cannot update header row");
       return false;
     }
 
+    // Update the cell
     sheet.getRange(row_number, column_number).setValue(value);
-    console.log("Successfully updated sheet: Row " + row_number + ", Column " + column_number + " = " + value);
-    return true;
+    
+    // Verify the update
+    var newValue = sheet.getRange(row_number, column_number).getValue();
+    
+    return newValue === value;
   } catch (error) {
-    console.log("Error updating sheet:", error.message);
-    console.log("Stack trace:", error.stack);
     return false;
+  }
+}
+
+// Enhanced version that returns detailed feedback
+function updateGoogleSheetCellWithFeedback(sheet_id, row_number, column_number, value, currentValue) {
+  try {
+    var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+
+    if (isNaN(row_number) || row_number <= 0) {
+      return {success: false, message: "Invalid row number: " + row_number};
+    }
+
+    if (isNaN(column_number) || column_number <= 0) {
+      return {success: false, message: "Invalid column number: " + column_number};
+    }
+
+    // Check if row exists (row should be <= last row with data)
+    var lastRow = sheet.getLastRow();
+    
+    if (row_number > lastRow) {
+      return {success: false, message: "Row " + row_number + " exceeds last row " + lastRow};
+    }
+
+    // Check if row is header row (row 1) - we shouldn't update headers
+    if (row_number === 1) {
+      return {success: false, message: "Cannot update header row"};
+    }
+
+    // Update the cell
+    sheet.getRange(row_number, column_number).setValue(value);
+    
+    // Small delay to ensure write completes
+    Utilities.sleep(100);
+    
+    // Verify the update
+    var newValue = sheet.getRange(row_number, column_number).getValue();
+    
+    if (newValue === value || newValue.toString() === value.toString()) {
+      return {success: true, message: "Updated successfully", oldValue: currentValue, newValue: newValue};
+    } else {
+      return {success: false, message: "Value mismatch. Expected: " + value + ", Got: " + newValue};
+    }
+  } catch (error) {
+    return {success: false, message: "Error: " + error.message};
   }
 }
 
