@@ -107,7 +107,7 @@ function addTransaction(chatId, messageText, username) {
   var merchant = parts.slice(3).join(" "); // Join remaining words as merchant name
   var date = new Date().toLocaleDateString();
 
-  appendRowToGoogleSheet(SHEET_ID, [date, date, merchant, amount, category, "Debit", username, "Personal"]);
+  appendRowToGoogleSheet(SHEET_ID, [date, date, merchant, amount, category, "Debit", username, SPLIT_STATUS.PERSONAL]);
 
   // Get the row number after appending
   var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
@@ -163,7 +163,7 @@ function handleCallbackQuery(update) {
       }
 
       // Determine the value to set based on action
-      var valueToSet = action === "personal" ? "Personal" : "Split";
+      var valueToSet = action === "personal" ? SPLIT_STATUS.PERSONAL : SPLIT_STATUS.SPLIT;
       console.log("Updating sheet - Row:", rowNumber, "Column:", SPLIT_COLUMN, "Value:", valueToSet);
 
       // Update the existing row in Google Sheets

@@ -151,7 +151,7 @@ function saveTransaction(data, emailDate, userEmail) {
   var category = data.category || "Uncategorized";
   var type = data.transaction_type || "Unknown";
   var user = userEmail.split("@")[0];
-  var splitStatus = "personal";
+  var splitStatus = SPLIT_STATUS.PERSONAL; // Default to Personal
 
   appendRowToGoogleSheet(SHEET_ID, [emailDate, transactionDate, merchant, amount, category, type, user, splitStatus]);
 
