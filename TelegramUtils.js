@@ -197,9 +197,40 @@ function sendTransactionMessage(transaction_details, row_number, user) {
   };
   
   if (row_number && row_number > 1) {
-    var reply_markup_data = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
-    options.reply_markup = reply_markup_data;
-    console.log("Telegram message sent with split button for row:", row_number);
+    // Verify the row number by checking the sheet
+    try {
+      var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+      var lastRow = sheet.getLastRow();
+      
+      // If row_number seems wrong, try to find the row by matching transaction data
+      if (row_number > lastRow) {
+        // Try to find the row by matching merchant and amount
+        var data = sheet.getDataRange().getValues();
+        var foundRow = -1;
+        for (var i = data.length - 1; i >= 1; i--) { // Start from bottom, skip header
+          if (data[i][2] === transaction_details.merchant && 
+              parseFloat(data[i][3]) === parseFloat(transaction_details.amount)) {
+            foundRow = i + 1; // +1 because array is 0-indexed, sheet rows are 1-indexed
+            break;
+          }
+        }
+        if (foundRow > 0) {
+          row_number = foundRow;
+          console.log("Found matching row:", row_number);
+        }
+      }
+      
+      // Add debug info to message in development (you can remove this later)
+      // message += "\n\n_Debug: Row " + row_number + " of " + lastRow + "_";
+      
+      var reply_markup_data = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
+      options.reply_markup = reply_markup_data;
+    } catch (e) {
+      console.log("Error verifying row number:", e.message);
+      // Still try to send with the original row number
+      var reply_markup_data = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
+      options.reply_markup = reply_markup_data;
+    }
   } else {
     console.log("Telegram message sent without split button (invalid row number:", row_number + ")");
   }
