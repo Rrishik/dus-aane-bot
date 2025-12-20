@@ -190,11 +190,20 @@ ${category ? `📂 *Category:* ${category}\n` : ""}
 
 function sendTransactionMessage(transaction_details, row_number, user) {
   var message = getTransactionMessageAsString(transaction_details, user);
-  var reply_markup_data = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
+  
+  // Only add split button if we have a valid row number
   var options = {
-    parse_mode: "Markdown",
-    reply_markup: reply_markup_data
+    parse_mode: "Markdown"
   };
+  
+  if (row_number && row_number > 1) {
+    var reply_markup_data = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
+    options.reply_markup = reply_markup_data;
+    console.log("Telegram message sent with split button for row:", row_number);
+  } else {
+    console.log("Telegram message sent without split button (invalid row number:", row_number + ")");
+  }
+  
   sendTelegramMessage(CHAT_ID, message, options);
   console.log("Telegram message sent successfully.");
 }

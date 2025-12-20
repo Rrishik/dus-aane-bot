@@ -151,12 +151,22 @@ function saveTransaction(data, emailDate, userEmail) {
   var category = data.category || "Uncategorized";
   var type = data.transaction_type || "Unknown";
   var user = userEmail.split("@")[0];
-  var splitStatus = "personal";
+  var splitStatus = SPLIT_STATUS.PERSONAL; // Default to Personal
 
   appendRowToGoogleSheet(SHEET_ID, [emailDate, transactionDate, merchant, amount, category, type, user, splitStatus]);
 
-  var sheet = SpreadsheetApp.openById(SHEET_ID);
-  var rowNumber = sheet.getLastRow(); // Note: This might be slightly inefficient if high volume, but safe for low volume
+  // Get the row number after appending - open sheet once and get last row
+  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  var rowNumber = sheet.getLastRow(); // This should be the row we just appended
+  
+  // Validate row number
+  if (rowNumber <= 1) {
+    console.log("Warning: Invalid row number after append:", rowNumber);
+    // If no valid row, don't send message with split button
+    sendTransactionMessage(data, null, user);
+    return;
+  }
 
+  console.log("Transaction saved to row:", rowNumber);
   sendTransactionMessage(data, rowNumber, user);
 }
