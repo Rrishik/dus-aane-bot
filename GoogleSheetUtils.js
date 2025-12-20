@@ -1,21 +1,38 @@
 // Utility to update a Google Sheet cell
 function updateGoogleSheetCell(sheet_id, row_number, column_number, value) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
-
-  if (isNaN(row_number) || row_number <= 0) {
-    console.log("Error: Invalid row number:", row_number);
-    return;
-  }
-
-  if (isNaN(column_number) || column_number <= 0) {
-    console.log("Error: Invalid column number:", column_number);
-    return;
-  }
-
   try {
+    var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+
+    if (isNaN(row_number) || row_number <= 0) {
+      console.log("Error: Invalid row number:", row_number);
+      return false;
+    }
+
+    if (isNaN(column_number) || column_number <= 0) {
+      console.log("Error: Invalid column number:", column_number);
+      return false;
+    }
+
+    // Check if row exists (row should be <= last row with data)
+    var lastRow = sheet.getLastRow();
+    if (row_number > lastRow) {
+      console.log("Error: Row number " + row_number + " exceeds last row " + lastRow);
+      return false;
+    }
+
+    // Check if row is header row (row 1) - we shouldn't update headers
+    if (row_number === 1) {
+      console.log("Error: Cannot update header row");
+      return false;
+    }
+
     sheet.getRange(row_number, column_number).setValue(value);
+    console.log("Successfully updated sheet: Row " + row_number + ", Column " + column_number + " = " + value);
+    return true;
   } catch (error) {
     console.log("Error updating sheet:", error.message);
+    console.log("Stack trace:", error.stack);
+    return false;
   }
 }
 

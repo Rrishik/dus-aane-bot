@@ -20,6 +20,12 @@ const BOT_ADD_TRANSACTION_KEYWORD = 'addTransaction';
 const SHEET_ID = DEBUG ? TEST_SHEET_ID : PROD_SHEET_ID;
 const SPLIT_COLUMN = 8; // Column H
 
+// Split Status Values (enum-like constants)
+const SPLIT_STATUS = {
+  PERSONAL: "Personal",
+  SPLIT: "Split"
+};
+
 
 // Gmail
 const MAILS_LOOKBACK_PERIOD = DEBUG ? '1d' : BACKFILL ? BACKFILL : '1h';
