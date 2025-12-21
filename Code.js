@@ -30,8 +30,6 @@ function triggerEmailProcessing() {
   console.log("Triggered email processing started");
   extractTransactionsWithGemini();
   console.log("Triggered email processing completed");
-  testSplitTransactionUpdate(1296);
-  console.log("Triggered split txn completed");
 }
 
 // Test function to manually test split transaction update
