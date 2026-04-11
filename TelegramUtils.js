@@ -8,7 +8,7 @@ function setTelegramWebhook() {
   // First delete any existing webhook
   deleteWebhook();
   var payload = {
-    url: DEBUG ? TEST_SCRIPT_APP_URL : WORKER_PROXY_URL
+    url: WORKER_PROXY_URL
   };
 
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
@@ -16,22 +16,18 @@ function setTelegramWebhook() {
 
 function deleteTelegramCommands() {
   sendRequest(BOT_DELETE_COMMANDS_URL, "post", {});
-  if (DEBUG) console.log("Telegram commands deleted successfully.");
 }
 
 function setTelegramCommands() {
   var commands = [
-    { command: "/start", description: "Start the bot" },
-    { command: "/help", description: "Get help" },
-    { command: "/backfill", description: "Backfill transactions for a date range" },
-    { command: "/summary", description: "View transaction summary" },
-    { command: "/recent", description: "View recent transactions" }
+    { command: "/summary", description: "View spending summary (e.g. /summary 20)" },
+    { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
+    { command: "/help", description: "Show available commands" }
   ];
   var payload = {
     commands: commands
   };
   sendRequest(BOT_SET_COMMANDS_URL, "post", payload);
-  if (DEBUG) console.log("Telegram commands set successfully.");
 }
 
 // Utility to send a Telegram message
@@ -61,7 +57,6 @@ function answerCallbackQuery(callback_query_id, text = "✅ Updated Successfully
   };
 
   sendRequest(BOT_ANSWER_CALLBACK_QUERY_URL, "post", payload);
-  console.log("Callback query answered");
 }
 
 function sendRequest(url, method, payload) {
@@ -81,9 +76,6 @@ function sendRequest(url, method, payload) {
     var response_body = response.getContentText();
 
     if (response_code === 200) {
-      if (DEBUG) {
-        console.log("API request successful for URL: " + url + "\nResponse: " + response_body);
-      }
       return response; // Success
     } else if (response_code === 429) {
       console.warn(
@@ -98,7 +90,6 @@ function sendRequest(url, method, payload) {
         // 1. Check for standard Telegram `parameters.retry_after`
         if (error_data && error_data.parameters && error_data.parameters.retry_after) {
           retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
-          console.log("API suggested retry_after (Telegram format): " + retry_after_seconds + " seconds.");
         }
 
         // 2. Check for `error.message` containing "Please retry in Xs"
@@ -107,7 +98,6 @@ function sendRequest(url, method, payload) {
           var match = message.match(/Please retry in\s+([\d\.]+)\s*s/);
           if (match && match[1]) {
             retry_after_seconds = Math.ceil(parseFloat(match[1]));
-            console.log("API error message suggested retry_after: " + retry_after_seconds + " seconds.");
           }
         }
 
@@ -119,7 +109,6 @@ function sendRequest(url, method, payload) {
               var delayStr = detail.retryDelay;
               if (delayStr.endsWith("s")) {
                 retry_after_seconds = Math.ceil(parseFloat(delayStr));
-                console.log("API details suggested retry_after: " + retry_after_seconds + " seconds.");
               }
             }
           });
@@ -139,7 +128,6 @@ function sendRequest(url, method, payload) {
       }
 
       if (attempt < MAX_RETRIES - 1) {
-        console.log("Waiting for " + delay_ms / 1000 + " seconds before retrying...");
         Utilities.sleep(delay_ms);
       } else {
         console.error("Max retries (" + MAX_RETRIES + ") reached for URL: " + url + ". Giving up on this request.");
@@ -211,7 +199,6 @@ function sendTransactionMessage(transaction_details, messageId, user) {
   }
 
   sendTelegramMessage(CHAT_ID, message, options);
-  console.log("Telegram message sent successfully.");
 }
 
 function sendTransactionDetailMessage(chatId, transaction_details, user) {

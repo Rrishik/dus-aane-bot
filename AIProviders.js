@@ -39,7 +39,6 @@ function callGemini(prompt) {
     return jsonResponse.candidates[0].content.parts[0].text;
   }
 
-  console.log("Gemini response did not contain candidates. Full response: " + JSON.stringify(jsonResponse));
   return null;
 }
 
@@ -72,6 +71,5 @@ function callAzureOpenAI(prompt) {
     return jsonResponse.choices[0].message.content;
   }
 
-  console.log("Azure OpenAI response did not contain choices. Full response: " + JSON.stringify(jsonResponse));
   return null;
 }
