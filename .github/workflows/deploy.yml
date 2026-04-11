@@ -61,3 +61,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: worker
+          secrets: |
+            APPS_SCRIPT_URL
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
