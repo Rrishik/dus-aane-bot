@@ -13,16 +13,14 @@ function handleMessage(update) {
 
       switch (command) {
         case "/start":
-          handleStartCommand(chatId, username);
-          break;
         case "/help":
-          handleHelpCommand(chatId);
+          handleHelpCommand(chatId, username);
           break;
         case "/summary":
           showTransactionSummary(chatId, messageText);
           break;
         case "/recent":
-          showRecentTransactions(chatId);
+          showRecentTransactions(chatId, messageText);
           break;
         case "/backfill":
           handleBackfillCommand(chatId, messageText);
@@ -35,55 +33,30 @@ function handleMessage(update) {
     else if (messageText === "📊 View Summary") {
       showTransactionSummary(chatId);
     } else if (messageText === "📅 Recent Transactions") {
-      showRecentTransactions(chatId);
+      showRecentTransactions(chatId, "/recent");
     }
   }
 }
 
-// Method to handle the /start command and show menu options
-function handleStartCommand(chatId, username) {
+// Method to handle the /help command (also handles /start)
+function handleHelpCommand(chatId, username) {
+  var greeting = username ? `👋 *Hey ${username}!*\n\n` : "";
   var message =
-    `👋 *Welcome ${username}!*\n\nI'm your transaction management bot. Here's what I can do:\n\n` +
-    `📝 *Commands:*\n` +
-    `• /backfill - Backfill transactions for a date range\n` +
-    `• /summary - View summary (e.g. /summary 10)\n` +
+    greeting +
+    `📚 *Available Commands:*\n\n` +
+    `• /summary - View spending summary\n` +
+    `  ↳ /summary 20 - Last 20 transactions\n` +
+    `  ↳ /summary - Last 10 (default)\n\n` +
     `• /recent - View recent transactions\n` +
-    `• /help - Show help information\n\n` +
-    `💡 *Tip:* Type / to see all available commands!`;
-
-  var keyboard = {
-    keyboard: [["📊 View Summary", "📅 Recent Transactions"]],
-    resize_keyboard: true,
-    one_time_keyboard: false
-  };
-
-  var options = {
-    parse_mode: "Markdown",
-    reply_markup: JSON.stringify(keyboard)
-  };
-
-  sendTelegramMessage(chatId, message, options);
-}
-
-// Method to handle the /help command
-function handleHelpCommand(chatId) {
-  var message =
-    `📚 *Help Guide*\n\n` +
-    `*Available Commands:*\n` +
-    `• /start - Start the bot\n` +
-    `• /backfill - Backfill transactions for a date range\n` +
-    `• /summary - View summary (e.g. /summary 10)\n` +
-    `• /recent - View recent transactions\n` +
-    `• /help - Show this help message\n\n` +
-    `*Backfilling Transactions:*\n` +
-    `Use the format: /backfill YYYY-MM-DD YYYY-MM-DD\n` +
-    `Example: /backfill 2026-03-01 2026-03-31\n\n` +
+    `  ↳ /recent 10 - Last 10 transactions\n` +
+    `  ↳ /recent rishik - Filter by user\n` +
+    `  ↳ /recent 10 rishik - Both filters\n\n` +
+    `• /help - Show this message\n\n` +
     `*Features:*\n` +
     `• Automatic email transaction parsing\n` +
     `• Transaction splitting\n` +
-    `• Date range backfill with dedup\n` +
-    `• Category-wise spending analysis\n` +
-    `• Recent transaction history`;
+    `• Multi-currency support\n` +
+    `• Category-wise spending analysis`;
 
   sendTelegramMessage(chatId, message);
 }
@@ -125,7 +98,6 @@ function handleBackfillCommand(chatId, messageText) {
 function handleCallbackQuery(update) {
   try {
     if (!update.callback_query) {
-      console.log("[handleCallbackQuery] Error: No callback_query in update");
       return;
     }
 
@@ -134,8 +106,6 @@ function handleCallbackQuery(update) {
     var telegramMessageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
     var data = update.callback_query.data; // Example: "split_abc123" or "personal_abc123"
-
-    console.log("[handleCallbackQuery] Callback received:", { data: data });
 
     if (!data) {
       answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
@@ -311,8 +281,24 @@ function showTransactionSummary(chatId, messageText) {
 }
 
 // Function to show recent transactions
-function showRecentTransactions(chatId) {
+// Supports: /recent, /recent 10, /recent rishik, /recent 10 rishik
+function showRecentTransactions(chatId, messageText) {
   try {
+    var parts = messageText.trim().split(/\s+/);
+    parts.shift(); // remove "/recent"
+
+    var limit = 5;
+    var userFilter = null;
+
+    // Parse params: number = limit, string = user filter
+    parts.forEach(function (part) {
+      if (/^\d+$/.test(part)) {
+        limit = parseInt(part, 10);
+      } else {
+        userFilter = part.toLowerCase();
+      }
+    });
+
     var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
     var data = sheet.getDataRange().getValues();
 
@@ -325,10 +311,25 @@ function showRecentTransactions(chatId) {
     // Skip header row
     data.shift();
 
-    // Get last 5 transactions
-    var recentTransactions = data.slice(-5).reverse();
+    // Filter by user if specified
+    if (userFilter) {
+      data = data.filter(function (row) {
+        var user = (row[6] || "").toString().toLowerCase();
+        return user.indexOf(userFilter) !== -1;
+      });
+    }
 
-    var message = `📅 *Recent Transactions*\n\n`;
+    if (data.length === 0) {
+      sendTelegramMessage(chatId, "📅 *No transactions found* for user: " + userFilter);
+      return;
+    }
+
+    // Get last N transactions
+    var recentTransactions = data.slice(-limit).reverse();
+
+    var header = "📅 *Recent Transactions*";
+    if (userFilter) header += " (user: " + userFilter + ")";
+    var message = header + "\n\n";
 
     recentTransactions.forEach(function (row, index) {
       var date = row[1] || "Unknown Date";

@@ -10,13 +10,10 @@ function doPost(e) {
       update.message && update.message.text && update.message.text.split("@")[0].toLowerCase().startsWith("/backfill");
 
     if (isBackfill) {
-      console.log("Deferring /backfill to async trigger");
       var props = PropertiesService.getScriptProperties();
       props.setProperty("pending_update", contents);
       ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
     } else {
-      // Process inline for instant response
-      console.log("Processing update inline, type:", update.callback_query ? "callback_query" : "message");
       if (update.callback_query) {
         handleCallbackQuery(update);
       } else if (update.message) {
@@ -43,7 +40,6 @@ function processWebhookUpdate() {
   props.deleteProperty("pending_update");
 
   if (!contents) {
-    console.log("processWebhookUpdate: no pending update found");
     return;
   }
 
@@ -59,9 +55,7 @@ function processWebhookUpdate() {
 
 // Function for time based triggers
 function triggerEmailProcessing() {
-  console.log("Triggered email processing started");
   extractTransactions();
-  console.log("Triggered email processing completed");
 }
 
 // Test function to manually test split transaction update

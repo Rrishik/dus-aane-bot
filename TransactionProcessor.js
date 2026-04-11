@@ -33,12 +33,10 @@ function extractTransactions() {
   ensureSheetHeaders(SHEET_ID);
 
   var cutoffDate = getCutoffDate();
-  console.log(`Processing messages after: ${cutoffDate.toString()}`);
 
   var messagesToProcess = fetchAndFilterMessages(cutoffDate);
-  console.log(`Total emails to process: ${messagesToProcess.length}`);
 
-  var userEmail = Session.getActiveUser().getEmail();
+  var userEmail = Session.getEffectiveUser().getEmail();
 
   messagesToProcess.forEach((message) => {
     processSingleEmail(message, userEmail);
@@ -46,8 +44,6 @@ function extractTransactions() {
     // Add a delay to prevent hitting API rate limits
     Utilities.sleep(2000);
   });
-
-  console.log(`Transactions parsed and formatted successfully. Total emails processed: ${messagesToProcess.length}`);
 }
 
 /**
@@ -84,7 +80,6 @@ function fetchAndFilterMessages(startDate, endDate) {
     query = `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
   }
   var threads = GmailApp.search(query).reverse();
-  console.log(`Found ${threads.length} threads matching query: ${query}`);
 
   var filteredMessages = [];
   threads.forEach((thread) => {
@@ -112,7 +107,6 @@ function processSingleEmail(message, userEmail, silent) {
 
   // Dedup: skip if this message was already processed
   if (findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, messageId) > 0) {
-    console.log("Skipping duplicate email, message ID: " + messageId);
     return { saved: false, duplicate: true, data: null };
   }
 
@@ -122,7 +116,7 @@ function processSingleEmail(message, userEmail, silent) {
       return handleAIResponse(responseText, emailDate, userEmail, messageId, silent);
     }
   } catch (e) {
-    console.log("Error processing email: " + e.toString());
+    // Error processing email
   }
   return { saved: false, duplicate: false, data: null };
 }
@@ -144,10 +138,10 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, silent) {
       saveTransaction(data, emailDate, userEmail, messageId, silent);
       return { saved: true, duplicate: false, data: data };
     } else {
-      console.log("AI response was not valid JSON. Response:\n" + rawText);
+      // AI response was not valid JSON
     }
   } catch (e) {
-    console.log("Failed to parse AI JSON: " + e.message);
+    // Failed to parse AI JSON
   }
   return { saved: false, duplicate: false, data: null };
 }
@@ -178,7 +172,6 @@ function saveTransaction(data, emailDate, userEmail, messageId, silent) {
     currency
   ]);
 
-  console.log("Transaction saved with message ID:", messageId);
   if (!silent) {
     sendTransactionMessage(data, messageId, user);
   }
@@ -198,14 +191,13 @@ function backfillTransactions(chatId, startDate, endDate) {
   );
 
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
-  console.log("Backfill: found " + messagesToProcess.length + " emails");
 
   if (messagesToProcess.length === 0) {
     sendTelegramMessage(chatId, "📭 *No emails found* in the given date range.");
     return;
   }
 
-  var userEmail = Session.getActiveUser().getEmail();
+  var userEmail = Session.getEffectiveUser().getEmail();
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;
