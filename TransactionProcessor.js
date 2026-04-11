@@ -1,16 +1,29 @@
 function getTransactionPrompt(email_text) {
+  var categoryList = CATEGORIES.join(", ");
+
+  var overrideHints = "";
+  var overrides = getCategoryOverrides(SHEET_ID);
+  var entries = Object.keys(overrides);
+  if (entries.length > 0) {
+    var lines = entries.map(function (m) {
+      return "- " + m + " → " + overrides[m];
+    });
+    overrideHints =
+      "\n\nKnown merchant-category mappings (use these when the merchant matches):\n" + lines.join("\n") + "\n";
+  }
+
   var prompt_text = `Extract structured transaction details from this email in JSON format with fields: 
 - transaction_date (YYYY-MM-DD)
 - merchant
 - amount (only numeric, no currency symbols)
 - currency (3-letter ISO code, e.g. INR, JPY, USD. Default to INR if unclear)
-- category (if possible)
+- category (must be one of: ${categoryList})
 - transaction_type (Debit or Credit based on email content)
 
 Rules for transaction_type:
 - If money is spent (e.g., purchase, bill payment), mark it as "Debit".
 - If money is received (e.g., refund, salary, cashback), mark it as "Credit".
-
+${overrideHints}
 Example JSON Output:
 {
   "transaction_date": "2025-03-15",

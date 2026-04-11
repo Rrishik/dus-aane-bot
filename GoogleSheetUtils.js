@@ -87,3 +87,52 @@ function ensureSheetHeaders(sheet_id) {
     ]);
   }
 }
+
+// --- CategoryOverrides tab helpers ---
+
+var OVERRIDES_TAB = "CategoryOverrides";
+
+function getOrCreateOverridesSheet(sheet_id) {
+  var ss = SpreadsheetApp.openById(sheet_id);
+  var tab = ss.getSheetByName(OVERRIDES_TAB);
+  if (!tab) {
+    tab = ss.insertSheet(OVERRIDES_TAB);
+    tab.appendRow(["Merchant", "Category"]);
+  }
+  return tab;
+}
+
+// Get all merchant→category overrides as an object
+function getCategoryOverrides(sheet_id) {
+  var tab = getOrCreateOverridesSheet(sheet_id);
+  var lastRow = tab.getLastRow();
+  if (lastRow <= 1) return {};
+  var data = tab.getRange(2, 1, lastRow - 1, 2).getValues();
+  var overrides = {};
+  data.forEach(function (row) {
+    if (row[0]) overrides[row[0].toString().toLowerCase()] = row[1];
+  });
+  return overrides;
+}
+
+// Upsert a merchant→category override
+function saveCategoryOverride(sheet_id, merchant, category) {
+  var tab = getOrCreateOverridesSheet(sheet_id);
+  var lastRow = tab.getLastRow();
+  if (lastRow > 1) {
+    var merchants = tab.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < merchants.length; i++) {
+      if (merchants[i][0].toString().toLowerCase() === merchant.toLowerCase()) {
+        tab.getRange(i + 2, 2).setValue(category);
+        return;
+      }
+    }
+  }
+  tab.appendRow([merchant, category]);
+}
+
+// Delete a row from the first sheet by row number
+function deleteSheetRow(sheet_id, row_number) {
+  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+  sheet.deleteRow(row_number);
+}
