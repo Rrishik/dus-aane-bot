@@ -21,7 +21,10 @@ function deleteTelegramCommands() {
 function setTelegramCommands() {
   var commands = [
     { command: "/start", description: "Start the bot" },
-    { command: "/help", description: "Get help" }
+    { command: "/help", description: "Get help" },
+    { command: "/backfill", description: "Backfill transactions for a date range" },
+    { command: "/summary", description: "View transaction summary" },
+    { command: "/recent", description: "View recent transactions" }
   ];
   var payload = {
     commands: commands
