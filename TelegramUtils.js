@@ -7,8 +7,8 @@ function setTelegramWebhook() {
   // First delete any existing webhook
   deleteWebhook();
   var payload = {
-    url: DEBUG ? TEST_SCRIPT_APP_URL : SCRIPT_APP_URL,
-  }
+    url: DEBUG ? TEST_SCRIPT_APP_URL : SCRIPT_APP_URL
+  };
 
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
 }
@@ -21,7 +21,8 @@ function deleteTelegramCommands() {
 function setTelegramCommands() {
   var commands = [
     { command: "/start", description: "Start the bot" },
-    { command: "/help", description: "Get help" }];
+    { command: "/help", description: "Get help" }
+  ];
   var payload = {
     commands: commands
   };
@@ -81,7 +82,9 @@ function sendRequest(url, method, payload) {
       }
       return response; // Success
     } else if (response_code === 429) {
-      console.warn("API rate limit hit (429) for URL: " + url + ". Attempt " + (attempt + 1) + " of " + MAX_RETRIES + ".");
+      console.warn(
+        "API rate limit hit (429) for URL: " + url + ". Attempt " + (attempt + 1) + " of " + MAX_RETRIES + "."
+      );
       console.warn("Response body: " + response_body);
 
       var retry_after_seconds = 0;
@@ -91,17 +94,16 @@ function sendRequest(url, method, payload) {
         // 1. Check for standard Telegram `parameters.retry_after`
         if (error_data && error_data.parameters && error_data.parameters.retry_after) {
           retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
-          retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
           console.log("API suggested retry_after (Telegram format): " + retry_after_seconds + " seconds.");
         }
 
-        // 2. Check for Gemini `error.message` containing "Please retry in Xs"
+        // 2. Check for `error.message` containing "Please retry in Xs"
         else if (error_data && error_data.error && error_data.error.message) {
           var message = error_data.error.message;
           var match = message.match(/Please retry in\s+([\d\.]+)\s*s/);
           if (match && match[1]) {
             retry_after_seconds = Math.ceil(parseFloat(match[1]));
-            console.log("Gemini API error message suggested retry_after: " + retry_after_seconds + " seconds.");
+            console.log("API error message suggested retry_after: " + retry_after_seconds + " seconds.");
           }
         }
 
@@ -111,19 +113,18 @@ function sendRequest(url, method, payload) {
             if (detail["@type"] && detail["@type"].includes("RetryInfo") && detail.retryDelay) {
               // detail.retryDelay might be "52s"
               var delayStr = detail.retryDelay;
-              if (delayStr.endsWith('s')) {
+              if (delayStr.endsWith("s")) {
                 retry_after_seconds = Math.ceil(parseFloat(delayStr));
-                console.log("Gemini API details suggested retry_after: " + retry_after_seconds + " seconds.");
+                console.log("API details suggested retry_after: " + retry_after_seconds + " seconds.");
               }
             }
           });
         }
-
       } catch (e) {
         console.error("Could not parse retry_after from 429 response: " + e);
       }
 
-      var delay_ms = (retry_after_seconds * 1000) || INITIAL_RETRY_DELAY_MS;
+      var delay_ms = retry_after_seconds * 1000 || INITIAL_RETRY_DELAY_MS;
 
       // If we got a specific 429, we should probably wait closer to the suggestion + buffer
       if (retry_after_seconds > 0) {
@@ -134,16 +135,25 @@ function sendRequest(url, method, payload) {
       }
 
       if (attempt < MAX_RETRIES - 1) {
-        console.log("Waiting for " + (delay_ms / 1000) + " seconds before retrying...");
+        console.log("Waiting for " + delay_ms / 1000 + " seconds before retrying...");
         Utilities.sleep(delay_ms);
       } else {
         console.error("Max retries (" + MAX_RETRIES + ") reached for URL: " + url + ". Giving up on this request.");
         // Throw an error to indicate persistent failure, which will be caught by the calling function's try-catch
-        throw new Error("API request failed after " + MAX_RETRIES + " attempts due to rate limiting. Last response code: " + response_code + ", body: " + response_body);
+        throw new Error(
+          "API request failed after " +
+            MAX_RETRIES +
+            " attempts due to rate limiting. Last response code: " +
+            response_code +
+            ", body: " +
+            response_body
+        );
       }
     } else {
       // Handle other non-200, non-429 errors
-      console.error("API request failed for URL: " + url + ". Response Code: " + response_code + ". Response Body: " + response_body);
+      console.error(
+        "API request failed for URL: " + url + ". Response Code: " + response_code + ". Response Body: " + response_body
+      );
       throw new Error("API request failed. Response Code: " + response_code + ", body: " + response_body);
     }
   }
@@ -153,18 +163,16 @@ function sendRequest(url, method, payload) {
 
 function buildReplyMarkup(text, callback_data) {
   return {
-    inline_keyboard: [
-      [{ text: text, callback_data: callback_data }]
-    ]
+    inline_keyboard: [[{ text: text, callback_data: callback_data }]]
   };
 }
 
 // Function to escape special characters for Markdown
 function escapeMarkdown(text) {
-  if (typeof text !== 'string' || text === null) {
+  if (typeof text !== "string") {
     return text;
   }
-  return text.replace(/([_*\[\]()~`>#+=|{}!])/g, '\\$1');
+  return text.replace(/([_*\[\]()~`>#+=|{}!])/g, "\\$1");
 }
 
 // --- Merged from MessageUtils.js ---
@@ -175,7 +183,7 @@ function getTransactionMessageAsString(transaction_details, user) {
   var date = escapeMarkdown(transaction_details.transaction_date);
   var merchant = escapeMarkdown(transaction_details.merchant);
   var category = escapeMarkdown(transaction_details.category);
-  var user = escapeMarkdown(user);
+  user = escapeMarkdown(user);
 
   var message = `💸 *INR ${amount} ${transaction_details.transaction_type}ed* :
 🗓 *Date:* ${date}
@@ -187,29 +195,31 @@ ${category ? `📂 *Category:* ${category}\n` : ""}
   return message;
 }
 
-
 function sendTransactionMessage(transaction_details, row_number, user) {
   var message = getTransactionMessageAsString(transaction_details, user);
-  
+
   // Only add split button if we have a valid row number
   var options = {
     parse_mode: "Markdown"
   };
-  
+
   if (row_number && row_number > 1) {
     // Verify the row number by checking the sheet
     try {
       var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
       var lastRow = sheet.getLastRow();
-      
+
       // If row_number seems wrong, try to find the row by matching transaction data
       if (row_number > lastRow) {
         // Try to find the row by matching merchant and amount
         var data = sheet.getDataRange().getValues();
         var foundRow = -1;
-        for (var i = data.length - 1; i >= 1; i--) { // Start from bottom, skip header
-          if (data[i][2] === transaction_details.merchant && 
-              parseFloat(data[i][3]) === parseFloat(transaction_details.amount)) {
+        for (var i = data.length - 1; i >= 1; i--) {
+          // Start from bottom, skip header
+          if (
+            data[i][2] === transaction_details.merchant &&
+            parseFloat(data[i][3]) === parseFloat(transaction_details.amount)
+          ) {
             foundRow = i + 1; // +1 because array is 0-indexed, sheet rows are 1-indexed
             break;
           }
@@ -219,22 +229,14 @@ function sendTransactionMessage(transaction_details, row_number, user) {
           console.log("Found matching row:", row_number);
         }
       }
-      
-      // Add debug info to message in development (you can remove this later)
-      // message += "\n\n_Debug: Row " + row_number + " of " + lastRow + "_";
-      
-      var reply_markup_data = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
-      options.reply_markup = reply_markup_data;
     } catch (e) {
       console.log("Error verifying row number:", e.message);
-      // Still try to send with the original row number
-      var reply_markup_data = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
-      options.reply_markup = reply_markup_data;
     }
+    options.reply_markup = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
   } else {
     console.log("Telegram message sent without split button (invalid row number:", row_number + ")");
   }
-  
+
   sendTelegramMessage(CHAT_ID, message, options);
   console.log("Telegram message sent successfully.");
 }

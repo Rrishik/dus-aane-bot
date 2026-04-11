@@ -1,8 +1,16 @@
 // Debug flag
 const DEBUG = false;
-const BACKFILL = '';
+const BACKFILL = "";
 // use format YYYY/MM/DD
-const BACKFILL_FROM = '';
+const BACKFILL_FROM = "";
+
+// AI Provider
+const AI_PROVIDERS = {
+  GEMINI: 0,
+  AZURE_OPENAI: 1
+};
+
+const AI_PROVIDER = AI_PROVIDERS.AZURE_OPENAI;
 
 const CHAT_ID = DEBUG ? PERSONAL_CHAT_ID : GROUP_CHAT_ID; // Use Rishik's chat ID for debugging
 const BOT_UPDATE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates`;
@@ -13,8 +21,7 @@ const BOT_SET_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setMyComm
 const BOT_DELETE_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteMyCommands`;
 const BOT_DELETE_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`;
 const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
-const BOT_ADD_TRANSACTION_KEYWORD = 'addTransaction';
-
+const BOT_ADD_TRANSACTION_KEYWORD = "addTransaction";
 
 // Google Sheets
 const SHEET_ID = DEBUG ? TEST_SHEET_ID : PROD_SHEET_ID;
@@ -26,6 +33,5 @@ const SPLIT_STATUS = {
   SPLIT: "Split"
 };
 
-
 // Gmail
-const MAILS_LOOKBACK_PERIOD = DEBUG ? '1d' : BACKFILL ? BACKFILL : '1h';
+const MAILS_LOOKBACK_PERIOD = DEBUG ? "1d" : BACKFILL ? BACKFILL : "1h";
