@@ -51,17 +51,13 @@ function extractTransactions() {
  */
 function getCutoffDate() {
   var cutoffDate = new Date();
-  if (BACKFILL_FROM) {
-    cutoffDate = new Date(BACKFILL_FROM);
-  } else {
-    // Parse lookback period (e.g., '1d', '1h')
-    var value = parseInt(MAILS_LOOKBACK_PERIOD.slice(0, -1));
-    var unit = MAILS_LOOKBACK_PERIOD.slice(-1);
+  var value = parseInt(MAILS_LOOKBACK_PERIOD.slice(0, -1));
+  var unit = MAILS_LOOKBACK_PERIOD.slice(-1);
 
-    if (unit === "d") cutoffDate.setDate(cutoffDate.getDate() - value);
-    else if (unit === "h") cutoffDate.setHours(cutoffDate.getHours() - value);
-    else if (unit === "m") cutoffDate.setMinutes(cutoffDate.getMinutes() - value);
-  }
+  if (unit === "d") cutoffDate.setDate(cutoffDate.getDate() - value);
+  else if (unit === "h") cutoffDate.setHours(cutoffDate.getHours() - value);
+  else if (unit === "m") cutoffDate.setMinutes(cutoffDate.getMinutes() - value);
+
   return cutoffDate;
 }
 
@@ -75,7 +71,7 @@ function fetchAndFilterMessages(startDate, endDate) {
   if (endDate) {
     var endStr = Utilities.formatDate(endDate, Session.getScriptTimeZone(), "yyyy/MM/dd");
     query += ` before:${endStr}`;
-  } else if (!BACKFILL_FROM) {
+  } else {
     // Use the simpler newer_than for the regular trigger flow
     query = `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
   }

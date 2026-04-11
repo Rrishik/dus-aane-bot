@@ -1,7 +1,3 @@
-const BACKFILL = "";
-// use format YYYY/MM/DD
-const BACKFILL_FROM = "";
-
 // AI Provider
 const AI_PROVIDERS = {
   GEMINI: 0,
@@ -33,4 +29,4 @@ const SPLIT_STATUS = {
 };
 
 // Gmail
-const MAILS_LOOKBACK_PERIOD = BACKFILL ? BACKFILL : "1h";
+const MAILS_LOOKBACK_PERIOD = "1h";
