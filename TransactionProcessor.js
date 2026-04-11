@@ -169,6 +169,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, silent) {
   ]);
 
   if (!silent) {
+    data.email_date = emailDate;
     sendTransactionMessage(data, messageId, user);
   }
 }

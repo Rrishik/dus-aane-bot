@@ -171,7 +171,12 @@ function escapeMarkdown(text) {
 
 function getTransactionMessageAsString(transaction_details, user) {
   var amount = escapeMarkdown(transaction_details.amount);
-  var date = escapeMarkdown(transaction_details.transaction_date);
+  var rawDate = transaction_details.email_date || transaction_details.transaction_date;
+  var date = escapeMarkdown(
+    rawDate instanceof Date
+      ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
+      : rawDate || "Unknown Date"
+  );
   var merchant = escapeMarkdown(transaction_details.merchant);
   var category = escapeMarkdown(transaction_details.category);
   var currency = transaction_details.currency || "INR";
