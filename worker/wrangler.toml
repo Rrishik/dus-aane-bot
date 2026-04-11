@@ -1,0 +1,7 @@
+name = "dus-aane-bot-proxy"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+# APPS_SCRIPT_URL is set via `wrangler secret put APPS_SCRIPT_URL`
+# Do NOT put it here — use secrets for the actual URL

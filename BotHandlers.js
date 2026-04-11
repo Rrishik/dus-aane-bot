@@ -225,18 +225,18 @@ function showTransactionSummary(chatId, messageText) {
     // Skip header row
     data.shift();
 
-    // Parse optional limit from message (e.g. "/summary 10")
-    var limit = 0;
+    // Parse optional limit from message (e.g. "/summary 20"), default 10
+    var limit = 10;
     if (messageText) {
       var parts = messageText.split(" ");
       if (parts.length >= 2) {
-        limit = parseInt(parts[1]);
-        if (isNaN(limit) || limit <= 0) limit = 0;
+        var parsed = parseInt(parts[1]);
+        if (!isNaN(parsed) && parsed > 0) limit = parsed;
       }
     }
 
     // Apply limit — take last N transactions
-    if (limit > 0 && data.length > limit) {
+    if (data.length > limit) {
       data = data.slice(-limit);
     }
 

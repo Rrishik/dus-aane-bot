@@ -1,15 +1,14 @@
 // Webhook endpoint for the Telegram bot
-// Store the update and process async to return 200 OK to Telegram immediately
+// Process most commands inline for instant responses; defer /backfill to async trigger
 function doPost(e) {
   try {
     var contents = e.postData.contents;
-    console.log("Webhook data received, queuing for async processing");
-
-    // Store update in cache to process async
-    var cache = CacheService.getScriptCache();
-    var updateId = JSON.parse(contents).update_id;
+    var update = JSON.parse(contents);
 
     // Dedup: skip if we already processed this update
+    var cache = CacheService.getScriptCache();
+    var updateId = update.update_id;
+
     if (cache.get("processed_" + updateId)) {
       console.log("Skipping duplicate update_id:", updateId);
       return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
@@ -18,18 +17,31 @@ function doPost(e) {
     // Mark as processed (expires in 5 minutes)
     cache.put("processed_" + updateId, "1", 300);
 
-    // Store the payload and schedule async processing
-    var props = PropertiesService.getScriptProperties();
-    props.setProperty("pending_update", contents);
+    // Check if this is a /backfill command — defer to async trigger
+    var isBackfill =
+      update.message && update.message.text && update.message.text.split("@")[0].toLowerCase().startsWith("/backfill");
 
-    ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
+    if (isBackfill) {
+      console.log("Deferring /backfill to async trigger");
+      var props = PropertiesService.getScriptProperties();
+      props.setProperty("pending_update", contents);
+      ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
+    } else {
+      // Process inline for instant response
+      console.log("Processing update inline, type:", update.callback_query ? "callback_query" : "message");
+      if (update.callback_query) {
+        handleCallbackQuery(update);
+      } else if (update.message) {
+        handleMessage(update);
+      }
+    }
   } catch (error) {
     console.error("Error in doPost:", error.message);
   }
   return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
 }
 
-// Process the stored webhook update (runs async via trigger)
+// Process the stored webhook update (runs async via trigger, only for /backfill)
 function processWebhookUpdate() {
   // Clean up this trigger
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
@@ -49,14 +61,7 @@ function processWebhookUpdate() {
 
   try {
     var update = JSON.parse(contents);
-    console.log(
-      "Processing update type:",
-      update.callback_query ? "callback_query" : update.message ? "message" : "unknown"
-    );
-
-    if (update.callback_query) {
-      handleCallbackQuery(update);
-    } else if (update.message) {
+    if (update.message) {
       handleMessage(update);
     }
   } catch (error) {

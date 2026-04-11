@@ -3,13 +3,25 @@ function deleteWebhook() {
 }
 
 // Set up webhook (Run this once)
+// Points to Cloudflare Worker proxy which forwards to Apps Script
 function setTelegramWebhook() {
   // First delete any existing webhook
   deleteWebhook();
   var payload = {
-    url: DEBUG ? TEST_SCRIPT_APP_URL : SCRIPT_APP_URL
+    url: DEBUG ? TEST_SCRIPT_APP_URL : WORKER_PROXY_URL
   };
 
+  sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
+}
+
+// Reset webhook and drop all pending updates (Run manually to flush Telegram's retry queue)
+function resetWebhookClean() {
+  deleteWebhook();
+  Utilities.sleep(2000);
+  var payload = {
+    url: DEBUG ? TEST_SCRIPT_APP_URL : WORKER_PROXY_URL,
+    drop_pending_updates: true
+  };
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
 }
 
