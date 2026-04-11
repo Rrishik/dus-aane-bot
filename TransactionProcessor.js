@@ -103,7 +103,7 @@ function fetchAndFilterMessages(startDate, endDate) {
  * Processes a single email message: calls the AI provider, parses response, saves to sheet, and notifies Telegram.
  * Returns { saved: true/false, duplicate: true/false, data: parsed transaction or null }.
  */
-function processSingleEmail(message, userEmail) {
+function processSingleEmail(message, userEmail, silent) {
   var emailText = message.getPlainBody();
   var emailDate = message.getDate();
   var messageId = message.getId();
@@ -117,7 +117,7 @@ function processSingleEmail(message, userEmail) {
   try {
     var responseText = callAI(getTransactionPrompt(emailText));
     if (responseText) {
-      return handleAIResponse(responseText, emailDate, userEmail, messageId);
+      return handleAIResponse(responseText, emailDate, userEmail, messageId, silent);
     }
   } catch (e) {
     console.log("Error processing email: " + e.toString());
@@ -128,7 +128,7 @@ function processSingleEmail(message, userEmail) {
 /**
  * Handles the raw text response from the AI provider, attempts JSON parsing, and saves data.
  */
-function handleAIResponse(rawText, emailDate, userEmail, messageId) {
+function handleAIResponse(rawText, emailDate, userEmail, messageId, silent) {
   var cleanText = rawText;
 
   // Clean markdown code blocks
@@ -139,7 +139,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId) {
   try {
     if (cleanText.trim().startsWith("{")) {
       var data = JSON.parse(cleanText);
-      saveTransaction(data, emailDate, userEmail, messageId);
+      saveTransaction(data, emailDate, userEmail, messageId, silent);
       return { saved: true, duplicate: false, data: data };
     } else {
       console.log("AI response was not valid JSON. Response:\n" + rawText);
@@ -153,7 +153,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId) {
 /**
  * Saves the transaction structure to the sheet and sends a notification.
  */
-function saveTransaction(data, emailDate, userEmail, messageId) {
+function saveTransaction(data, emailDate, userEmail, messageId, silent) {
   var transactionDate = data.transaction_date || "N/A";
   var merchant = data.merchant || "Unknown";
   var amount = data.amount || 0;
@@ -175,7 +175,9 @@ function saveTransaction(data, emailDate, userEmail, messageId) {
   ]);
 
   console.log("Transaction saved with message ID:", messageId);
-  sendTransactionMessage(data, messageId, user);
+  if (!silent) {
+    sendTransactionMessage(data, messageId, user);
+  }
 }
 
 /**
@@ -210,7 +212,7 @@ function backfillTransactions(chatId, startDate, endDate) {
   var categoryBreakdown = {};
 
   messagesToProcess.forEach((message) => {
-    var result = processSingleEmail(message, userEmail);
+    var result = processSingleEmail(message, userEmail, true);
 
     if (result.duplicate) {
       duplicateCount++;
@@ -245,5 +247,11 @@ function backfillTransactions(chatId, startDate, endDate) {
     });
   }
 
-  sendTelegramMessage(chatId, summary);
+  sendTelegramMessage(chatId, summary, {
+    parse_mode: "Markdown",
+    reply_markup: buildReplyMarkup(
+      "📋 Show Details",
+      `details_${Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy-MM-dd")}_${Utilities.formatDate(endDate, Session.getScriptTimeZone(), "yyyy-MM-dd")}`
+    )
+  });
 }

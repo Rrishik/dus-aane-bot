@@ -147,8 +147,22 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    var action = data.substring(0, separatorIndex); // "personal" or "split"
-    var emailMessageId = data.substring(separatorIndex + 1); // Gmail message ID
+    var action = data.substring(0, separatorIndex); // "personal", "split", or "details"
+    var callbackPayload = data.substring(separatorIndex + 1);
+
+    // Handle "Show Details" from backfill summary
+    if (action === "details") {
+      var dates = callbackPayload.split("_");
+      if (dates.length < 2) {
+        answerCallbackQuery(callbackQueryId, "❌ Invalid date range", false);
+        return;
+      }
+      answerCallbackQuery(callbackQueryId, "📋 Loading details...", false);
+      showBackfillDetails(chatId, dates[0], dates[1]);
+      return;
+    }
+
+    var emailMessageId = callbackPayload; // Gmail message ID
 
     // Look up the row by message ID
     var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
@@ -291,5 +305,60 @@ function showRecentTransactions(chatId) {
   } catch (error) {
     console.error("Error in showRecentTransactions:", error);
     sendTelegramMessage(chatId, "❌ *Error fetching recent transactions*\n\nPlease try again later.");
+  }
+}
+
+// Function to show individual transactions for a date range (triggered from backfill "Show Details" button)
+function showBackfillDetails(chatId, startDateStr, endDateStr) {
+  try {
+    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    var data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      sendTelegramMessage(chatId, "📋 *No transactions found.*");
+      return;
+    }
+
+    // Skip header
+    data.shift();
+
+    var startDate = new Date(startDateStr);
+    var endDate = new Date(endDateStr);
+    endDate.setHours(23, 59, 59, 999);
+
+    // Filter rows by transaction date within range
+    var matching = data.filter(function (row) {
+      var txnDate = new Date(row[1]);
+      return txnDate >= startDate && txnDate <= endDate;
+    });
+
+    if (matching.length === 0) {
+      sendTelegramMessage(chatId, "📋 *No transactions found* for " + startDateStr + " to " + endDateStr);
+      return;
+    }
+
+    // Send each transaction with a split button (cap at 20 to avoid flooding)
+    var cap = Math.min(matching.length, 20);
+    for (var i = 0; i < cap; i++) {
+      var row = matching[i];
+      var txnData = {
+        transaction_date: row[1],
+        merchant: row[2],
+        amount: row[3],
+        category: row[4],
+        transaction_type: row[5]
+      };
+      var user = row[6];
+      var messageId = row[8]; // Message ID column
+      sendTransactionMessage(txnData, messageId, user);
+      Utilities.sleep(500);
+    }
+
+    if (matching.length > cap) {
+      sendTelegramMessage(chatId, "📋 Showing " + cap + " of " + matching.length + " transactions.");
+    }
+  } catch (error) {
+    console.error("Error in showBackfillDetails:", error);
+    sendTelegramMessage(chatId, "❌ *Error fetching details*\n\nPlease try again later.");
   }
 }
