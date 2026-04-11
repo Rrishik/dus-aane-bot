@@ -1,31 +1,66 @@
 // Webhook endpoint for the Telegram bot
-// This function is triggered when a POST request is made to the script URL
+// Store the update and process async to return 200 OK to Telegram immediately
 function doPost(e) {
   try {
-    console.log("Webhook data received:", e.postData.contents);
-    var update = JSON.parse(e.postData.contents);
+    var contents = e.postData.contents;
+    console.log("Webhook data received, queuing for async processing");
+
+    // Store update in cache to process async
+    var cache = CacheService.getScriptCache();
+    var updateId = JSON.parse(contents).update_id;
+
+    // Dedup: skip if we already processed this update
+    if (cache.get("processed_" + updateId)) {
+      console.log("Skipping duplicate update_id:", updateId);
+      return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+    }
+
+    // Mark as processed (expires in 5 minutes)
+    cache.put("processed_" + updateId, "1", 300);
+
+    // Store the payload and schedule async processing
+    var props = PropertiesService.getScriptProperties();
+    props.setProperty("pending_update", contents);
+
+    ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
+  } catch (error) {
+    console.error("Error in doPost:", error.message);
+  }
+  return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+}
+
+// Process the stored webhook update (runs async via trigger)
+function processWebhookUpdate() {
+  // Clean up this trigger
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "processWebhookUpdate") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  var props = PropertiesService.getScriptProperties();
+  var contents = props.getProperty("pending_update");
+  props.deleteProperty("pending_update");
+
+  if (!contents) {
+    console.log("processWebhookUpdate: no pending update found");
+    return;
+  }
+
+  try {
+    var update = JSON.parse(contents);
     console.log(
-      "Parsed update type:",
+      "Processing update type:",
       update.callback_query ? "callback_query" : update.message ? "message" : "unknown"
     );
 
     if (update.callback_query) {
-      console.log("Processing callback query...");
       handleCallbackQuery(update);
-      console.log("Callback processed!");
     } else if (update.message) {
-      console.log("Processing message...");
       handleMessage(update);
-      console.log("Message processed!");
-    } else {
-      console.log("Unknown update type:", JSON.stringify(update));
     }
-    return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
   } catch (error) {
-    console.error("Error in doPost:", error.message);
-    console.error("Stack trace:", error.stack);
-    // Always return 200 OK to prevent Telegram retries
-    return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+    console.error("Error processing webhook update:", error.message, error.stack);
   }
 }
 
