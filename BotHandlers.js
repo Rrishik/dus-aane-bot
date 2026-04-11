@@ -119,7 +119,7 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    var action = data.substring(0, separatorIndex); // "personal", "split", or "details"
+    var action = data.substring(0, separatorIndex); // "personal", "split", "details", "editcat", or "cat"
     var callbackPayload = data.substring(separatorIndex + 1);
 
     // Handle "Show Details" from backfill summary
@@ -131,6 +131,87 @@ function handleCallbackQuery(update) {
       }
       answerCallbackQuery(callbackQueryId, "📋 Loading details...", false);
       showBackfillDetails(chatId, dates[0], dates[1]);
+      return;
+    }
+
+    // Handle "Edit Category" — show category picker
+    if (action === "editcat") {
+      answerCallbackQuery(callbackQueryId, "📂 Pick a category", false);
+      sendTelegramMessage(chatId, "📂 *Select a category:*", {
+        parse_mode: "Markdown",
+        reply_markup: buildCategoryKeyboard(callbackPayload)
+      });
+      return;
+    }
+
+    // Handle category selection: cat_{messageId}_{index}
+    if (action === "cat") {
+      var lastUnderscore = callbackPayload.lastIndexOf("_");
+      if (lastUnderscore < 0) {
+        answerCallbackQuery(callbackQueryId, "❌ Invalid category data", false);
+        return;
+      }
+      var emailMessageId = callbackPayload.substring(0, lastUnderscore);
+      var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
+
+      if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= CATEGORIES.length) {
+        answerCallbackQuery(callbackQueryId, "❌ Invalid category", false);
+        return;
+      }
+
+      var newCategory = CATEGORIES[categoryIndex];
+      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+      if (rowNumber < 0) {
+        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
+        return;
+      }
+
+      var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+      var currentCategory = sheet.getRange(rowNumber, CATEGORY_COLUMN).getValue();
+      var merchant = sheet.getRange(rowNumber, 3).getValue(); // Column C = Merchant
+      var updateResult = updateGoogleSheetCellWithFeedback(
+        SHEET_ID,
+        rowNumber,
+        CATEGORY_COLUMN,
+        newCategory,
+        currentCategory
+      );
+
+      if (!updateResult.success) {
+        answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
+        return;
+      }
+
+      // Save merchant→category override for future AI categorization
+      if (merchant) {
+        saveCategoryOverride(SHEET_ID, merchant.toString(), newCategory);
+      }
+
+      // Edit the picker message to show confirmation
+      sendTelegramMessage(chatId, "✅ *Category updated to " + newCategory + "*", {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId
+      });
+      answerCallbackQuery(callbackQueryId, "✅ " + newCategory, false);
+      return;
+    }
+
+    // Handle delete transaction: del_{messageId}
+    if (action === "del") {
+      var emailMessageId = callbackPayload;
+      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+      if (rowNumber < 0) {
+        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
+        return;
+      }
+
+      deleteSheetRow(SHEET_ID, rowNumber);
+
+      sendTelegramMessage(chatId, "🗑️ *Transaction deleted*", {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId
+      });
+      answerCallbackQuery(callbackQueryId, "🗑️ Deleted", false);
       return;
     }
 
@@ -159,13 +240,19 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    // Build toggle button
+    // Build toggle button + edit category
     var toggleAction = action === "personal" ? "split" : "personal";
-    var toggleText = toggleAction === "split" ? "✂️ Split Transaction" : "🔄 Mark as Personal";
+    var toggleText = toggleAction === "split" ? "✂️ Split" : "🔄 Personal";
 
     var options = {
       parse_mode: "Markdown",
-      reply_markup: buildReplyMarkup(toggleText, `${toggleAction}_${emailMessageId}`),
+      reply_markup: buildReplyMarkup([
+        [
+          { text: toggleText, callback_data: toggleAction + "_" + emailMessageId },
+          { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
+          { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+        ]
+      ]),
       message_id: telegramMessageId
     };
 

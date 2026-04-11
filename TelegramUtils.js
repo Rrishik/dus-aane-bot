@@ -153,10 +153,28 @@ function sendRequest(url, method, payload) {
   throw new Error("API request failed unexpectedly after all retries for URL: " + url);
 }
 
-function buildReplyMarkup(text, callback_data) {
-  return {
-    inline_keyboard: [[{ text: text, callback_data: callback_data }]]
-  };
+function buildReplyMarkup(buttons) {
+  // Support legacy single-button call: buildReplyMarkup("text", "callback_data")
+  if (typeof buttons === "string") {
+    return { inline_keyboard: [[{ text: arguments[0], callback_data: arguments[1] }]] };
+  }
+  // buttons is an array of rows, each row is an array of {text, callback_data}
+  return { inline_keyboard: buttons };
+}
+
+function buildCategoryKeyboard(emailMessageId) {
+  var rows = [];
+  var row = [];
+  for (var i = 0; i < CATEGORIES.length; i++) {
+    var emoji = CATEGORY_EMOJIS[CATEGORIES[i]] || "";
+    var label = emoji ? emoji + " " + CATEGORIES[i] : CATEGORIES[i];
+    row.push({ text: label, callback_data: "cat_" + emailMessageId + "_" + i });
+    if (row.length === 3 || i === CATEGORIES.length - 1) {
+      rows.push(row);
+      row = [];
+    }
+  }
+  return { inline_keyboard: rows };
 }
 
 // Function to escape special characters for Markdown
@@ -200,7 +218,13 @@ function sendTransactionMessage(transaction_details, messageId, user) {
   };
 
   if (messageId) {
-    options.reply_markup = buildReplyMarkup("✂️ Split this?", `split_${messageId}`);
+    options.reply_markup = buildReplyMarkup([
+      [
+        { text: "✂️ Split", callback_data: "split_" + messageId },
+        { text: "✏️ Category", callback_data: "editcat_" + messageId },
+        { text: "🗑️ Delete", callback_data: "del_" + messageId }
+      ]
+    ]);
   }
 
   sendTelegramMessage(CHAT_ID, message, options);

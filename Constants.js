@@ -18,6 +18,7 @@ const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook
 
 // Google Sheets
 const SHEET_ID = PROD_SHEET_ID;
+const CATEGORY_COLUMN = 5; // Column E
 const SPLIT_COLUMN = 8; // Column H
 const MESSAGE_ID_COLUMN = 9; // Column I
 const CURRENCY_COLUMN = 10; // Column J
@@ -26,6 +27,37 @@ const CURRENCY_COLUMN = 10; // Column J
 const SPLIT_STATUS = {
   PERSONAL: "Personal",
   SPLIT: "Split"
+};
+
+// Category options for the picker
+const CATEGORIES = [
+  "Shopping",
+  "Groceries",
+  "Food & Dining",
+  "Healthcare",
+  "Fuel",
+  "Entertainment",
+  "Travel",
+  "Bills & Utilities",
+  "Education",
+  "Investment",
+  "Subscriptions",
+  "Other"
+];
+
+const CATEGORY_EMOJIS = {
+  Shopping: "🛍",
+  Groceries: "🥦",
+  "Food & Dining": "🍕",
+  Healthcare: "🏥",
+  Fuel: "⛽",
+  Entertainment: "🎬",
+  Travel: "✈️",
+  "Bills & Utilities": "💡",
+  Education: "🎓",
+  Investment: "📈",
+  Subscriptions: "📱",
+  Other: "🔹"
 };
 
 // Gmail
