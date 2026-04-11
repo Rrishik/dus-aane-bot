@@ -7,7 +7,7 @@ function handleMessage(update) {
 
     // Handle commands
     if (messageText.startsWith("/")) {
-      var command = messageText.split(" ")[0].toLowerCase();
+      var command = messageText.split(" ")[0].split("@")[0].toLowerCase();
 
       switch (command) {
         case "/start":
