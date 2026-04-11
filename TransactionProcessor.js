@@ -1,4 +1,4 @@
-function getPromptforGemini(email_text) {
+function getTransactionPrompt(email_text) {
   var prompt_text = `Extract structured transaction details from this email in JSON format with fields: 
 - transaction_date (YYYY-MM-DD)
 - merchant
@@ -27,27 +27,25 @@ ${email_text}`;
 /**
  * Main function to orchestrate the email processing flow.
  */
-function extractTransactionsWithGemini() {
+function extractTransactions() {
   ensureSheetHeaders(SHEET_ID);
 
   var cutoffDate = getCutoffDate();
-  console.log(`Filtering messages older than: ${cutoffDate.toString()}`);
+  console.log(`Processing messages after: ${cutoffDate.toString()}`);
 
   var messagesToProcess = fetchAndFilterMessages(cutoffDate);
   console.log(`Total emails to process: ${messagesToProcess.length}`);
 
-  var processedCount = 0;
   var userEmail = Session.getActiveUser().getEmail();
 
-  messagesToProcess.forEach(message => {
+  messagesToProcess.forEach((message) => {
     processSingleEmail(message, userEmail);
-    processedCount++;
 
-    // Add a delay to prevent hitting API rate limits (15 RPM for Gemini Free Tier)
-    Utilities.sleep(5000);
+    // Add a delay to prevent hitting API rate limits
+    Utilities.sleep(2000);
   });
 
-  console.log(`Transactions parsed and formatted successfully. Total emails processed: ${processedCount}`);
+  console.log(`Transactions parsed and formatted successfully. Total emails processed: ${messagesToProcess.length}`);
 }
 
 /**
@@ -62,9 +60,9 @@ function getCutoffDate() {
     var value = parseInt(MAILS_LOOKBACK_PERIOD.slice(0, -1));
     var unit = MAILS_LOOKBACK_PERIOD.slice(-1);
 
-    if (unit === 'd') cutoffDate.setDate(cutoffDate.getDate() - value);
-    else if (unit === 'h') cutoffDate.setHours(cutoffDate.getHours() - value);
-    else if (unit === 'm') cutoffDate.setMinutes(cutoffDate.getMinutes() - value);
+    if (unit === "d") cutoffDate.setDate(cutoffDate.getDate() - value);
+    else if (unit === "h") cutoffDate.setHours(cutoffDate.getHours() - value);
+    else if (unit === "m") cutoffDate.setMinutes(cutoffDate.getMinutes() - value);
   }
   return cutoffDate;
 }
@@ -73,14 +71,16 @@ function getCutoffDate() {
  * Fetches threads and filters individual messages by date.
  */
 function fetchAndFilterMessages(cutoffDate) {
-  var query = BACKFILL_FROM ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}` : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
+  var query = BACKFILL_FROM
+    ? `label:${GMAIL_LABEL} after:${BACKFILL_FROM}`
+    : `label:${GMAIL_LABEL} newer_than:${MAILS_LOOKBACK_PERIOD}`;
   var threads = GmailApp.search(query).reverse();
   console.log(`Found ${threads.length} threads matching query.`);
 
   var filteredMessages = [];
-  threads.forEach(thread => {
+  threads.forEach((thread) => {
     var messages = thread.getMessages();
-    var validMessages = messages.filter(msg => msg.getDate() >= cutoffDate);
+    var validMessages = messages.filter((msg) => msg.getDate() >= cutoffDate);
     filteredMessages = filteredMessages.concat(validMessages);
   });
 
@@ -88,30 +88,16 @@ function fetchAndFilterMessages(cutoffDate) {
 }
 
 /**
- * Processes a single email message: calls Gemini, parses response, saves to sheet, and notifies Telegram.
+ * Processes a single email message: calls the AI provider, parses response, saves to sheet, and notifies Telegram.
  */
 function processSingleEmail(message, userEmail) {
   var emailText = message.getPlainBody();
   var emailDate = message.getDate();
 
-  var payload = {
-    contents: [{
-      role: "user",
-      parts: [{
-        text: getPromptforGemini(emailText),
-      }]
-    }]
-  };
-
   try {
-    var response = sendRequest(GEMINI_BASE_URL + "?key=" + GEMINI_API_KEY, "post", payload);
-    var jsonResponse = JSON.parse(response.getContentText());
-
-    if (jsonResponse.candidates && jsonResponse.candidates.length > 0) {
-      var contentText = jsonResponse.candidates[0].content.parts[0].text;
-      handleGeminiResponse(contentText, emailDate, userEmail);
-    } else {
-      console.log("Gemini response did not contain candidates. Full response: " + JSON.stringify(jsonResponse));
+    var responseText = callAI(getTransactionPrompt(emailText));
+    if (responseText) {
+      handleAIResponse(responseText, emailDate, userEmail);
     }
   } catch (e) {
     console.log("Error processing email: " + e.toString());
@@ -119,14 +105,14 @@ function processSingleEmail(message, userEmail) {
 }
 
 /**
- * Handles the raw text response from Gemini, attempts JSON parsing, and saves data.
+ * Handles the raw text response from the AI provider, attempts JSON parsing, and saves data.
  */
-function handleGeminiResponse(rawText, emailDate, userEmail) {
+function handleAIResponse(rawText, emailDate, userEmail) {
   var cleanText = rawText;
 
   // Clean markdown code blocks
   if (cleanText.startsWith("```json")) {
-    cleanText = cleanText.replace(/```json|```/g, '').trim();
+    cleanText = cleanText.replace(/```json|```/g, "").trim();
   }
 
   try {
@@ -134,10 +120,10 @@ function handleGeminiResponse(rawText, emailDate, userEmail) {
       var data = JSON.parse(cleanText);
       saveTransaction(data, emailDate, userEmail);
     } else {
-      console.log("Gemini response was not valid JSON. Response:\n" + rawText);
+      console.log("AI response was not valid JSON. Response:\n" + rawText);
     }
   } catch (e) {
-    console.log("Failed to parse Gemini JSON: " + e.message);
+    console.log("Failed to parse AI JSON: " + e.message);
   }
 }
 
@@ -158,7 +144,7 @@ function saveTransaction(data, emailDate, userEmail) {
   // Get the row number after appending - open sheet once and get last row
   var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   var rowNumber = sheet.getLastRow(); // This should be the row we just appended
-  
+
   // Validate row number
   if (rowNumber <= 1) {
     console.log("Warning: Invalid row number after append:", rowNumber);

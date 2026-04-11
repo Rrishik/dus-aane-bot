@@ -1,0 +1,11 @@
+{
+  "name": "dus-aane-bot",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write \"**/*.js\"",
+    "format:check": "prettier --check \"**/*.js\""
+  },
+  "devDependencies": {
+    "prettier": "^3.2.0"
+  }
+}

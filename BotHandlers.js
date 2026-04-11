@@ -6,25 +6,28 @@ function handleMessage(update) {
     var username = update.message.from.first_name || update.message.from.username;
 
     // Handle commands
-    if (messageText.startsWith('/')) {
-      var command = messageText.split(' ')[0].toLowerCase();
+    if (messageText.startsWith("/")) {
+      var command = messageText.split(" ")[0].toLowerCase();
 
       switch (command) {
-        case '/start':
+        case "/start":
           handleStartCommand(chatId, username);
           break;
-        case '/help':
+        case "/help":
           handleHelpCommand(chatId);
           break;
-        case '/summary':
+        case "/summary":
           showTransactionSummary(chatId);
           break;
-        case '/recent':
+        case "/recent":
           showRecentTransactions(chatId);
           break;
-        case '/addtransaction':
-          if (messageText.split(' ').length < 4) {
-            sendTelegramMessage(chatId, "❌ *Invalid format!* Use: `/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`");
+        case "/addtransaction":
+          if (messageText.split(" ").length < 4) {
+            sendTelegramMessage(
+              chatId,
+              "❌ *Invalid format!* Use: `/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`"
+            );
           } else {
             addTransaction(chatId, messageText, username);
           }
@@ -34,13 +37,14 @@ function handleMessage(update) {
       }
     }
     // Handle menu button clicks
-    else if (messageText === '➕ Add Transaction') {
-      sendTelegramMessage(chatId, "To add a transaction, use the format:\n`/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`");
-    }
-    else if (messageText === '📊 View Summary') {
+    else if (messageText === "➕ Add Transaction") {
+      sendTelegramMessage(
+        chatId,
+        "To add a transaction, use the format:\n`/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`"
+      );
+    } else if (messageText === "📊 View Summary") {
       showTransactionSummary(chatId);
-    }
-    else if (messageText === '📅 Recent Transactions') {
+    } else if (messageText === "📅 Recent Transactions") {
       showRecentTransactions(chatId);
     }
   }
@@ -48,7 +52,8 @@ function handleMessage(update) {
 
 // Method to handle the /start command and show menu options
 function handleStartCommand(chatId, username) {
-  var message = `👋 *Welcome ${username}!*\n\nI'm your transaction management bot. Here's what I can do:\n\n` +
+  var message =
+    `👋 *Welcome ${username}!*\n\nI'm your transaction management bot. Here's what I can do:\n\n` +
     `📝 *Commands:*\n` +
     `• /addtransaction - Add a new transaction\n` +
     `• /summary - View transaction summary\n` +
@@ -57,10 +62,7 @@ function handleStartCommand(chatId, username) {
     `💡 *Tip:* Type / to see all available commands!`;
 
   var keyboard = {
-    keyboard: [
-      ["➕ Add Transaction"],
-      ["📊 View Summary", "📅 Recent Transactions"]
-    ],
+    keyboard: [["➕ Add Transaction"], ["📊 View Summary", "📅 Recent Transactions"]],
     resize_keyboard: true,
     one_time_keyboard: false
   };
@@ -75,7 +77,8 @@ function handleStartCommand(chatId, username) {
 
 // Method to handle the /help command
 function handleHelpCommand(chatId) {
-  var message = `📚 *Help Guide*\n\n` +
+  var message =
+    `📚 *Help Guide*\n\n` +
     `*Available Commands:*\n` +
     `• /start - Start the bot\n` +
     `• /addtransaction - Add a new transaction\n` +
@@ -97,22 +100,17 @@ function handleHelpCommand(chatId) {
 // Method to add a manual transaction via the Telegram bot.
 function addTransaction(chatId, messageText, username) {
   var parts = messageText.split(" "); // Split the message
-  if (parts.length < 3) {
-    sendTelegramMessage(chatId, "❌ *Invalid format!* Use: `/addtransaction <amount> <category> <merchant>`");
-    return;
-  }
-
   var amount = parts[1];
   var category = parts[2];
   var merchant = parts.slice(3).join(" "); // Join remaining words as merchant name
-  var date = new Date().toLocaleDateString();
+  var date = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
 
   appendRowToGoogleSheet(SHEET_ID, [date, date, merchant, amount, category, "Debit", username, SPLIT_STATUS.PERSONAL]);
 
   // Get the row number after appending
   var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
   var rowNumber = sheet.getLastRow(); // Get the last row number
-  
+
   // Validate row number
   if (rowNumber <= 1) {
     console.log("Warning: Invalid row number after append:", rowNumber);
@@ -120,7 +118,7 @@ function addTransaction(chatId, messageText, username) {
     sendTelegramMessage(chatId, message);
     return;
   }
-  
+
   console.log("Manual transaction saved to row:", rowNumber);
   var message = `✅ *Transaction Added!*\n💰 *Amount:* INR ${amount}\n📂 *Category:* ${category}\n🏪 *Merchant:* ${merchant}\n👤 *Added by:* ${username}`;
   var reply_markup = buildReplyMarkup("✂️ Split Transaction", `split_${rowNumber}`);
@@ -140,39 +138,46 @@ function handleCallbackQuery(update) {
       console.log("[handleCallbackQuery] Error: No callback_query in update");
       return;
     }
-    
+
     var callbackQueryId = update.callback_query.id;
     var chatId = update.callback_query.message.chat.id;
     var messageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
     var data = update.callback_query.data; // Example: "personal_5" or "split_8"
-    
+
     console.log("[handleCallbackQuery] Callback query received:", {
       callbackQueryId: callbackQueryId,
-      chatId: chatId, 
-      messageId: messageId, 
+      chatId: chatId,
+      messageId: messageId,
       data: data,
       SHEET_ID: SHEET_ID,
       SPLIT_COLUMN: SPLIT_COLUMN
     });
-    
+
     if (!data) {
       console.log("[handleCallbackQuery] Error: No callback data received");
       answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
       return;
     }
-    
+
     var parts = data.split("_");
     if (parts.length < 2) {
       console.log("[handleCallbackQuery] Error: Invalid callback data format:", data);
       answerCallbackQuery(callbackQueryId, "❌ Error: Invalid request", false);
       return;
     }
-    
+
     var action = parts[0]; // "personal" or "split"
     var rowNumber = parseInt(parts[1]); // Extract row number
-    
-    console.log("[handleCallbackQuery] Processing callback - Action:", action, "Row:", rowNumber, "Type:", typeof rowNumber);
+
+    console.log(
+      "[handleCallbackQuery] Processing callback - Action:",
+      action,
+      "Row:",
+      rowNumber,
+      "Type:",
+      typeof rowNumber
+    );
 
     if (isNaN(rowNumber) || rowNumber <= 0) {
       console.log("[handleCallbackQuery] Error: Invalid row number:", rowNumber, "Parsed from:", parts[1]);
@@ -182,13 +187,13 @@ function handleCallbackQuery(update) {
 
     // Determine the value to set based on action
     var valueToSet = action === "personal" ? SPLIT_STATUS.PERSONAL : SPLIT_STATUS.SPLIT;
-    
+
     // First, verify the row exists and get current value
     var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
     var lastRow = sheet.getLastRow();
     var currentValue = "";
     var errorMessage = "";
-    
+
     // Check if row exists
     if (rowNumber > lastRow) {
       errorMessage = "❌ *Error:* Row " + rowNumber + " doesn't exist. Last row is " + lastRow + ".";
@@ -196,14 +201,14 @@ function handleCallbackQuery(update) {
       sendTelegramMessage(chatId, errorMessage);
       return;
     }
-    
+
     if (rowNumber <= 1) {
       errorMessage = "❌ *Error:* Cannot update header row (row 1).";
       answerCallbackQuery(callbackQueryId, "Invalid row", false);
       sendTelegramMessage(chatId, errorMessage);
       return;
     }
-    
+
     // Read current value
     try {
       currentValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
@@ -219,31 +224,39 @@ function handleCallbackQuery(update) {
 
     if (!updateResult.success) {
       answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
-      sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\n" + updateResult.message + "\n\n*Details:*\nRow: " + rowNumber + "\nColumn: " + SPLIT_COLUMN + "\nCurrent: " + currentValue + "\nTrying to set: " + valueToSet);
+      sendTelegramMessage(
+        chatId,
+        "❌ *Error updating transaction*\n\n" +
+          updateResult.message +
+          "\n\n*Details:*\nRow: " +
+          rowNumber +
+          "\nColumn: " +
+          SPLIT_COLUMN +
+          "\nCurrent: " +
+          currentValue +
+          "\nTrying to set: " +
+          valueToSet
+      );
       return;
     }
 
     var toggleAction = action === "personal" ? "split" : "personal"; // Toggle between personal and split
     var toggleText = toggleAction === "split" ? "✂️ Split Transaction" : "🔄 Mark as Personal";
-    
-    // Verify the update by reading back the value
-    var verifyValue = "";
-    try {
-      verifyValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
-    } catch (e) {
-      verifyValue = "Could not verify: " + e.message;
-    }
-    
+
+    // Use the verified new value already returned by the update function
+    var verifyValue = updateResult.newValue || valueToSet;
+
     var options = {
       parse_mode: "Markdown",
       reply_markup: buildReplyMarkup(toggleText, `${toggleAction}_${rowNumber}`),
       message_id: messageId
     };
-    
-    var statusMessage = verifyValue === valueToSet 
-      ? `✅ *Marked as ${valueToSet}*` 
-      : `⚠️ *Update sent* (Current: ${verifyValue}, Expected: ${valueToSet})`;
-    
+
+    var statusMessage =
+      verifyValue === valueToSet
+        ? `✅ *Marked as ${valueToSet}*`
+        : `⚠️ *Update sent* (Current: ${verifyValue}, Expected: ${valueToSet})`;
+
     var message = `${statusMessage}
 
 ${messageText}`;
