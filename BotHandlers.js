@@ -22,27 +22,15 @@ function handleMessage(update) {
         case "/recent":
           showRecentTransactions(chatId);
           break;
-        case "/addtransaction":
-          if (messageText.split(" ").length < 4) {
-            sendTelegramMessage(
-              chatId,
-              "❌ *Invalid format!* Use: `/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`"
-            );
-          } else {
-            addTransaction(chatId, messageText, username);
-          }
+        case "/backfill":
+          handleBackfillCommand(chatId, messageText);
           break;
         default:
           sendTelegramMessage(chatId, "❌ *Unknown command!*\n\nUse /help to see available commands.");
       }
     }
     // Handle menu button clicks
-    else if (messageText === "➕ Add Transaction") {
-      sendTelegramMessage(
-        chatId,
-        "To add a transaction, use the format:\n`/addtransaction <amount> <category> <merchant>`\n\nExample: `/addtransaction 1000 Food Zomato`"
-      );
-    } else if (messageText === "📊 View Summary") {
+    else if (messageText === "📊 View Summary") {
       showTransactionSummary(chatId);
     } else if (messageText === "📅 Recent Transactions") {
       showRecentTransactions(chatId);
@@ -55,14 +43,14 @@ function handleStartCommand(chatId, username) {
   var message =
     `👋 *Welcome ${username}!*\n\nI'm your transaction management bot. Here's what I can do:\n\n` +
     `📝 *Commands:*\n` +
-    `• /addtransaction - Add a new transaction\n` +
+    `• /backfill - Backfill transactions for a date range\n` +
     `• /summary - View transaction summary\n` +
     `• /recent - View recent transactions\n` +
     `• /help - Show help information\n\n` +
     `💡 *Tip:* Type / to see all available commands!`;
 
   var keyboard = {
-    keyboard: [["➕ Add Transaction"], ["📊 View Summary", "📅 Recent Transactions"]],
+    keyboard: [["📊 View Summary", "📅 Recent Transactions"]],
     resize_keyboard: true,
     one_time_keyboard: false
   };
@@ -81,54 +69,54 @@ function handleHelpCommand(chatId) {
     `📚 *Help Guide*\n\n` +
     `*Available Commands:*\n` +
     `• /start - Start the bot\n` +
-    `• /addtransaction - Add a new transaction\n` +
+    `• /backfill - Backfill transactions for a date range\n` +
     `• /summary - View transaction summary\n` +
     `• /recent - View recent transactions\n` +
     `• /help - Show this help message\n\n` +
-    `*Adding a Transaction:*\n` +
-    `Use the format: /addtransaction <amount> <category> <merchant>\n` +
-    `Example: /addtransaction 1000 Food Zomato\n\n` +
+    `*Backfilling Transactions:*\n` +
+    `Use the format: /backfill YYYY-MM-DD YYYY-MM-DD\n` +
+    `Example: /backfill 2026-03-01 2026-03-31\n\n` +
     `*Features:*\n` +
     `• Automatic email transaction parsing\n` +
     `• Transaction splitting\n` +
+    `• Date range backfill with dedup\n` +
     `• Category-wise spending analysis\n` +
     `• Recent transaction history`;
 
   sendTelegramMessage(chatId, message);
 }
 
-// Method to add a manual transaction via the Telegram bot.
-function addTransaction(chatId, messageText, username) {
-  var parts = messageText.split(" "); // Split the message
-  var amount = parts[1];
-  var category = parts[2];
-  var merchant = parts.slice(3).join(" "); // Join remaining words as merchant name
-  var date = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
-
-  appendRowToGoogleSheet(SHEET_ID, [date, date, merchant, amount, category, "Debit", username, SPLIT_STATUS.PERSONAL]);
-
-  // Get the row number after appending
-  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-  var rowNumber = sheet.getLastRow(); // Get the last row number
-
-  // Validate row number
-  if (rowNumber <= 1) {
-    console.log("Warning: Invalid row number after append:", rowNumber);
-    var message = `✅ *Transaction Added!*\n💰 *Amount:* INR ${amount}\n📂 *Category:* ${category}\n🏪 *Merchant:* ${merchant}\n👤 *Added by:* ${username}`;
-    sendTelegramMessage(chatId, message);
+// Method to handle the /backfill command
+function handleBackfillCommand(chatId, messageText) {
+  var parts = messageText.split(" ");
+  if (parts.length < 3) {
+    sendTelegramMessage(
+      chatId,
+      "❌ *Invalid format!* Use: `/backfill YYYY-MM-DD YYYY-MM-DD`\n\nExample: `/backfill 2026-03-01 2026-03-31`"
+    );
     return;
   }
 
-  console.log("Manual transaction saved to row:", rowNumber);
-  var message = `✅ *Transaction Added!*\n💰 *Amount:* INR ${amount}\n📂 *Category:* ${category}\n🏪 *Merchant:* ${merchant}\n👤 *Added by:* ${username}`;
-  var reply_markup = buildReplyMarkup("✂️ Split Transaction", `split_${rowNumber}`);
-  var options = {
-    parse_mode: "Markdown",
-    reply_markup: reply_markup
-  };
+  var startDate = new Date(parts[1]);
+  var endDate = new Date(parts[2]);
 
-  // Send a confirmation message
-  sendTelegramMessage(chatId, message, options);
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    sendTelegramMessage(
+      chatId,
+      "❌ *Invalid dates!* Use format YYYY-MM-DD\n\nExample: `/backfill 2026-03-01 2026-03-31`"
+    );
+    return;
+  }
+
+  if (startDate > endDate) {
+    sendTelegramMessage(chatId, "❌ *Start date must be before end date.*");
+    return;
+  }
+
+  // Set end date to end of day
+  endDate.setHours(23, 59, 59, 999);
+
+  backfillTransactions(chatId, startDate, endDate);
 }
 
 // Method to handle the callback queries sent from the Telegram message reply buttons.
@@ -141,132 +129,65 @@ function handleCallbackQuery(update) {
 
     var callbackQueryId = update.callback_query.id;
     var chatId = update.callback_query.message.chat.id;
-    var messageId = update.callback_query.message.message_id;
+    var telegramMessageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
-    var data = update.callback_query.data; // Example: "personal_5" or "split_8"
+    var data = update.callback_query.data; // Example: "split_abc123" or "personal_abc123"
 
-    console.log("[handleCallbackQuery] Callback query received:", {
-      callbackQueryId: callbackQueryId,
-      chatId: chatId,
-      messageId: messageId,
-      data: data,
-      SHEET_ID: SHEET_ID,
-      SPLIT_COLUMN: SPLIT_COLUMN
-    });
+    console.log("[handleCallbackQuery] Callback received:", { data: data });
 
     if (!data) {
-      console.log("[handleCallbackQuery] Error: No callback data received");
       answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
       return;
     }
 
-    var parts = data.split("_");
-    if (parts.length < 2) {
-      console.log("[handleCallbackQuery] Error: Invalid callback data format:", data);
+    // Parse action and message ID from callback data
+    var separatorIndex = data.indexOf("_");
+    if (separatorIndex < 0) {
       answerCallbackQuery(callbackQueryId, "❌ Error: Invalid request", false);
       return;
     }
 
-    var action = parts[0]; // "personal" or "split"
-    var rowNumber = parseInt(parts[1]); // Extract row number
+    var action = data.substring(0, separatorIndex); // "personal" or "split"
+    var emailMessageId = data.substring(separatorIndex + 1); // Gmail message ID
 
-    console.log(
-      "[handleCallbackQuery] Processing callback - Action:",
-      action,
-      "Row:",
-      rowNumber,
-      "Type:",
-      typeof rowNumber
-    );
-
-    if (isNaN(rowNumber) || rowNumber <= 0) {
-      console.log("[handleCallbackQuery] Error: Invalid row number:", rowNumber, "Parsed from:", parts[1]);
-      answerCallbackQuery(callbackQueryId, "❌ Error: Invalid row number", false);
+    // Look up the row by message ID
+    var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+    if (rowNumber < 0) {
+      answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
+      sendTelegramMessage(chatId, "❌ *Error:* Could not find the transaction in the sheet.");
       return;
     }
 
-    // Determine the value to set based on action
     var valueToSet = action === "personal" ? SPLIT_STATUS.PERSONAL : SPLIT_STATUS.SPLIT;
 
-    // First, verify the row exists and get current value
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-    var lastRow = sheet.getLastRow();
-    var currentValue = "";
-    var errorMessage = "";
-
-    // Check if row exists
-    if (rowNumber > lastRow) {
-      errorMessage = "❌ *Error:* Row " + rowNumber + " doesn't exist. Last row is " + lastRow + ".";
-      answerCallbackQuery(callbackQueryId, "Row doesn't exist", false);
-      sendTelegramMessage(chatId, errorMessage);
-      return;
-    }
-
-    if (rowNumber <= 1) {
-      errorMessage = "❌ *Error:* Cannot update header row (row 1).";
-      answerCallbackQuery(callbackQueryId, "Invalid row", false);
-      sendTelegramMessage(chatId, errorMessage);
-      return;
-    }
-
     // Read current value
-    try {
-      currentValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
-    } catch (e) {
-      errorMessage = "❌ *Error reading cell:* " + e.message;
-      answerCallbackQuery(callbackQueryId, "Read error", false);
-      sendTelegramMessage(chatId, errorMessage);
-      return;
-    }
+    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    var currentValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
 
-    // Update the existing row in Google Sheets
+    // Update the cell
     var updateResult = updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, SPLIT_COLUMN, valueToSet, currentValue);
 
     if (!updateResult.success) {
       answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
-      sendTelegramMessage(
-        chatId,
-        "❌ *Error updating transaction*\n\n" +
-          updateResult.message +
-          "\n\n*Details:*\nRow: " +
-          rowNumber +
-          "\nColumn: " +
-          SPLIT_COLUMN +
-          "\nCurrent: " +
-          currentValue +
-          "\nTrying to set: " +
-          valueToSet
-      );
+      sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\n" + updateResult.message);
       return;
     }
 
-    var toggleAction = action === "personal" ? "split" : "personal"; // Toggle between personal and split
+    // Build toggle button
+    var toggleAction = action === "personal" ? "split" : "personal";
     var toggleText = toggleAction === "split" ? "✂️ Split Transaction" : "🔄 Mark as Personal";
-
-    // Use the verified new value already returned by the update function
-    var verifyValue = updateResult.newValue || valueToSet;
 
     var options = {
       parse_mode: "Markdown",
-      reply_markup: buildReplyMarkup(toggleText, `${toggleAction}_${rowNumber}`),
-      message_id: messageId
+      reply_markup: buildReplyMarkup(toggleText, `${toggleAction}_${emailMessageId}`),
+      message_id: telegramMessageId
     };
 
-    var statusMessage =
-      verifyValue === valueToSet
-        ? `✅ *Marked as ${valueToSet}*`
-        : `⚠️ *Update sent* (Current: ${verifyValue}, Expected: ${valueToSet})`;
-
-    var message = `${statusMessage}
-
-${messageText}`;
+    var message = `✅ *Marked as ${valueToSet}*\n\n${messageText}`;
     sendTelegramMessage(chatId, message, options);
-
-    // Acknowledge callback to Telegram
     answerCallbackQuery(callbackQueryId, `✅ Marked as ${valueToSet}`, false);
   } catch (error) {
-    console.error("[handleCallbackQuery] Error processing callback:", error.message);
-    console.error("[handleCallbackQuery] Stack trace:", error.stack);
+    console.error("[handleCallbackQuery] Error:", error.message, error.stack);
     if (update.callback_query && update.callback_query.id) {
       answerCallbackQuery(update.callback_query.id, "❌ Error: " + error.message, false);
     }

@@ -1,3 +1,17 @@
+// Find the row number where a column has a specific value. Returns -1 if not found.
+function findRowByColumnValue(sheet_id, column_number, value) {
+  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return -1;
+  var data = sheet.getRange(2, column_number, lastRow - 1, 1).getValues();
+  for (var i = data.length - 1; i >= 0; i--) {
+    if (data[i][0].toString() === value.toString()) {
+      return i + 2; // +2: 0-indexed array + skip header row
+    }
+  }
+  return -1;
+}
+
 // Enhanced version that returns detailed feedback
 function updateGoogleSheetCellWithFeedback(sheet_id, row_number, column_number, value, currentValue) {
   try {
@@ -71,7 +85,8 @@ function ensureSheetHeaders(sheet_id) {
       "Category",
       "Transaction Type",
       "User",
-      "Split"
+      "Split",
+      "Message ID"
     ]);
     if (DEBUG) {
       console.log("Headers added to the sheet.");

@@ -55,7 +55,7 @@ function callAzureOpenAI(prompt) {
     AZURE_OPENAI_API_VERSION;
   var payload = {
     messages: [{ role: "user", content: prompt }],
-    max_tokens: 800
+    max_completion_tokens: 800
   };
   var options = {
     method: "post",

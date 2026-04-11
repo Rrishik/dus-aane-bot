@@ -21,11 +21,11 @@ const BOT_SET_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setMyComm
 const BOT_DELETE_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteMyCommands`;
 const BOT_DELETE_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`;
 const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
-const BOT_ADD_TRANSACTION_KEYWORD = "addTransaction";
 
 // Google Sheets
 const SHEET_ID = DEBUG ? TEST_SHEET_ID : PROD_SHEET_ID;
 const SPLIT_COLUMN = 8; // Column H
+const MESSAGE_ID_COLUMN = 9; // Column I
 
 // Split Status Values (enum-like constants)
 const SPLIT_STATUS = {
