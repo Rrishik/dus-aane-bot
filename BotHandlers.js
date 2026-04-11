@@ -116,7 +116,28 @@ function handleBackfillCommand(chatId, messageText) {
   // Set end date to end of day
   endDate.setHours(23, 59, 59, 999);
 
-  backfillTransactions(chatId, startDate, endDate);
+  // Schedule backfill to run async so doPost returns 200 OK immediately
+  var props = PropertiesService.getScriptProperties();
+  props.setProperties({
+    backfill_chat_id: chatId.toString(),
+    backfill_start: parts[1],
+    backfill_end: parts[2]
+  });
+
+  // Delete any existing backfill triggers to avoid duplicates
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "runScheduledBackfill") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // Create a one-time trigger that fires in ~2 seconds
+  ScriptApp.newTrigger("runScheduledBackfill").timeBased().after(2000).create();
+
+  sendTelegramMessage(
+    chatId,
+    "⏳ *Backfill scheduled!*\nProcessing emails between " + parts[1] + " and " + parts[2] + "..."
+  );
 }
 
 // Method to handle the callback queries sent from the Telegram message reply buttons.
