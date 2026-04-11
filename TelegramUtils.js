@@ -195,46 +195,15 @@ ${category ? `📂 *Category:* ${category}\n` : ""}
   return message;
 }
 
-function sendTransactionMessage(transaction_details, row_number, user) {
+function sendTransactionMessage(transaction_details, messageId, user) {
   var message = getTransactionMessageAsString(transaction_details, user);
 
-  // Only add split button if we have a valid row number
   var options = {
     parse_mode: "Markdown"
   };
 
-  if (row_number && row_number > 1) {
-    // Verify the row number by checking the sheet
-    try {
-      var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-      var lastRow = sheet.getLastRow();
-
-      // If row_number seems wrong, try to find the row by matching transaction data
-      if (row_number > lastRow) {
-        // Try to find the row by matching merchant and amount
-        var data = sheet.getDataRange().getValues();
-        var foundRow = -1;
-        for (var i = data.length - 1; i >= 1; i--) {
-          // Start from bottom, skip header
-          if (
-            data[i][2] === transaction_details.merchant &&
-            parseFloat(data[i][3]) === parseFloat(transaction_details.amount)
-          ) {
-            foundRow = i + 1; // +1 because array is 0-indexed, sheet rows are 1-indexed
-            break;
-          }
-        }
-        if (foundRow > 0) {
-          row_number = foundRow;
-          console.log("Found matching row:", row_number);
-        }
-      }
-    } catch (e) {
-      console.log("Error verifying row number:", e.message);
-    }
-    options.reply_markup = buildReplyMarkup("✂️ Want to split ?", `split_${row_number}`);
-  } else {
-    console.log("Telegram message sent without split button (invalid row number:", row_number + ")");
+  if (messageId) {
+    options.reply_markup = buildReplyMarkup("✂️ Want to split ?", `split_${messageId}`);
   }
 
   sendTelegramMessage(CHAT_ID, message, options);
