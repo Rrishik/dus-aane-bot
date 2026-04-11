@@ -5,6 +5,8 @@ function handleMessage(update) {
     var messageText = update.message.text;
     var username = update.message.from.first_name || update.message.from.username;
 
+    if (!messageText) return; // Ignore non-text messages (photos, joins, etc.)
+
     // Handle commands
     if (messageText.startsWith("/")) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();

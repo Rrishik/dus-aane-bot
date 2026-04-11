@@ -24,7 +24,8 @@ function doPost(e) {
   } catch (error) {
     console.error("Error in doPost:", error.message);
     console.error("Stack trace:", error.stack);
-    return ContentService.createTextOutput("ERROR: " + error.message).setMimeType(ContentService.MimeType.TEXT);
+    // Always return 200 OK to prevent Telegram retries
+    return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
   }
 }
 
