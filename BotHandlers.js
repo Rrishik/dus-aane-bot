@@ -19,7 +19,7 @@ function handleMessage(update) {
           handleHelpCommand(chatId);
           break;
         case "/summary":
-          showTransactionSummary(chatId);
+          showTransactionSummary(chatId, messageText);
           break;
         case "/recent":
           showRecentTransactions(chatId);
@@ -46,7 +46,7 @@ function handleStartCommand(chatId, username) {
     `👋 *Welcome ${username}!*\n\nI'm your transaction management bot. Here's what I can do:\n\n` +
     `📝 *Commands:*\n` +
     `• /backfill - Backfill transactions for a date range\n` +
-    `• /summary - View transaction summary\n` +
+    `• /summary - View summary (e.g. /summary 10)\n` +
     `• /recent - View recent transactions\n` +
     `• /help - Show help information\n\n` +
     `💡 *Tip:* Type / to see all available commands!`;
@@ -72,7 +72,7 @@ function handleHelpCommand(chatId) {
     `*Available Commands:*\n` +
     `• /start - Start the bot\n` +
     `• /backfill - Backfill transactions for a date range\n` +
-    `• /summary - View transaction summary\n` +
+    `• /summary - View summary (e.g. /summary 10)\n` +
     `• /recent - View recent transactions\n` +
     `• /help - Show this help message\n\n` +
     `*Backfilling Transactions:*\n` +
@@ -210,20 +210,35 @@ function handleCallbackQuery(update) {
   }
 }
 
-// Function to show transaction summary
-function showTransactionSummary(chatId) {
+// Function to show transaction summary. Optional limit param: /summary 10
+function showTransactionSummary(chatId, messageText) {
   try {
     var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
     var data = sheet.getDataRange().getValues();
 
     // Check if sheet is empty
     if (data.length <= 1) {
-      sendTelegramMessage(chatId, "📊 *No transactions found yet!*\n\nStart adding transactions to see your summary.");
+      sendTelegramMessage(chatId, "📊 *No transactions found yet!*");
       return;
     }
 
     // Skip header row
     data.shift();
+
+    // Parse optional limit from message (e.g. "/summary 10")
+    var limit = 0;
+    if (messageText) {
+      var parts = messageText.split(" ");
+      if (parts.length >= 2) {
+        limit = parseInt(parts[1]);
+        if (isNaN(limit) || limit <= 0) limit = 0;
+      }
+    }
+
+    // Apply limit — take last N transactions
+    if (limit > 0 && data.length > limit) {
+      data = data.slice(-limit);
+    }
 
     var totalSpent = 0;
     var totalReceived = 0;
@@ -244,7 +259,7 @@ function showTransactionSummary(chatId) {
       transactionCount++;
     });
 
-    var message = `📊 *Transaction Summary*\n\n`;
+    var message = limit > 0 ? `📊 *Summary (last ${limit} transactions)*\n\n` : `📊 *Transaction Summary*\n\n`;
     message += `📈 *Total Transactions:* ${transactionCount}\n`;
     message += `💰 *Total Spent:* INR ${totalSpent.toFixed(2)}\n`;
     message += `💵 *Total Received:* INR ${totalReceived.toFixed(2)}\n`;
@@ -277,7 +292,7 @@ function showRecentTransactions(chatId) {
 
     // Check if sheet is empty
     if (data.length <= 1) {
-      sendTelegramMessage(chatId, "📅 *No transactions found yet!*\n\nStart adding transactions to see your history.");
+      sendTelegramMessage(chatId, "📅 *No transactions found yet!*");
       return;
     }
 
@@ -289,18 +304,21 @@ function showRecentTransactions(chatId) {
 
     var message = `📅 *Recent Transactions*\n\n`;
 
-    recentTransactions.forEach(function (row) {
-      var date = row[1] || "Unknown Date"; // Transaction Date
-      var merchant = row[2] || "Unknown Merchant"; // Merchant
-      var amount = parseFloat(row[3]) || 0; // Amount
-      var type = row[5] || "Unknown"; // Transaction Type
-      var category = row[4] || "Uncategorized"; // Category
+    recentTransactions.forEach(function (row, index) {
+      var date = row[1] || "Unknown Date";
+      var merchant = row[2] || "Unknown Merchant";
+      var amount = parseFloat(row[3]) || 0;
+      var type = row[5] || "Unknown";
+      var category = row[4] || "Uncategorized";
 
       var emoji = type === "Debit" ? "💸" : "💰";
       message += `${emoji} *${date}*\n`;
       message += `🏪 ${merchant}\n`;
       message += `💰 INR ${amount.toFixed(2)}\n`;
-      message += `📂 ${category}\n\n`;
+      message += `📂 ${category}`;
+      if (index < recentTransactions.length - 1) {
+        message += `\n─────────────\n`;
+      }
     });
 
     sendTelegramMessage(chatId, message);
@@ -335,11 +353,11 @@ function showBackfillDetails(chatId, startDateStr, endDateStr) {
     });
 
     if (matching.length === 0) {
-      sendTelegramMessage(chatId, "📋 *No transactions found* for " + startDateStr + " to " + endDateStr);
+      sendTelegramMessage(chatId, `📋 *No transactions found* for ${startDateStr} to ${endDateStr}`);
       return;
     }
 
-    // Send each transaction with a split button (cap at 20 to avoid flooding)
+    // Send each transaction as read-only detail (cap at 20 to avoid flooding)
     var cap = Math.min(matching.length, 20);
     for (var i = 0; i < cap; i++) {
       var row = matching[i];
@@ -351,13 +369,12 @@ function showBackfillDetails(chatId, startDateStr, endDateStr) {
         transaction_type: row[5]
       };
       var user = row[6];
-      var messageId = row[8]; // Message ID column
-      sendTransactionMessage(txnData, messageId, user);
+      sendTransactionDetailMessage(chatId, txnData, user);
       Utilities.sleep(500);
     }
 
     if (matching.length > cap) {
-      sendTelegramMessage(chatId, "📋 Showing " + cap + " of " + matching.length + " transactions.");
+      sendTelegramMessage(chatId, `📋 *Showing ${cap} of ${matching.length} transactions*`);
     }
   } catch (error) {
     console.error("Error in showBackfillDetails:", error);

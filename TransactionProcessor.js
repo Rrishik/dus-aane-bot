@@ -190,10 +190,7 @@ function backfillTransactions(chatId, startDate, endDate) {
   // Send initial progress message
   sendTelegramMessage(
     chatId,
-    "⏳ *Backfill in progress...*\nSearching for emails between " +
-      Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy-MM-dd") +
-      " and " +
-      Utilities.formatDate(endDate, Session.getScriptTimeZone(), "yyyy-MM-dd")
+    `⏳ *Backfill in progress...*\nSearching for emails between ${Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy-MM-dd")} and ${Utilities.formatDate(endDate, Session.getScriptTimeZone(), "yyyy-MM-dd")}`
   );
 
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
@@ -229,21 +226,20 @@ function backfillTransactions(chatId, startDate, endDate) {
     Utilities.sleep(2000);
   });
 
-  // Build summary message
-  var summary = "✅ *Backfill Complete*\n\n";
-  summary += "📧 *Emails found:* " + messagesToProcess.length + "\n";
-  summary += "💾 *Transactions saved:* " + savedCount + "\n";
-  if (duplicateCount > 0) summary += "🔁 *Duplicates skipped:* " + duplicateCount + "\n";
-  if (failedCount > 0) summary += "❌ *Failed:* " + failedCount + "\n";
-  summary += "💰 *Total amount:* INR " + totalAmount.toFixed(2) + "\n";
+  var summary = `✅ *Backfill Complete*\n\n`;
+  summary += `📧 *Emails found:* ${messagesToProcess.length}\n`;
+  summary += `💾 *Transactions saved:* ${savedCount}\n`;
+  if (duplicateCount > 0) summary += `🔁 *Duplicates skipped:* ${duplicateCount}\n`;
+  if (failedCount > 0) summary += `❌ *Failed:* ${failedCount}\n`;
+  summary += `💰 *Total amount:* INR ${totalAmount.toFixed(2)}\n`;
 
   var categories = Object.keys(categoryBreakdown).sort(function (a, b) {
     return categoryBreakdown[b] - categoryBreakdown[a];
   });
   if (categories.length > 0) {
-    summary += "\n📂 *Category breakdown:*\n";
+    summary += `\n📂 *Category breakdown:*\n`;
     categories.forEach(function (cat) {
-      summary += "• " + cat + ": INR " + categoryBreakdown[cat].toFixed(2) + "\n";
+      summary += `• ${cat}: INR ${categoryBreakdown[cat].toFixed(2)}\n`;
     });
   }
 

@@ -181,20 +181,19 @@ function escapeMarkdown(text) {
 // --- Merged from MessageUtils.js ---
 
 function getTransactionMessageAsString(transaction_details, user) {
-  // Escape all transaction details
   var amount = escapeMarkdown(transaction_details.amount);
   var date = escapeMarkdown(transaction_details.transaction_date);
   var merchant = escapeMarkdown(transaction_details.merchant);
   var category = escapeMarkdown(transaction_details.category);
   user = escapeMarkdown(user);
 
-  var message = `💸 *INR ${amount} ${transaction_details.transaction_type}ed* :
-🗓 *Date:* ${date}
-🏪 *Merchant:* ${merchant}
-${category ? `📂 *Category:* ${category}\n` : ""}
-👤 *By:* ${user}
-
-`;
+  var emoji = transaction_details.transaction_type === "Debit" ? "💸" : "💰";
+  var message =
+    `${emoji} *INR ${amount} ${transaction_details.transaction_type}ed*\n` +
+    `🗓 *Date:* ${date}\n` +
+    `🏪 *Merchant:* ${merchant}\n` +
+    (category ? `📂 *Category:* ${category}\n` : "") +
+    `👤 *By:* ${user}`;
   return message;
 }
 
@@ -206,9 +205,14 @@ function sendTransactionMessage(transaction_details, messageId, user) {
   };
 
   if (messageId) {
-    options.reply_markup = buildReplyMarkup("✂️ Want to split ?", `split_${messageId}`);
+    options.reply_markup = buildReplyMarkup("✂️ Split this?", `split_${messageId}`);
   }
 
   sendTelegramMessage(CHAT_ID, message, options);
   console.log("Telegram message sent successfully.");
+}
+
+function sendTransactionDetailMessage(chatId, transaction_details, user) {
+  var message = getTransactionMessageAsString(transaction_details, user);
+  sendTelegramMessage(chatId, message);
 }
