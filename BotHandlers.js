@@ -332,7 +332,11 @@ function showRecentTransactions(chatId, messageText) {
     var message = header + "\n\n";
 
     recentTransactions.forEach(function (row, index) {
-      var date = row[1] || "Unknown Date";
+      var rawDate = row[0] || row[1];
+      var date =
+        rawDate instanceof Date
+          ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
+          : rawDate || "Unknown Date";
       var merchant = row[2] || "Unknown Merchant";
       var amount = parseFloat(row[3]) || 0;
       var type = row[5] || "Unknown";
@@ -390,6 +394,7 @@ function showBackfillDetails(chatId, startDateStr, endDateStr) {
     for (var i = 0; i < cap; i++) {
       var row = matching[i];
       var txnData = {
+        email_date: row[0],
         transaction_date: row[1],
         merchant: row[2],
         amount: row[3],
