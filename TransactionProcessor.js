@@ -255,3 +255,34 @@ function backfillTransactions(chatId, startDate, endDate) {
     )
   });
 }
+
+/**
+ * Called by time-based trigger to run backfill async (outside doPost).
+ */
+function runScheduledBackfill() {
+  var props = PropertiesService.getScriptProperties();
+  var chatId = props.getProperty("backfill_chat_id");
+  var startStr = props.getProperty("backfill_start");
+  var endStr = props.getProperty("backfill_end");
+
+  // Clean up properties and trigger
+  props.deleteProperty("backfill_chat_id");
+  props.deleteProperty("backfill_start");
+  props.deleteProperty("backfill_end");
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "runScheduledBackfill") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  if (!chatId || !startStr || !endStr) {
+    console.log("runScheduledBackfill: missing properties, skipping.");
+    return;
+  }
+
+  var startDate = new Date(startStr);
+  var endDate = new Date(endStr);
+  endDate.setHours(23, 59, 59, 999);
+
+  backfillTransactions(parseInt(chatId), startDate, endDate);
+}
