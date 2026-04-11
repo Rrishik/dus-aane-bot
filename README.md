@@ -137,7 +137,7 @@ Set `DEBUG = true` in `Constants.js` to use test credentials and shorter lookbac
 
 ### Backfill
 
-Use the `/backfill <start_date> [end_date]` command in Telegram, or set `BACKFILL_FROM` in `Constants.js` and run `extractTransactions()` manually.
+Use the `/backfill YYYY-MM-DD YYYY-MM-DD` command in Telegram to backfill transactions for a date range.
 
 ### AI Provider
 
