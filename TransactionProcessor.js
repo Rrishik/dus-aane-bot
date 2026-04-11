@@ -209,7 +209,8 @@ function backfillTransactions(chatId, startDate, endDate) {
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;
-  var amountByCurrency = {};
+  var spentByCurrency = {};
+  var receivedByCurrency = {};
   var categoryBreakdown = {};
 
   messagesToProcess.forEach((message) => {
@@ -221,9 +222,16 @@ function backfillTransactions(chatId, startDate, endDate) {
       savedCount++;
       var amt = parseFloat(result.data.amount) || 0;
       var cur = result.data.currency || "INR";
-      amountByCurrency[cur] = (amountByCurrency[cur] || 0) + amt;
-      var cat = result.data.category || "Uncategorized";
-      categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + amt;
+      var type = result.data.transaction_type || "Debit";
+
+      if (type === "Credit") {
+        receivedByCurrency[cur] = (receivedByCurrency[cur] || 0) + amt;
+      } else {
+        spentByCurrency[cur] = (spentByCurrency[cur] || 0) + amt;
+        var cat = result.data.category || "Uncategorized";
+        var catKey = cat + "|||" + cur;
+        categoryBreakdown[catKey] = (categoryBreakdown[catKey] || 0) + amt;
+      }
     } else {
       failedCount++;
     }
@@ -237,23 +245,36 @@ function backfillTransactions(chatId, startDate, endDate) {
   if (duplicateCount > 0) summary += `🔁 *Duplicates skipped:* ${duplicateCount}\n`;
   if (failedCount > 0) summary += `❌ *Failed:* ${failedCount}\n`;
 
-  var currencies = Object.keys(amountByCurrency);
-  if (currencies.length === 1) {
-    summary += `💰 *Total amount:* ${currencies[0]} ${amountByCurrency[currencies[0]].toFixed(2)}\n`;
-  } else if (currencies.length > 1) {
-    summary += `💰 *Total amounts:*\n`;
-    currencies.forEach(function (cur) {
-      summary += `  • ${cur} ${amountByCurrency[cur].toFixed(2)}\n`;
+  var spentCurrencies = Object.keys(spentByCurrency);
+  if (spentCurrencies.length === 1) {
+    summary += `💰 *Total Spent:* ${spentCurrencies[0]} ${spentByCurrency[spentCurrencies[0]].toFixed(2)}\n`;
+  } else if (spentCurrencies.length > 1) {
+    summary += `💰 *Total Spent:*\n`;
+    spentCurrencies.forEach(function (cur) {
+      summary += `  • ${cur} ${spentByCurrency[cur].toFixed(2)}\n`;
     });
   }
 
-  var categories = Object.keys(categoryBreakdown).sort(function (a, b) {
+  var receivedCurrencies = Object.keys(receivedByCurrency);
+  if (receivedCurrencies.length === 1) {
+    summary += `💵 *Total Received:* ${receivedCurrencies[0]} ${receivedByCurrency[receivedCurrencies[0]].toFixed(2)}\n`;
+  } else if (receivedCurrencies.length > 1) {
+    summary += `💵 *Total Received:*\n`;
+    receivedCurrencies.forEach(function (cur) {
+      summary += `  • ${cur} ${receivedByCurrency[cur].toFixed(2)}\n`;
+    });
+  }
+
+  var catKeys = Object.keys(categoryBreakdown).sort(function (a, b) {
     return categoryBreakdown[b] - categoryBreakdown[a];
   });
-  if (categories.length > 0) {
+  if (catKeys.length > 0) {
     summary += `\n📂 *Category breakdown:*\n`;
-    categories.forEach(function (cat) {
-      summary += `• ${cat}: ${categoryBreakdown[cat].toFixed(2)}\n`;
+    catKeys.forEach(function (catKey) {
+      var parts = catKey.split("|||");
+      var cat = parts[0];
+      var cur = parts[1];
+      summary += `• ${cat}: ${cur} ${categoryBreakdown[catKey].toFixed(2)}\n`;
     });
   }
 
