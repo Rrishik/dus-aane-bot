@@ -5,18 +5,6 @@ function doPost(e) {
     var contents = e.postData.contents;
     var update = JSON.parse(contents);
 
-    // Dedup: skip if we already processed this update
-    var cache = CacheService.getScriptCache();
-    var updateId = update.update_id;
-
-    if (cache.get("processed_" + updateId)) {
-      console.log("Skipping duplicate update_id:", updateId);
-      return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
-    }
-
-    // Mark as processed (expires in 5 minutes)
-    cache.put("processed_" + updateId, "1", 300);
-
     // Check if this is a /backfill command — defer to async trigger
     var isBackfill =
       update.message && update.message.text && update.message.text.split("@")[0].toLowerCase().startsWith("/backfill");

@@ -14,17 +14,6 @@ function setTelegramWebhook() {
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
 }
 
-// Reset webhook and drop all pending updates (Run manually to flush Telegram's retry queue)
-function resetWebhookClean() {
-  deleteWebhook();
-  Utilities.sleep(2000);
-  var payload = {
-    url: DEBUG ? TEST_SCRIPT_APP_URL : WORKER_PROXY_URL,
-    drop_pending_updates: true
-  };
-  sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
-}
-
 function deleteTelegramCommands() {
   sendRequest(BOT_DELETE_COMMANDS_URL, "post", {});
   if (DEBUG) console.log("Telegram commands deleted successfully.");
