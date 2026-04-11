@@ -3,6 +3,7 @@ function getTransactionPrompt(email_text) {
 - transaction_date (YYYY-MM-DD)
 - merchant
 - amount (only numeric, no currency symbols)
+- currency (3-letter ISO code, e.g. INR, JPY, USD. Default to INR if unclear)
 - category (if possible)
 - transaction_type (Debit or Credit based on email content)
 
@@ -15,6 +16,7 @@ Example JSON Output:
   "transaction_date": "2025-03-15",
   "merchant": "Amazon",
   "amount": 1500.00,
+  "currency": "INR",
   "category": "Shopping",
   "transaction_type": "Debit"
 }
@@ -159,6 +161,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, silent) {
   var amount = data.amount || 0;
   var category = data.category || "Uncategorized";
   var type = data.transaction_type || "Unknown";
+  var currency = data.currency || "INR";
   var user = userEmail.split("@")[0];
   var splitStatus = SPLIT_STATUS.PERSONAL; // Default to Personal
 
@@ -171,7 +174,8 @@ function saveTransaction(data, emailDate, userEmail, messageId, silent) {
     type,
     user,
     splitStatus,
-    messageId
+    messageId,
+    currency
   ]);
 
   console.log("Transaction saved with message ID:", messageId);
@@ -205,7 +209,7 @@ function backfillTransactions(chatId, startDate, endDate) {
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;
-  var totalAmount = 0;
+  var amountByCurrency = {};
   var categoryBreakdown = {};
 
   messagesToProcess.forEach((message) => {
@@ -216,7 +220,8 @@ function backfillTransactions(chatId, startDate, endDate) {
     } else if (result.saved && result.data) {
       savedCount++;
       var amt = parseFloat(result.data.amount) || 0;
-      totalAmount += amt;
+      var cur = result.data.currency || "INR";
+      amountByCurrency[cur] = (amountByCurrency[cur] || 0) + amt;
       var cat = result.data.category || "Uncategorized";
       categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + amt;
     } else {
@@ -231,7 +236,16 @@ function backfillTransactions(chatId, startDate, endDate) {
   summary += `💾 *Transactions saved:* ${savedCount}\n`;
   if (duplicateCount > 0) summary += `🔁 *Duplicates skipped:* ${duplicateCount}\n`;
   if (failedCount > 0) summary += `❌ *Failed:* ${failedCount}\n`;
-  summary += `💰 *Total amount:* INR ${totalAmount.toFixed(2)}\n`;
+
+  var currencies = Object.keys(amountByCurrency);
+  if (currencies.length === 1) {
+    summary += `💰 *Total amount:* ${currencies[0]} ${amountByCurrency[currencies[0]].toFixed(2)}\n`;
+  } else if (currencies.length > 1) {
+    summary += `💰 *Total amounts:*\n`;
+    currencies.forEach(function (cur) {
+      summary += `  • ${cur} ${amountByCurrency[cur].toFixed(2)}\n`;
+    });
+  }
 
   var categories = Object.keys(categoryBreakdown).sort(function (a, b) {
     return categoryBreakdown[b] - categoryBreakdown[a];
@@ -239,7 +253,7 @@ function backfillTransactions(chatId, startDate, endDate) {
   if (categories.length > 0) {
     summary += `\n📂 *Category breakdown:*\n`;
     categories.forEach(function (cat) {
-      summary += `• ${cat}: INR ${categoryBreakdown[cat].toFixed(2)}\n`;
+      summary += `• ${cat}: ${categoryBreakdown[cat].toFixed(2)}\n`;
     });
   }
 
