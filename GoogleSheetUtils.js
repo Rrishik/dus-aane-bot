@@ -86,7 +86,8 @@ function ensureSheetHeaders(sheet_id) {
       "Transaction Type",
       "User",
       "Split",
-      "Message ID"
+      "Message ID",
+      "Currency"
     ]);
     if (DEBUG) {
       console.log("Headers added to the sheet.");

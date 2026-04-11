@@ -26,6 +26,7 @@ const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook
 const SHEET_ID = DEBUG ? TEST_SHEET_ID : PROD_SHEET_ID;
 const SPLIT_COLUMN = 8; // Column H
 const MESSAGE_ID_COLUMN = 9; // Column I
+const CURRENCY_COLUMN = 10; // Column J
 
 // Split Status Values (enum-like constants)
 const SPLIT_STATUS = {

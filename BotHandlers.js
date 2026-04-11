@@ -240,41 +240,67 @@ function showTransactionSummary(chatId, messageText) {
       data = data.slice(-limit);
     }
 
-    var totalSpent = 0;
-    var totalReceived = 0;
+    var spentByCurrency = {};
+    var receivedByCurrency = {};
     var categorySpending = {};
     var transactionCount = 0;
 
     data.forEach(function (row) {
-      var amount = parseFloat(row[3]) || 0; // Amount column with fallback to 0
-      var type = row[5]; // Transaction Type column
-      var category = row[4] || "Uncategorized"; // Category column with fallback
+      var amount = parseFloat(row[3]) || 0;
+      var type = row[5];
+      var category = row[4] || "Uncategorized";
+      var currency = row[9] || "INR";
 
       if (type === "Debit") {
-        totalSpent += amount;
-        categorySpending[category] = (categorySpending[category] || 0) + amount;
+        spentByCurrency[currency] = (spentByCurrency[currency] || 0) + amount;
+        var catKey = category + "|||" + currency;
+        categorySpending[catKey] = (categorySpending[catKey] || 0) + amount;
       } else if (type === "Credit") {
-        totalReceived += amount;
+        receivedByCurrency[currency] = (receivedByCurrency[currency] || 0) + amount;
       }
       transactionCount++;
     });
 
     var message = limit > 0 ? `📊 *Summary (last ${limit} transactions)*\n\n` : `📊 *Transaction Summary*\n\n`;
-    message += `📈 *Total Transactions:* ${transactionCount}\n`;
-    message += `💰 *Total Spent:* INR ${totalSpent.toFixed(2)}\n`;
-    message += `💵 *Total Received:* INR ${totalReceived.toFixed(2)}\n`;
-    message += `📉 *Net Balance:* INR ${(totalReceived - totalSpent).toFixed(2)}\n\n`;
-    message += `📂 *Category-wise Spending:*\n`;
+    message += `📈 *Total Transactions:* ${transactionCount}\n\n`;
+
+    // Spent per currency
+    var spentCurrencies = Object.keys(spentByCurrency);
+    if (spentCurrencies.length === 1) {
+      message += `💰 *Total Spent:* ${spentCurrencies[0]} ${spentByCurrency[spentCurrencies[0]].toFixed(2)}\n`;
+    } else if (spentCurrencies.length > 1) {
+      message += `💰 *Total Spent:*\n`;
+      spentCurrencies.forEach(function (cur) {
+        message += `  • ${cur} ${spentByCurrency[cur].toFixed(2)}\n`;
+      });
+    }
+
+    // Received per currency
+    var receivedCurrencies = Object.keys(receivedByCurrency);
+    if (receivedCurrencies.length === 1) {
+      message += `💵 *Total Received:* ${receivedCurrencies[0]} ${receivedByCurrency[receivedCurrencies[0]].toFixed(2)}\n`;
+    } else if (receivedCurrencies.length > 1) {
+      message += `💵 *Total Received:*\n`;
+      receivedCurrencies.forEach(function (cur) {
+        message += `  • ${cur} ${receivedByCurrency[cur].toFixed(2)}\n`;
+      });
+    }
+
+    message += `\n📂 *Category-wise Spending:*\n`;
 
     // Sort categories by amount spent
-    var sortedCategories = Object.keys(categorySpending).sort(function (a, b) {
+    var sortedCatKeys = Object.keys(categorySpending).sort(function (a, b) {
       return categorySpending[b] - categorySpending[a];
     });
 
-    sortedCategories.forEach(function (category) {
-      var amount = categorySpending[category];
-      var percentage = ((amount / totalSpent) * 100).toFixed(1);
-      message += `• ${category}: INR ${amount.toFixed(2)} (${percentage}%)\n`;
+    sortedCatKeys.forEach(function (catKey) {
+      var parts = catKey.split("|||");
+      var category = parts[0];
+      var currency = parts[1];
+      var amount = categorySpending[catKey];
+      var totalSpentInCurrency = spentByCurrency[currency] || 1;
+      var percentage = ((amount / totalSpentInCurrency) * 100).toFixed(1);
+      message += `• ${category}: ${currency} ${amount.toFixed(2)} (${percentage}%)\n`;
     });
 
     sendTelegramMessage(chatId, message);
@@ -310,11 +336,12 @@ function showRecentTransactions(chatId) {
       var amount = parseFloat(row[3]) || 0;
       var type = row[5] || "Unknown";
       var category = row[4] || "Uncategorized";
+      var currency = row[9] || "INR";
 
       var emoji = type === "Debit" ? "💸" : "💰";
       message += `${emoji} *${date}*\n`;
       message += `🏪 ${merchant}\n`;
-      message += `💰 INR ${amount.toFixed(2)}\n`;
+      message += `💰 ${currency} ${amount.toFixed(2)}\n`;
       message += `📂 ${category}`;
       if (index < recentTransactions.length - 1) {
         message += `\n─────────────\n`;
@@ -366,7 +393,8 @@ function showBackfillDetails(chatId, startDateStr, endDateStr) {
         merchant: row[2],
         amount: row[3],
         category: row[4],
-        transaction_type: row[5]
+        transaction_type: row[5],
+        currency: row[9] || "INR"
       };
       var user = row[6];
       sendTransactionDetailMessage(chatId, txnData, user);

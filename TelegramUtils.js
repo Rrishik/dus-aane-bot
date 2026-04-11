@@ -185,11 +185,12 @@ function getTransactionMessageAsString(transaction_details, user) {
   var date = escapeMarkdown(transaction_details.transaction_date);
   var merchant = escapeMarkdown(transaction_details.merchant);
   var category = escapeMarkdown(transaction_details.category);
+  var currency = transaction_details.currency || "INR";
   user = escapeMarkdown(user);
 
   var emoji = transaction_details.transaction_type === "Debit" ? "💸" : "💰";
   var message =
-    `${emoji} *INR ${amount} ${transaction_details.transaction_type}ed*\n` +
+    `${emoji} *${currency} ${amount} ${transaction_details.transaction_type}ed*\n` +
     `🗓 *Date:* ${date}\n` +
     `🏪 *Merchant:* ${merchant}\n` +
     (category ? `📂 *Category:* ${category}\n` : "") +
