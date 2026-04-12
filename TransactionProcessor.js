@@ -1,8 +1,8 @@
-function getTransactionPrompt(email_text) {
+function getTransactionPrompt(email_text, overrides) {
   var categoryList = CATEGORIES.join(", ");
 
   var overrideHints = "";
-  var overrides = getCategoryOverrides(SHEET_ID);
+  if (!overrides) overrides = getCategoryOverrides(SHEET_ID);
   var merchants = Object.keys(overrides);
   if (merchants.length > 0) {
     var lines = merchants.map(function (m) {
@@ -60,12 +60,12 @@ function extractTransactions() {
   var messagesToProcess = fetchAndFilterMessages(cutoffDate);
 
   var userEmail = Session.getEffectiveUser().getEmail();
+  var overrides = getCategoryOverrides(SHEET_ID);
 
   messagesToProcess.forEach((message) => {
-    processSingleEmail(message, userEmail);
+    processSingleEmail(message, userEmail, false, overrides);
 
-    // Add a delay to prevent hitting API rate limits
-    Utilities.sleep(2000);
+    Utilities.sleep(500);
   });
 }
 
@@ -119,7 +119,7 @@ function fetchAndFilterMessages(startDate, endDate) {
  * Processes a single email message: calls the AI provider, parses response, saves to sheet, and notifies Telegram.
  * Returns { saved: true/false, duplicate: true/false, data: parsed transaction or null }.
  */
-function processSingleEmail(message, userEmail, silent) {
+function processSingleEmail(message, userEmail, silent, overrides) {
   var emailText = message.getPlainBody();
   var emailDate = message.getDate();
   var messageId = message.getId();
@@ -130,7 +130,7 @@ function processSingleEmail(message, userEmail, silent) {
   }
 
   try {
-    var responseText = callAI(getTransactionPrompt(emailText));
+    var responseText = callAI(getTransactionPrompt(emailText, overrides));
     if (responseText) {
       return handleAIResponse(responseText, emailDate, userEmail, messageId, silent);
     }
@@ -218,6 +218,7 @@ function backfillTransactions(chatId, startDate, endDate) {
   }
 
   var userEmail = Session.getEffectiveUser().getEmail();
+  var overrides = getCategoryOverrides(SHEET_ID);
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;
@@ -226,7 +227,7 @@ function backfillTransactions(chatId, startDate, endDate) {
   var categoryBreakdown = {};
 
   messagesToProcess.forEach((message) => {
-    var result = processSingleEmail(message, userEmail, true);
+    var result = processSingleEmail(message, userEmail, true, overrides);
 
     if (result.duplicate) {
       duplicateCount++;
@@ -248,7 +249,7 @@ function backfillTransactions(chatId, startDate, endDate) {
       failedCount++;
     }
 
-    Utilities.sleep(2000);
+    Utilities.sleep(500);
   });
 
   var summary = `✅ *Backfill Complete*\n\n`;
@@ -290,11 +291,12 @@ function backfillTransactions(chatId, startDate, endDate) {
     });
   }
 
+  var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID;
+
   sendTelegramMessage(chatId, summary, {
     parse_mode: "Markdown",
-    reply_markup: buildReplyMarkup(
-      "📋 Show Details",
-      `details_${Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy-MM-dd")}_${Utilities.formatDate(endDate, Session.getScriptTimeZone(), "yyyy-MM-dd")}`
-    )
+    reply_markup: {
+      inline_keyboard: [[{ text: "📋 Open Sheet", url: sheetUrl }]]
+    }
   });
 }
