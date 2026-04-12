@@ -203,7 +203,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
  * Backfill transactions for a date range with time-based execution limit.
  * Returns { savedCount, duplicateCount, failedCount, totalEmails, timedOut }
  */
-function backfillTransactions(startDate, endDate, timeLimitMs) {
+function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
   ensureSheetHeaders(SHEET_ID);
 
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
@@ -215,8 +215,10 @@ function backfillTransactions(startDate, endDate, timeLimitMs) {
   var failedCount = 0;
   var timedOut = false;
   var startTime = new Date().getTime();
+  var startIndex = skipCount || 0;
+  var processed = 0;
 
-  for (var i = 0; i < messagesToProcess.length; i++) {
+  for (var i = startIndex; i < messagesToProcess.length; i++) {
     // Check time limit before processing a non-trivial email
     if (timeLimitMs) {
       var elapsed = new Date().getTime() - startTime;
@@ -227,6 +229,7 @@ function backfillTransactions(startDate, endDate, timeLimitMs) {
     }
 
     var result = processSingleEmail(messagesToProcess[i], userEmail, true, overrides);
+    processed++;
 
     if (result.duplicate) {
       duplicateCount++;
@@ -246,6 +249,7 @@ function backfillTransactions(startDate, endDate, timeLimitMs) {
     duplicateCount: duplicateCount,
     failedCount: failedCount,
     totalEmails: messagesToProcess.length,
+    processedCount: processed,
     timedOut: timedOut
   };
 }

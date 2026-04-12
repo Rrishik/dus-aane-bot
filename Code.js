@@ -79,6 +79,7 @@ function startChunkedBackfill(startDate, endDate) {
   props.setProperty("backfill_total_saved", "0");
   props.setProperty("backfill_total_dupes", "0");
   props.setProperty("backfill_total_failed", "0");
+  props.setProperty("backfill_total_processed", "0");
   props.setProperty("backfill_chunk", "1");
 
   sendTelegramMessage(
@@ -114,18 +115,22 @@ function continueBackfill() {
   end.setHours(23, 59, 59, 999);
 
   var chunk = parseInt(props.getProperty("backfill_chunk") || "1", 10);
+  var skipCount = parseInt(props.getProperty("backfill_total_processed") || "0", 10);
 
-  // Run backfill with time limit
-  var result = backfillTransactions(start, end, BACKFILL_TIME_LIMIT_MS);
+  // Run backfill with time limit, skipping already-processed emails
+  var result = backfillTransactions(start, end, BACKFILL_TIME_LIMIT_MS, skipCount);
 
   // Accumulate totals
   var totalSaved = parseInt(props.getProperty("backfill_total_saved") || "0", 10) + result.savedCount;
   var totalDupes = parseInt(props.getProperty("backfill_total_dupes") || "0", 10) + result.duplicateCount;
   var totalFailed = parseInt(props.getProperty("backfill_total_failed") || "0", 10) + result.failedCount;
 
+  var totalProcessed = parseInt(props.getProperty("backfill_total_processed") || "0", 10) + result.processedCount;
+
   props.setProperty("backfill_total_saved", totalSaved.toString());
   props.setProperty("backfill_total_dupes", totalDupes.toString());
   props.setProperty("backfill_total_failed", totalFailed.toString());
+  props.setProperty("backfill_total_processed", totalProcessed.toString());
 
   if (result.timedOut) {
     // Send progress update
@@ -165,6 +170,7 @@ function continueBackfill() {
     props.deleteProperty("backfill_total_saved");
     props.deleteProperty("backfill_total_dupes");
     props.deleteProperty("backfill_total_failed");
+    props.deleteProperty("backfill_total_processed");
     props.deleteProperty("backfill_chunk");
   }
 }
