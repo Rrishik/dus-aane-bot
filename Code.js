@@ -10,6 +10,10 @@ function doPost(e) {
       update.message && update.message.text && update.message.text.split("@")[0].toLowerCase().startsWith("/backfill");
 
     if (isBackfill) {
+      // Send immediate acknowledgment
+      var chatId = update.message.chat.id;
+      sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
+
       var props = PropertiesService.getScriptProperties();
       props.setProperty("pending_update", contents);
       ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
