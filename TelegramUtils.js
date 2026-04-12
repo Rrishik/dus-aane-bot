@@ -229,8 +229,3 @@ function sendTransactionMessage(transaction_details, messageId, user) {
 
   sendTelegramMessage(CHAT_ID, message, options);
 }
-
-function sendTransactionDetailMessage(chatId, transaction_details, user) {
-  var message = getTransactionMessageAsString(transaction_details, user);
-  sendTelegramMessage(chatId, message);
-}

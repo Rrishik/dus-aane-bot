@@ -52,28 +52,77 @@ function handleHelpCommand(chatId, username) {
     `  ↳ /recent rishik - Filter by user\n` +
     `  ↳ /recent 10 rishik - Both filters\n\n` +
     `• /help - Show this message\n\n` +
+    `*Hidden Commands:*\n` +
+    `• /backfill - Backfill transactions\n` +
+    `  ↳ /backfill 3 days\n` +
+    `  ↳ /backfill 2 weeks\n` +
+    `  ↳ /backfill 1 month\n` +
+    `  ↳ /backfill 2026-03-01 2026-03-31\n\n` +
     `*Features:*\n` +
     `• Automatic email transaction parsing\n` +
     `• Transaction splitting\n` +
     `• Multi-currency support\n` +
     `• Category-wise spending analysis`;
 
-  sendTelegramMessage(chatId, message);
+  var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID;
+  sendTelegramMessage(chatId, message, {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "📋 Open Sheet", url: sheetUrl },
+          { text: "📖 README", url: "https://github.com/Rrishik/dus-aane-bot#readme" }
+        ]
+      ]
+    }
+  });
 }
 
 // Method to handle the /backfill command
 function handleBackfillCommand(chatId, messageText) {
   var parts = messageText.split(" ");
-  if (parts.length < 3) {
+
+  if (parts.length < 2) {
     sendTelegramMessage(
       chatId,
-      "❌ *Invalid format!* Use: `/backfill YYYY-MM-DD YYYY-MM-DD`\n\nExample: `/backfill 2026-03-01 2026-03-31`"
+      "❌ *Invalid format!*\n\n" +
+        "Use: `/backfill 3 days` or `/backfill 2 weeks`\n" +
+        "Or: `/backfill YYYY-MM-DD YYYY-MM-DD`"
     );
     return;
   }
 
-  var startDate = new Date(parts[1]);
-  var endDate = new Date(parts[2]);
+  var startDate, endDate;
+
+  // Check for relative duration: /backfill <N> <days|weeks|months>
+  var amount = parseInt(parts[1], 10);
+  if (!isNaN(amount) && parts.length >= 3) {
+    var unit = parts[2].toLowerCase().replace(/s$/, ""); // normalize: "days" → "day"
+    endDate = new Date();
+    startDate = new Date();
+    if (unit === "day") {
+      startDate.setDate(startDate.getDate() - amount);
+    } else if (unit === "week") {
+      startDate.setDate(startDate.getDate() - amount * 7);
+    } else if (unit === "month") {
+      startDate.setMonth(startDate.getMonth() - amount);
+    } else {
+      sendTelegramMessage(chatId, "❌ *Unknown unit!* Use `days`, `weeks`, or `months`.");
+      return;
+    }
+  } else if (parts.length >= 3) {
+    // Absolute date range: /backfill YYYY-MM-DD YYYY-MM-DD
+    startDate = new Date(parts[1]);
+    endDate = new Date(parts[2]);
+  } else {
+    sendTelegramMessage(
+      chatId,
+      "❌ *Invalid format!*\n\n" +
+        "Use: `/backfill 3 days` or `/backfill 2 weeks`\n" +
+        "Or: `/backfill YYYY-MM-DD YYYY-MM-DD`"
+    );
+    return;
+  }
 
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
     sendTelegramMessage(
@@ -122,18 +171,6 @@ function handleCallbackQuery(update) {
     var action = data.substring(0, separatorIndex); // "personal", "split", "details", "editcat", or "cat"
     var callbackPayload = data.substring(separatorIndex + 1);
 
-    // Handle "Show Details" from backfill summary
-    if (action === "details") {
-      var dates = callbackPayload.split("_");
-      if (dates.length < 2) {
-        answerCallbackQuery(callbackQueryId, "❌ Invalid date range", false);
-        return;
-      }
-      answerCallbackQuery(callbackQueryId, "📋 Loading details...", false);
-      showBackfillDetails(chatId, dates[0], dates[1]);
-      return;
-    }
-
     // Handle "Edit Category" — show category picker
     if (action === "editcat") {
       answerCallbackQuery(callbackQueryId, "📂 Pick a category", false);
@@ -167,8 +204,9 @@ function handleCallbackQuery(update) {
       }
 
       var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-      var currentCategory = sheet.getRange(rowNumber, CATEGORY_COLUMN).getValue();
-      var merchant = sheet.getRange(rowNumber, 3).getValue(); // Column C = Merchant
+      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+      var currentCategory = rowData[CATEGORY_COLUMN - 1];
+      var merchant = rowData[2]; // Column C = Merchant
       var updateResult = updateGoogleSheetCellWithFeedback(
         SHEET_ID,
         rowNumber,
@@ -444,61 +482,5 @@ function showRecentTransactions(chatId, messageText) {
   } catch (error) {
     console.error("Error in showRecentTransactions:", error);
     sendTelegramMessage(chatId, "❌ *Error fetching recent transactions*\n\nPlease try again later.");
-  }
-}
-
-// Function to show individual transactions for a date range (triggered from backfill "Show Details" button)
-function showBackfillDetails(chatId, startDateStr, endDateStr) {
-  try {
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-    var data = sheet.getDataRange().getValues();
-
-    if (data.length <= 1) {
-      sendTelegramMessage(chatId, "📋 *No transactions found.*");
-      return;
-    }
-
-    // Skip header
-    data.shift();
-
-    var startDate = new Date(startDateStr);
-    var endDate = new Date(endDateStr);
-    endDate.setHours(23, 59, 59, 999);
-
-    // Filter rows by transaction date within range
-    var matching = data.filter(function (row) {
-      var txnDate = new Date(row[1]);
-      return txnDate >= startDate && txnDate <= endDate;
-    });
-
-    if (matching.length === 0) {
-      sendTelegramMessage(chatId, `📋 *No transactions found* for ${startDateStr} to ${endDateStr}`);
-      return;
-    }
-
-    // Send each transaction as read-only detail (cap at 20 to avoid flooding)
-    var cap = Math.min(matching.length, 20);
-    for (var i = 0; i < cap; i++) {
-      var row = matching[i];
-      var txnData = {
-        email_date: row[0],
-        transaction_date: row[1],
-        merchant: row[2],
-        amount: row[3],
-        category: row[4],
-        transaction_type: row[5],
-        currency: row[9] || "INR"
-      };
-      var user = row[6];
-      sendTransactionDetailMessage(chatId, txnData, user);
-      Utilities.sleep(500);
-    }
-
-    if (matching.length > cap) {
-      sendTelegramMessage(chatId, `📋 *Showing ${cap} of ${matching.length} transactions*`);
-    }
-  } catch (error) {
-    console.error("Error in showBackfillDetails:", error);
-    sendTelegramMessage(chatId, "❌ *Error fetching details*\n\nPlease try again later.");
   }
 }

@@ -42,7 +42,7 @@ const CATEGORIES = [
   "Education",
   "Investment",
   "Subscriptions",
-  "Other"
+  "CC Bill Payment"
 ];
 
 const CATEGORY_EMOJIS = {
@@ -57,7 +57,7 @@ const CATEGORY_EMOJIS = {
   Education: "🎓",
   Investment: "📈",
   Subscriptions: "📱",
-  Other: "🔹"
+  "CC Bill Payment": "💳"
 };
 
 // Gmail

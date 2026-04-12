@@ -40,17 +40,7 @@ function updateGoogleSheetCellWithFeedback(sheet_id, row_number, column_number, 
     // Update the cell
     sheet.getRange(row_number, column_number).setValue(value);
 
-    // Small delay to ensure write completes
-    Utilities.sleep(100);
-
-    // Verify the update
-    var newValue = sheet.getRange(row_number, column_number).getValue();
-
-    if (newValue === value || newValue.toString() === value.toString()) {
-      return { success: true, message: "Updated successfully", oldValue: currentValue, newValue: newValue };
-    } else {
-      return { success: false, message: "Value mismatch. Expected: " + value + ", Got: " + newValue };
-    }
+    return { success: true, message: "Updated successfully", oldValue: currentValue, newValue: value };
   } catch (error) {
     return { success: false, message: "Error: " + error.message };
   }
