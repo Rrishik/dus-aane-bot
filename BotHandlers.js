@@ -96,7 +96,8 @@ function handleBackfillCommand(chatId, messageText) {
 
   // Check for relative duration: /backfill <N> <days|weeks|months>
   var amount = parseInt(parts[1], 10);
-  if (!isNaN(amount) && parts.length >= 3) {
+  var isRelative = !isNaN(amount) && parts.length >= 3 && parts[1].indexOf("-") < 0;
+  if (isRelative) {
     var unit = parts[2].toLowerCase().replace(/s$/, ""); // normalize: "days" → "day"
     endDate = new Date();
     startDate = new Date();
