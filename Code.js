@@ -62,6 +62,113 @@ function triggerEmailProcessing() {
   extractTransactions();
 }
 
+// Run from Apps Script editor to backfill for the logged-in user's Gmail
+function manualBackfill() {
+  var startDate = new Date("2026-01-01");
+  var endDate = new Date("2026-04-12");
+  startChunkedBackfill(startDate, endDate);
+}
+
+// Shared entry point for chunked backfill (used by both /backfill and manualBackfill)
+function startChunkedBackfill(startDate, endDate) {
+  endDate.setHours(23, 59, 59, 999);
+  var tz = Session.getScriptTimeZone();
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty("backfill_start", Utilities.formatDate(startDate, tz, "yyyy-MM-dd"));
+  props.setProperty("backfill_end", Utilities.formatDate(endDate, tz, "yyyy-MM-dd"));
+  props.setProperty("backfill_total_saved", "0");
+  props.setProperty("backfill_total_dupes", "0");
+  props.setProperty("backfill_total_failed", "0");
+  props.setProperty("backfill_chunk", "1");
+
+  sendTelegramMessage(
+    CHAT_ID,
+    "⏳ *Backfill started*\n" +
+      Utilities.formatDate(startDate, tz, "yyyy-MM-dd") +
+      " → " +
+      Utilities.formatDate(endDate, tz, "yyyy-MM-dd")
+  );
+
+  continueBackfill();
+}
+
+// Time-based chunking: processes until ~5 min elapsed, then self-schedules
+var BACKFILL_TIME_LIMIT_MS = 5 * 60 * 1000; // 5 minutes
+
+function continueBackfill() {
+  // Clean up trigger that invoked this
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "continueBackfill") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  var props = PropertiesService.getScriptProperties();
+  var startStr = props.getProperty("backfill_start");
+  var endStr = props.getProperty("backfill_end");
+
+  if (!startStr || !endStr) return;
+
+  var start = new Date(startStr);
+  var end = new Date(endStr);
+  end.setHours(23, 59, 59, 999);
+
+  var chunk = parseInt(props.getProperty("backfill_chunk") || "1", 10);
+
+  // Run backfill with time limit
+  var result = backfillTransactions(start, end, BACKFILL_TIME_LIMIT_MS);
+
+  // Accumulate totals
+  var totalSaved = parseInt(props.getProperty("backfill_total_saved") || "0", 10) + result.savedCount;
+  var totalDupes = parseInt(props.getProperty("backfill_total_dupes") || "0", 10) + result.duplicateCount;
+  var totalFailed = parseInt(props.getProperty("backfill_total_failed") || "0", 10) + result.failedCount;
+
+  props.setProperty("backfill_total_saved", totalSaved.toString());
+  props.setProperty("backfill_total_dupes", totalDupes.toString());
+  props.setProperty("backfill_total_failed", totalFailed.toString());
+
+  if (result.timedOut) {
+    // Send progress update
+    props.setProperty("backfill_chunk", (chunk + 1).toString());
+    sendTelegramMessage(
+      CHAT_ID,
+      "⏳ *Backfill chunk " +
+        chunk +
+        " done*\n" +
+        "💾 Saved so far: " +
+        totalSaved +
+        "\n🔁 Dupes: " +
+        totalDupes +
+        "\n⏭ Continuing..."
+    );
+    ScriptApp.newTrigger("continueBackfill").timeBased().after(10000).create();
+  } else {
+    // All done — send final summary
+    var summary = "✅ *Backfill Complete!*\n\n";
+    summary += "📧 *Emails processed:* " + result.totalEmails + "\n";
+    summary += "💾 *Transactions saved:* " + totalSaved + "\n";
+    if (totalDupes > 0) summary += "🔁 *Duplicates skipped:* " + totalDupes + "\n";
+    if (totalFailed > 0) summary += "❌ *Failed:* " + totalFailed + "\n";
+    if (chunk > 1) summary += "📦 *Chunks:* " + chunk + "\n";
+
+    var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID;
+    sendTelegramMessage(CHAT_ID, summary, {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[{ text: "📋 Open Sheet", url: sheetUrl }]]
+      }
+    });
+
+    // Clean up props
+    props.deleteProperty("backfill_start");
+    props.deleteProperty("backfill_end");
+    props.deleteProperty("backfill_total_saved");
+    props.deleteProperty("backfill_total_dupes");
+    props.deleteProperty("backfill_total_failed");
+    props.deleteProperty("backfill_chunk");
+  }
+}
+
 // Test function to manually test split transaction update
 // Run this function from the Apps Script editor to test updating a specific row
 function testSplitTransactionUpdate(testRowNumber) {
