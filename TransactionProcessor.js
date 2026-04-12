@@ -3,13 +3,23 @@ function getTransactionPrompt(email_text) {
 
   var overrideHints = "";
   var overrides = getCategoryOverrides(SHEET_ID);
-  var entries = Object.keys(overrides);
-  if (entries.length > 0) {
-    var lines = entries.map(function (m) {
-      return "- " + m + " → " + overrides[m];
+  var merchants = Object.keys(overrides);
+  if (merchants.length > 0) {
+    var lines = merchants.map(function (m) {
+      var cats = overrides[m];
+      var parts = Object.keys(cats)
+        .sort(function (a, b) {
+          return cats[b] - cats[a];
+        })
+        .map(function (c) {
+          return c + " (" + cats[c] + "x)";
+        });
+      return "- " + m + ": " + parts.join(", ");
     });
     overrideHints =
-      "\n\nKnown merchant-category mappings (use these when the merchant matches):\n" + lines.join("\n") + "\n";
+      "\n\nPast category history per merchant (use as hints, but prioritize email content for the final decision):\n" +
+      lines.join("\n") +
+      "\n";
   }
 
   var prompt_text = `Extract structured transaction details from this email in JSON format with fields: 
