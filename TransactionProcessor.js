@@ -132,7 +132,8 @@ function processSingleEmail(message, userEmail, silent, overrides) {
   try {
     var responseText = callAI(getTransactionPrompt(emailText, overrides));
     if (responseText) {
-      return handleAIResponse(responseText, emailDate, userEmail, messageId, silent);
+      var emailLink = "https://mail.google.com/mail/u/0/#all/" + messageId;
+      return handleAIResponse(responseText, emailDate, userEmail, messageId, emailLink, silent);
     }
   } catch (e) {
     // Error processing email
@@ -143,7 +144,7 @@ function processSingleEmail(message, userEmail, silent, overrides) {
 /**
  * Handles the raw text response from the AI provider, attempts JSON parsing, and saves data.
  */
-function handleAIResponse(rawText, emailDate, userEmail, messageId, silent) {
+function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, silent) {
   var cleanText = rawText;
 
   // Clean markdown code blocks
@@ -154,7 +155,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, silent) {
   try {
     if (cleanText.trim().startsWith("{")) {
       var data = JSON.parse(cleanText);
-      saveTransaction(data, emailDate, userEmail, messageId, silent);
+      saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
       return { saved: true, duplicate: false, data: data };
     } else {
       // AI response was not valid JSON
@@ -168,7 +169,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, silent) {
 /**
  * Saves the transaction structure to the sheet and sends a notification.
  */
-function saveTransaction(data, emailDate, userEmail, messageId, silent) {
+function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent) {
   var transactionDate = data.transaction_date || "N/A";
   var merchant = data.merchant || "Unknown";
   var amount = data.amount || 0;
@@ -188,7 +189,8 @@ function saveTransaction(data, emailDate, userEmail, messageId, silent) {
     user,
     splitStatus,
     messageId,
-    currency
+    currency,
+    emailLink
   ]);
 
   if (!silent) {
