@@ -249,7 +249,9 @@ function backfillTransactions(chatId, startDate, endDate) {
       failedCount++;
     }
 
-    Utilities.sleep(500);
+    if (!result.duplicate) {
+      Utilities.sleep(500);
+    }
   });
 
   var summary = `✅ *Backfill Complete*\n\n`;
