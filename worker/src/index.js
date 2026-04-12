@@ -6,7 +6,7 @@ export default {
 
     try {
       const body = await request.text();
-      const response = await fetch(env.APPS_SCRIPT_URL, {
+      await fetch(env.APPS_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: body,

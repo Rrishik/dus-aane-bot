@@ -89,6 +89,7 @@ function ensureSheetHeaders(sheet_id) {
 }
 
 // --- CategoryOverrides tab helpers ---
+// Stores merchant-category frequency: Merchant | Category | Count
 
 var OVERRIDES_TAB = "CategoryOverrides";
 
@@ -97,38 +98,42 @@ function getOrCreateOverridesSheet(sheet_id) {
   var tab = ss.getSheetByName(OVERRIDES_TAB);
   if (!tab) {
     tab = ss.insertSheet(OVERRIDES_TAB);
-    tab.appendRow(["Merchant", "Category"]);
+    tab.appendRow(["Merchant", "Category", "Count"]);
   }
   return tab;
 }
 
-// Get all merchant→category overrides as an object
+// Get merchant→category frequency map: { merchant: { category: count, ... }, ... }
 function getCategoryOverrides(sheet_id) {
   var tab = getOrCreateOverridesSheet(sheet_id);
   var lastRow = tab.getLastRow();
   if (lastRow <= 1) return {};
-  var data = tab.getRange(2, 1, lastRow - 1, 2).getValues();
+  var data = tab.getRange(2, 1, lastRow - 1, 3).getValues();
   var overrides = {};
   data.forEach(function (row) {
-    if (row[0]) overrides[row[0].toString().toLowerCase()] = row[1];
+    if (!row[0]) return;
+    var merchant = row[0].toString().toLowerCase();
+    if (!overrides[merchant]) overrides[merchant] = {};
+    overrides[merchant][row[1]] = parseInt(row[2]) || 1;
   });
   return overrides;
 }
 
-// Upsert a merchant→category override
+// Increment the count for a merchant-category pair (upsert)
 function saveCategoryOverride(sheet_id, merchant, category) {
   var tab = getOrCreateOverridesSheet(sheet_id);
   var lastRow = tab.getLastRow();
   if (lastRow > 1) {
-    var merchants = tab.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < merchants.length; i++) {
-      if (merchants[i][0].toString().toLowerCase() === merchant.toLowerCase()) {
-        tab.getRange(i + 2, 2).setValue(category);
+    var data = tab.getRange(2, 1, lastRow - 1, 3).getValues();
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0].toString().toLowerCase() === merchant.toLowerCase() && data[i][1] === category) {
+        var newCount = (parseInt(data[i][2]) || 1) + 1;
+        tab.getRange(i + 2, 3).setValue(newCount);
         return;
       }
     }
   }
-  tab.appendRow([merchant, category]);
+  tab.appendRow([merchant, category, 1]);
 }
 
 // Delete a row from the first sheet by row number
