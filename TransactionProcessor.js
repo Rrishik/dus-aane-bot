@@ -200,53 +200,38 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
 }
 
 /**
- * Backfill transactions for a date range. Called from the /backfill Telegram command.
- * Sends a progress message, processes emails, then edits it with a summary.
+ * Backfill transactions for a date range with time-based execution limit.
+ * Returns { savedCount, duplicateCount, failedCount, totalEmails, timedOut }
  */
-function backfillTransactions(chatId, startDate, endDate) {
+function backfillTransactions(startDate, endDate, timeLimitMs) {
   ensureSheetHeaders(SHEET_ID);
 
-  // Send initial progress message
-  sendTelegramMessage(
-    chatId,
-    `⏳ *Backfill in progress...*\nSearching for emails between ${Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy-MM-dd")} and ${Utilities.formatDate(endDate, Session.getScriptTimeZone(), "yyyy-MM-dd")}`
-  );
-
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
-
-  if (messagesToProcess.length === 0) {
-    sendTelegramMessage(chatId, "📭 *No emails found* in the given date range.");
-    return;
-  }
 
   var userEmail = Session.getEffectiveUser().getEmail();
   var overrides = getCategoryOverrides(SHEET_ID);
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;
-  var spentByCurrency = {};
-  var receivedByCurrency = {};
-  var categoryBreakdown = {};
+  var timedOut = false;
+  var startTime = new Date().getTime();
 
-  messagesToProcess.forEach((message) => {
-    var result = processSingleEmail(message, userEmail, true, overrides);
+  for (var i = 0; i < messagesToProcess.length; i++) {
+    // Check time limit before processing a non-trivial email
+    if (timeLimitMs) {
+      var elapsed = new Date().getTime() - startTime;
+      if (elapsed > timeLimitMs) {
+        timedOut = true;
+        break;
+      }
+    }
+
+    var result = processSingleEmail(messagesToProcess[i], userEmail, true, overrides);
 
     if (result.duplicate) {
       duplicateCount++;
     } else if (result.saved && result.data) {
       savedCount++;
-      var amt = parseFloat(result.data.amount) || 0;
-      var cur = result.data.currency || "INR";
-      var type = result.data.transaction_type || "Debit";
-
-      if (type === "Credit") {
-        receivedByCurrency[cur] = (receivedByCurrency[cur] || 0) + amt;
-      } else {
-        spentByCurrency[cur] = (spentByCurrency[cur] || 0) + amt;
-        var cat = result.data.category || "Uncategorized";
-        var catKey = cat + "|||" + cur;
-        categoryBreakdown[catKey] = (categoryBreakdown[catKey] || 0) + amt;
-      }
     } else {
       failedCount++;
     }
@@ -254,53 +239,13 @@ function backfillTransactions(chatId, startDate, endDate) {
     if (!result.duplicate) {
       Utilities.sleep(500);
     }
-  });
-
-  var summary = `✅ *Backfill Complete*\n\n`;
-  summary += `📧 *Emails found:* ${messagesToProcess.length}\n`;
-  summary += `💾 *Transactions saved:* ${savedCount}\n`;
-  if (duplicateCount > 0) summary += `🔁 *Duplicates skipped:* ${duplicateCount}\n`;
-  if (failedCount > 0) summary += `❌ *Failed:* ${failedCount}\n`;
-
-  var spentCurrencies = Object.keys(spentByCurrency);
-  if (spentCurrencies.length === 1) {
-    summary += `💰 *Total Spent:* ${spentCurrencies[0]} ${spentByCurrency[spentCurrencies[0]].toFixed(2)}\n`;
-  } else if (spentCurrencies.length > 1) {
-    summary += `💰 *Total Spent:*\n`;
-    spentCurrencies.forEach(function (cur) {
-      summary += `  • ${cur} ${spentByCurrency[cur].toFixed(2)}\n`;
-    });
   }
 
-  var receivedCurrencies = Object.keys(receivedByCurrency);
-  if (receivedCurrencies.length === 1) {
-    summary += `💵 *Total Received:* ${receivedCurrencies[0]} ${receivedByCurrency[receivedCurrencies[0]].toFixed(2)}\n`;
-  } else if (receivedCurrencies.length > 1) {
-    summary += `💵 *Total Received:*\n`;
-    receivedCurrencies.forEach(function (cur) {
-      summary += `  • ${cur} ${receivedByCurrency[cur].toFixed(2)}\n`;
-    });
-  }
-
-  var catKeys = Object.keys(categoryBreakdown).sort(function (a, b) {
-    return categoryBreakdown[b] - categoryBreakdown[a];
-  });
-  if (catKeys.length > 0) {
-    summary += `\n📂 *Category breakdown:*\n`;
-    catKeys.forEach(function (catKey) {
-      var parts = catKey.split("|||");
-      var cat = parts[0];
-      var cur = parts[1];
-      summary += `• ${cat}: ${cur} ${categoryBreakdown[catKey].toFixed(2)}\n`;
-    });
-  }
-
-  var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID;
-
-  sendTelegramMessage(chatId, summary, {
-    parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [[{ text: "📋 Open Sheet", url: sheetUrl }]]
-    }
-  });
+  return {
+    savedCount: savedCount,
+    duplicateCount: duplicateCount,
+    failedCount: failedCount,
+    totalEmails: messagesToProcess.length,
+    timedOut: timedOut
+  };
 }

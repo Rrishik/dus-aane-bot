@@ -138,10 +138,7 @@ function handleBackfillCommand(chatId, messageText) {
     return;
   }
 
-  // Set end date to end of day
-  endDate.setHours(23, 59, 59, 999);
-
-  backfillTransactions(chatId, startDate, endDate);
+  startChunkedBackfill(startDate, endDate);
 }
 
 // Method to handle the callback queries sent from the Telegram message reply buttons.
