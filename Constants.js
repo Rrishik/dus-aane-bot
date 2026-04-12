@@ -22,6 +22,7 @@ const CATEGORY_COLUMN = 5; // Column E
 const SPLIT_COLUMN = 8; // Column H
 const MESSAGE_ID_COLUMN = 9; // Column I
 const CURRENCY_COLUMN = 10; // Column J
+const EMAIL_LINK_COLUMN = 11; // Column K
 
 // Split Status Values (enum-like constants)
 const SPLIT_STATUS = {

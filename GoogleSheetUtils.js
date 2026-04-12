@@ -73,7 +73,8 @@ function ensureSheetHeaders(sheet_id) {
       "User",
       "Split",
       "Message ID",
-      "Currency"
+      "Currency",
+      "Email Link"
     ]);
   }
 }
