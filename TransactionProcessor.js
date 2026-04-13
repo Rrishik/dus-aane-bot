@@ -61,9 +61,10 @@ function extractTransactions() {
 
   var userEmail = Session.getEffectiveUser().getEmail();
   var overrides = getCategoryOverrides(SHEET_ID);
+  var resolutions = getMerchantResolutions(SHEET_ID);
 
   messagesToProcess.forEach((message) => {
-    processSingleEmail(message, userEmail, false, overrides);
+    processSingleEmail(message, userEmail, false, overrides, resolutions);
 
     Utilities.sleep(500);
   });
@@ -119,7 +120,7 @@ function fetchAndFilterMessages(startDate, endDate) {
  * Processes a single email message: calls the AI provider, parses response, saves to sheet, and notifies Telegram.
  * Returns { saved: true/false, duplicate: true/false, data: parsed transaction or null }.
  */
-function processSingleEmail(message, userEmail, silent, overrides) {
+function processSingleEmail(message, userEmail, silent, overrides, resolutions) {
   var emailText = message.getPlainBody();
   var emailDate = message.getDate();
   var messageId = message.getId();
@@ -133,7 +134,7 @@ function processSingleEmail(message, userEmail, silent, overrides) {
     var responseText = callAI(getTransactionPrompt(emailText, overrides));
     if (responseText) {
       var emailLink = "https://mail.google.com/mail/u/0/#all/" + messageId;
-      return handleAIResponse(responseText, emailDate, userEmail, messageId, emailLink, silent);
+      return handleAIResponse(responseText, emailDate, userEmail, messageId, emailLink, silent, resolutions);
     }
   } catch (e) {
     // Error processing email
@@ -144,7 +145,7 @@ function processSingleEmail(message, userEmail, silent, overrides) {
 /**
  * Handles the raw text response from the AI provider, attempts JSON parsing, and saves data.
  */
-function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, silent) {
+function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, silent, resolutions) {
   var cleanText = rawText;
 
   // Clean markdown code blocks
@@ -155,6 +156,10 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
   try {
     if (cleanText.trim().startsWith("{")) {
       var data = JSON.parse(cleanText);
+      // Resolve merchant name before saving
+      if (data.merchant && resolutions) {
+        data.merchant = resolveMerchant(data.merchant, resolutions);
+      }
       saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
       return { saved: true, duplicate: false, data: data };
     } else {
@@ -210,6 +215,7 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
 
   var userEmail = Session.getEffectiveUser().getEmail();
   var overrides = getCategoryOverrides(SHEET_ID);
+  var resolutions = getMerchantResolutions(SHEET_ID);
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;
@@ -228,7 +234,7 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
       }
     }
 
-    var result = processSingleEmail(messagesToProcess[i], userEmail, true, overrides);
+    var result = processSingleEmail(messagesToProcess[i], userEmail, true, overrides, resolutions);
     processed++;
 
     if (result.duplicate) {

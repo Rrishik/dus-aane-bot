@@ -523,7 +523,15 @@ function handleStatsCommand(chatId) {
 
 function handleAskCommand(chatId, messageText) {
   var question = messageText.replace(/^\/ask(@\w+)?\s*/i, "").trim();
+
+  // Retrieve thinking message ID sent by doPost
+  var props = PropertiesService.getScriptProperties();
+  var thinkingMsgId = props.getProperty("ask_thinking_msg_id");
+  props.deleteProperty("ask_thinking_msg_id");
+  thinkingMsgId = thinkingMsgId ? parseInt(thinkingMsgId, 10) : null;
+
   if (!question) {
+    if (thinkingMsgId) deleteTelegramMessage(chatId, thinkingMsgId);
     sendTelegramMessage(
       chatId,
       "❓ *Ask me anything about your spending!*\n\n" +
@@ -534,18 +542,6 @@ function handleAskCommand(chatId, messageText) {
         "• `/ask Compare grocery spending Feb vs Mar`"
     );
     return;
-  }
-
-  // Send thinking message, then edit with response
-  var thinkingMsg = sendTelegramMessage(chatId, "🤔 _Thinking..._");
-  var thinkingMsgId = null;
-  try {
-    var parsed = JSON.parse(thinkingMsg);
-    if (parsed.result && parsed.result.message_id) {
-      thinkingMsgId = parsed.result.message_id;
-    }
-  } catch (e) {
-    // ignore parse errors
   }
 
   try {

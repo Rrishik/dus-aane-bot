@@ -10,9 +10,31 @@ function doPost(e) {
     var isDeferred = commandText.startsWith("/backfill") || commandText.startsWith("/ask");
 
     if (isDeferred) {
+      var chatId = update.message.chat.id;
       if (commandText.startsWith("/backfill")) {
-        var chatId = update.message.chat.id;
-        sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
+        var ackResp = sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
+        try {
+          var parsedAck = JSON.parse(ackResp);
+          if (parsedAck.result && parsedAck.result.message_id) {
+            var propsAck = PropertiesService.getScriptProperties();
+            propsAck.setProperty("backfill_ack_msg_id", parsedAck.result.message_id.toString());
+            propsAck.setProperty("backfill_ack_chat_id", chatId.toString());
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else if (commandText.startsWith("/ask")) {
+        // Send thinking message immediately and store its ID for later editing
+        var thinkingResp = sendTelegramMessage(chatId, "🤔 _Thinking..._");
+        try {
+          var parsed = JSON.parse(thinkingResp);
+          if (parsed.result && parsed.result.message_id) {
+            var props2 = PropertiesService.getScriptProperties();
+            props2.setProperty("ask_thinking_msg_id", parsed.result.message_id.toString());
+          }
+        } catch (e) {
+          // ignore
+        }
       }
 
       var props = PropertiesService.getScriptProperties();
@@ -90,6 +112,15 @@ function startChunkedBackfill(startDate, endDate) {
       " → " +
       Utilities.formatDate(endDate, tz, "yyyy-MM-dd")
   );
+
+  // Delete the initial ack message from doPost
+  var ackMsgId = props.getProperty("backfill_ack_msg_id");
+  var ackChatId = props.getProperty("backfill_ack_chat_id");
+  if (ackMsgId && ackChatId) {
+    deleteTelegramMessage(ackChatId, parseInt(ackMsgId, 10));
+    props.deleteProperty("backfill_ack_msg_id");
+    props.deleteProperty("backfill_ack_chat_id");
+  }
 
   continueBackfill();
 }
