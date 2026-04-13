@@ -5,14 +5,15 @@ function doPost(e) {
     var contents = e.postData.contents;
     var update = JSON.parse(contents);
 
-    // Check if this is a /backfill command — defer to async trigger
-    var isBackfill =
-      update.message && update.message.text && update.message.text.split("@")[0].toLowerCase().startsWith("/backfill");
+    // Check if this is a /backfill or /ask command — defer to async trigger
+    var commandText = update.message && update.message.text ? update.message.text.split("@")[0].toLowerCase() : "";
+    var isDeferred = commandText.startsWith("/backfill") || commandText.startsWith("/ask");
 
-    if (isBackfill) {
-      // Send immediate acknowledgment
-      var chatId = update.message.chat.id;
-      sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
+    if (isDeferred) {
+      if (commandText.startsWith("/backfill")) {
+        var chatId = update.message.chat.id;
+        sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
+      }
 
       var props = PropertiesService.getScriptProperties();
       props.setProperty("pending_update", contents);
@@ -30,7 +31,7 @@ function doPost(e) {
   return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
 }
 
-// Process the stored webhook update (runs async via trigger, only for /backfill)
+// Process the stored webhook update (runs async via trigger, for /backfill and /ask)
 function processWebhookUpdate() {
   // Clean up this trigger
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
