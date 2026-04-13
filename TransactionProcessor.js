@@ -25,7 +25,7 @@ function getTransactionPrompt(email_text, overrides) {
 
   var prompt_text = `Extract structured transaction details from this email in JSON format with fields: 
 - transaction_date (YYYY-MM-DD)
-- merchant
+- merchant (if identifiable from the email; use empty string "" if the email is a generic bank alert without a specific merchant/payee)
 - amount (only numeric, no currency symbols)
 - currency (3-letter ISO code, e.g. INR, JPY, USD. Default to INR if unclear)
 - category
@@ -34,6 +34,10 @@ function getTransactionPrompt(email_text, overrides) {
 Rules for transaction_type:
 - If money is spent (e.g., purchase, bill payment), mark it as "Debit".
 - If money is received (e.g., refund, salary, cashback), mark it as "Credit".
+
+Rules for merchant:
+- Extract the actual merchant/payee name, NOT the bank name
+- If the email is a generic bank debit/credit alert with no merchant info, set merchant to ""
 
 Rules for category:
 - For Debit transactions, category must be one of: ${categoryList}

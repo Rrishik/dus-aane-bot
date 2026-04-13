@@ -208,7 +208,7 @@ function getTransactionMessageAsString(transaction_details, user) {
       ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
       : rawDate || "Unknown Date"
   );
-  var merchant = escapeMarkdown(transaction_details.merchant);
+  var merchant = transaction_details.merchant ? escapeMarkdown(transaction_details.merchant) : "—";
   var category = escapeMarkdown(transaction_details.category);
   var currency = transaction_details.currency || "INR";
   user = escapeMarkdown(user);
@@ -231,13 +231,17 @@ function sendTransactionMessage(transaction_details, messageId, user) {
   };
 
   if (messageId) {
-    options.reply_markup = buildReplyMarkup([
-      [
-        { text: "✂️ Split", callback_data: "split_" + messageId },
-        { text: "✏️ Category", callback_data: "editcat_" + messageId },
-        { text: "🗑️ Delete", callback_data: "del_" + messageId }
-      ]
-    ]);
+    var buttons = [
+      { text: "✂️ Split", callback_data: "split_" + messageId },
+      { text: "✏️ Category", callback_data: "editcat_" + messageId },
+      { text: "🗑️ Delete", callback_data: "del_" + messageId }
+    ];
+    var rows = [buttons];
+    // Add "Set Merchant" button if merchant is empty
+    if (!transaction_details.merchant) {
+      rows.unshift([{ text: "🏠 Set Merchant", callback_data: "setmerch_" + messageId }]);
+    }
+    options.reply_markup = buildReplyMarkup(rows);
   }
 
   sendTelegramMessage(CHAT_ID, message, options);
