@@ -33,6 +33,9 @@ function getTransactionPrompt(email_text, overrides) {
 Rules for transaction_type:
 - If money is spent (e.g., purchase, bill payment), mark it as "Debit".
 - If money is received (e.g., refund, salary, cashback), mark it as "Credit".
+
+If the email is NOT a transaction (e.g., surveys, OTPs, marketing, feedback requests, account alerts with no monetary transaction), return:
+{"not_a_transaction": true, "reason": "brief reason why"}
 ${overrideHints}
 Example JSON Output:
 {
@@ -156,6 +159,16 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
   try {
     if (cleanText.trim().startsWith("{")) {
       var data = JSON.parse(cleanText);
+      // Skip non-transaction emails but notify via Telegram
+      if (data.not_a_transaction) {
+        if (!silent) {
+          var reason = data.reason || "Not a transaction";
+          var skipMsg =
+            "ℹ️ *New email detected but skipped*\n" + "Reason: " + reason + "\n" + "[View email](" + emailLink + ")";
+          sendTelegramMessage(CHAT_ID, skipMsg, { parse_mode: "Markdown" });
+        }
+        return { saved: false, duplicate: false, data: null };
+      }
       // Resolve merchant name before saving
       if (data.merchant && resolutions) {
         data.merchant = resolveMerchant(data.merchant, resolutions);
