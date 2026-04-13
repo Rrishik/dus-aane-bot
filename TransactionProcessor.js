@@ -1,5 +1,6 @@
 function getTransactionPrompt(email_text, overrides) {
   var categoryList = CATEGORIES.join(", ");
+  var creditCategoryList = CREDIT_CATEGORIES.join(", ");
 
   var overrideHints = "";
   if (!overrides) overrides = getCategoryOverrides(SHEET_ID);
@@ -27,12 +28,16 @@ function getTransactionPrompt(email_text, overrides) {
 - merchant
 - amount (only numeric, no currency symbols)
 - currency (3-letter ISO code, e.g. INR, JPY, USD. Default to INR if unclear)
-- category (must be one of: ${categoryList})
+- category
 - transaction_type (Debit or Credit based on email content)
 
 Rules for transaction_type:
 - If money is spent (e.g., purchase, bill payment), mark it as "Debit".
 - If money is received (e.g., refund, salary, cashback), mark it as "Credit".
+
+Rules for category:
+- For Debit transactions, category must be one of: ${categoryList}
+- For Credit transactions, category must be one of: ${creditCategoryList}
 
 If the email is NOT a transaction (e.g., surveys, OTPs, marketing, feedback requests, account alerts with no monetary transaction), return:
 {"not_a_transaction": true, "reason": "brief reason why"}

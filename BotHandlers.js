@@ -190,10 +190,17 @@ function handleCallbackQuery(update) {
 
     // Handle "Edit Category" — show category picker
     if (action === "editcat") {
+      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, callbackPayload);
+      var isCredit = false;
+      if (rowNumber > 0) {
+        var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+        var txnType = sheet.getRange(rowNumber, 6).getValue(); // Column F = Transaction Type
+        isCredit = txnType && txnType.toString().toLowerCase() === "credit";
+      }
       answerCallbackQuery(callbackQueryId, "📂 Pick a category", false);
       sendTelegramMessage(chatId, "📂 *Select a category:*", {
         parse_mode: "Markdown",
-        reply_markup: buildCategoryKeyboard(callbackPayload)
+        reply_markup: buildCategoryKeyboard(callbackPayload, isCredit ? CREDIT_CATEGORIES : CATEGORIES)
       });
       return;
     }
@@ -208,12 +215,7 @@ function handleCallbackQuery(update) {
       var emailMessageId = callbackPayload.substring(0, lastUnderscore);
       var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
 
-      if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= CATEGORIES.length) {
-        answerCallbackQuery(callbackQueryId, "❌ Invalid category", false);
-        return;
-      }
-
-      var newCategory = CATEGORIES[categoryIndex];
+      // Look up transaction type to determine which category list to use
       var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
       if (rowNumber < 0) {
         answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
@@ -222,6 +224,15 @@ function handleCallbackQuery(update) {
 
       var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
       var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+      var txnType = rowData[5]; // Column F = Transaction Type
+      var catList = txnType && txnType.toString().toLowerCase() === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
+
+      if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
+        answerCallbackQuery(callbackQueryId, "❌ Invalid category", false);
+        return;
+      }
+
+      var newCategory = catList[categoryIndex];
       var currentCategory = rowData[CATEGORY_COLUMN - 1];
       var merchant = rowData[2]; // Column C = Merchant
       var updateResult = updateGoogleSheetCellWithFeedback(

@@ -47,6 +47,8 @@ const CATEGORIES = [
   "CC Bill Payment"
 ];
 
+const CREDIT_CATEGORIES = ["Salary", "Refund", "Cashback", "Transfer In", "Reimbursement", "Interest/Dividend"];
+
 const CATEGORY_EMOJIS = {
   Shopping: "🛍",
   Groceries: "🥦",
@@ -59,7 +61,13 @@ const CATEGORY_EMOJIS = {
   Education: "🎓",
   Investment: "📈",
   Subscriptions: "📱",
-  "CC Bill Payment": "💳"
+  "CC Bill Payment": "💳",
+  Salary: "💼",
+  Refund: "🔄",
+  Cashback: "🎁",
+  "Transfer In": "📥",
+  Reimbursement: "🧾",
+  "Interest/Dividend": "🏦"
 };
 
 // Gmail
