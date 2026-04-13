@@ -46,56 +46,34 @@ function getMonthlyAnalytics(year, month, numMonths) {
     return t.type === "Debit";
   });
 
-  // Totals per currency
-  var spentByCurrency = {};
-  debits.forEach(function (t) {
-    spentByCurrency[t.currency] = (spentByCurrency[t.currency] || 0) + t.amount;
-  });
+  var spentByCurrency = sumByCurrency(debits);
 
-  // Category breakdown per currency
+  // Category breakdown (uses ||| separator for backward compat with formatter)
   var categorySpend = {};
   debits.forEach(function (t) {
     var key = t.category + "|||" + t.currency;
     categorySpend[key] = (categorySpend[key] || 0) + t.amount;
   });
 
-  // Top merchants by spend (within primary currency INR, fallback to all)
-  var merchantSpend = {};
-  debits.forEach(function (t) {
-    var key = t.merchant + "|||" + t.currency;
-    merchantSpend[key] = (merchantSpend[key] || 0) + t.amount;
-  });
-  var sortedMerchants = Object.keys(merchantSpend)
-    .sort(function (a, b) {
-      return merchantSpend[b] - merchantSpend[a];
-    })
-    .slice(0, 5);
+  var topMerchants = aggregateByField(debits, "merchant")
+    .slice(0, 5)
+    .map(function (m) {
+      return { merchant: m.name, currency: m.currency, amount: m.amount };
+    });
 
-  // Split ratio
   var splitCount = debits.filter(function (t) {
     return t.split === SPLIT_STATUS.SPLIT;
   }).length;
-  var personalCount = debits.length - splitCount;
-
-  // Per-user spend
-  var userSpend = {};
-  debits.forEach(function (t) {
-    if (!userSpend[t.user]) userSpend[t.user] = {};
-    userSpend[t.user][t.currency] = (userSpend[t.user][t.currency] || 0) + t.amount;
-  });
 
   return {
     totalTransactions: txns.length,
     debitCount: debits.length,
     spentByCurrency: spentByCurrency,
     categorySpend: categorySpend,
-    topMerchants: sortedMerchants.map(function (key) {
-      var parts = key.split("|||");
-      return { merchant: parts[0], currency: parts[1], amount: merchantSpend[key] };
-    }),
+    topMerchants: topMerchants,
     splitCount: splitCount,
-    personalCount: personalCount,
-    userSpend: userSpend
+    personalCount: debits.length - splitCount,
+    userSpend: aggregateByUser(debits)
   };
 }
 
@@ -332,58 +310,16 @@ function getWhoOwesAnalytics(year, month) {
   if (year !== undefined && month !== undefined) {
     txns = filterByMonth(all, year, month);
   } else {
-    // Default: current month
     var now = new Date();
     txns = filterByMonth(all, now.getFullYear(), now.getMonth());
   }
 
-  var splitTxns = txns.filter(function (t) {
-    return t.type === "Debit" && t.split === SPLIT_STATUS.SPLIT;
+  var debits = txns.filter(function (t) {
+    return t.type === "Debit";
   });
-
-  if (splitTxns.length === 0) return null;
-
-  // Each user's total split spend (they paid this much for shared expenses)
-  var userPaid = {};
-  splitTxns.forEach(function (t) {
-    if (!userPaid[t.user]) userPaid[t.user] = {};
-    userPaid[t.user][t.currency] = (userPaid[t.user][t.currency] || 0) + t.amount;
-  });
-
-  var users = Object.keys(userPaid);
-  // Collect all currencies involved
-  var allCurrencies = {};
-  users.forEach(function (u) {
-    Object.keys(userPaid[u]).forEach(function (c) {
-      allCurrencies[c] = true;
-    });
-  });
-
-  // Per currency: each person's fair share = total / num_users
-  // Settlement: who paid more than fair share is owed money
-  var settlements = {};
-  Object.keys(allCurrencies).forEach(function (cur) {
-    var total = 0;
-    users.forEach(function (u) {
-      total += (userPaid[u] || {})[cur] || 0;
-    });
-    var fairShare = total / users.length;
-
-    var balances = {};
-    users.forEach(function (u) {
-      var paid = (userPaid[u] || {})[cur] || 0;
-      balances[u] = paid - fairShare; // positive = overpaid (is owed), negative = underpaid (owes)
-    });
-
-    settlements[cur] = { total: total, fairShare: fairShare, balances: balances };
-  });
-
-  return {
-    splitCount: splitTxns.length,
-    userPaid: userPaid,
-    settlements: settlements,
-    users: users
-  };
+  var result = calcSplitSettlement(debits);
+  if (result.splitCount === 0) return null;
+  return result;
 }
 
 function formatWhoOwesMessage(year, month, data) {
@@ -464,4 +400,92 @@ function makeBar(value, months, type) {
   for (var i = 0; i < len; i++) bar += "▓";
   for (var j = len; j < 8; j++) bar += "░";
   return bar;
+}
+
+// ─── Shared Aggregation Helpers ──────────────────────────────────────
+
+// Filter transactions by date range (inclusive)
+function filterByDateRange(transactions, startDate, endDate) {
+  var start = new Date(startDate);
+  start.setHours(0, 0, 0, 0);
+  var end = new Date(endDate);
+  end.setHours(23, 59, 59, 999);
+  return transactions.filter(function (t) {
+    return t.date >= start && t.date <= end;
+  });
+}
+
+// Sum amounts by currency from a list of transactions
+function sumByCurrency(transactions) {
+  var result = {};
+  transactions.forEach(function (t) {
+    result[t.currency] = (result[t.currency] || 0) + t.amount;
+  });
+  return result;
+}
+
+// Group transactions by a key field + currency, returning {amount, count} per group
+function aggregateByField(transactions, field) {
+  var groups = {};
+  transactions.forEach(function (t) {
+    var key = t[field] + "|" + t.currency;
+    if (!groups[key]) groups[key] = { name: t[field], currency: t.currency, amount: 0, count: 0 };
+    groups[key].amount += t.amount;
+    groups[key].count++;
+  });
+  return Object.keys(groups)
+    .map(function (k) {
+      return groups[k];
+    })
+    .sort(function (a, b) {
+      return b.amount - a.amount;
+    });
+}
+
+// Per-user spend breakdown
+function aggregateByUser(transactions) {
+  var users = {};
+  transactions.forEach(function (t) {
+    if (!users[t.user]) users[t.user] = {};
+    users[t.user][t.currency] = (users[t.user][t.currency] || 0) + t.amount;
+  });
+  return users;
+}
+
+// Calculate split settlements between users
+function calcSplitSettlement(debits) {
+  var splitTxns = debits.filter(function (t) {
+    return t.split === SPLIT_STATUS.SPLIT;
+  });
+  var personalTxns = debits.filter(function (t) {
+    return t.split !== SPLIT_STATUS.SPLIT;
+  });
+
+  var splitTotal = sumByCurrency(splitTxns);
+  var personalTotal = sumByCurrency(personalTxns);
+  var userPaid = aggregateByUser(splitTxns);
+  var users = Object.keys(userPaid);
+
+  // Per currency: fair share = total / num_users
+  var settlements = {};
+  Object.keys(splitTotal).forEach(function (cur) {
+    var total = splitTotal[cur];
+    var fairShare = total / Math.max(users.length, 1);
+    var balances = {};
+    users.forEach(function (u) {
+      var paid = (userPaid[u] || {})[cur] || 0;
+      balances[u] = paid - fairShare;
+    });
+    settlements[cur] = { total: total, fairShare: fairShare, balances: balances };
+  });
+
+  return {
+    splitCount: splitTxns.length,
+    personalCount: personalTxns.length,
+    splitTotal: splitTotal,
+    personalTotal: personalTotal,
+    userPaid: userPaid,
+    users: users,
+    settlements: settlements
+  };
 }

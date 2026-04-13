@@ -25,6 +25,9 @@ function handleMessage(update) {
         case "/stats":
           handleStatsCommand(chatId);
           break;
+        case "/ask":
+          handleAskCommand(chatId, messageText);
+          break;
         case "/backfill":
           handleBackfillCommand(chatId, messageText);
           break;
@@ -55,6 +58,8 @@ function handleHelpCommand(chatId, username) {
     `  ↳ /recent rishik - Filter by user\n` +
     `  ↳ /recent 10 rishik - Both filters\n\n` +
     `• /stats - Analytics dashboard\n` +
+    `• /ask - Ask anything about your spending\n` +
+    `  ↳ /ask How much did we spend on food?\n` +
     `• /help - Show this message\n\n` +
     `*Hidden Commands:*\n` +
     `• /backfill - Backfill transactions\n` +
@@ -512,6 +517,58 @@ function handleStatsCommand(chatId) {
       ]
     }
   });
+}
+
+// ─── Ask Command (AI tool-calling) ───────────────────────────────────
+
+function handleAskCommand(chatId, messageText) {
+  var question = messageText.replace(/^\/ask(@\w+)?\s*/i, "").trim();
+  if (!question) {
+    sendTelegramMessage(
+      chatId,
+      "❓ *Ask me anything about your spending!*\n\n" +
+        "Examples:\n" +
+        "• `/ask How much did we spend on food?`\n" +
+        "• `/ask Top merchants this month`\n" +
+        "• `/ask Who owes whom in March?`\n" +
+        "• `/ask Compare grocery spending Feb vs Mar`"
+    );
+    return;
+  }
+
+  // Send thinking message, then edit with response
+  var thinkingMsg = sendTelegramMessage(chatId, "🤔 _Thinking..._");
+  var thinkingMsgId = null;
+  try {
+    var parsed = JSON.parse(thinkingMsg);
+    if (parsed.result && parsed.result.message_id) {
+      thinkingMsgId = parsed.result.message_id;
+    }
+  } catch (e) {
+    // ignore parse errors
+  }
+
+  try {
+    var answer = runAskLoop(question);
+    var escaped = escapeMarkdown(answer);
+
+    if (thinkingMsgId) {
+      // Edit the thinking message with the answer
+      sendTelegramMessage(chatId, escaped, {
+        message_id: thinkingMsgId
+      });
+    } else {
+      sendTelegramMessage(chatId, escaped);
+    }
+  } catch (error) {
+    console.error("Error in handleAskCommand:", error.message, error.stack);
+    var errorMsg = "❌ Something went wrong. Try /stats for preset analytics.";
+    if (thinkingMsgId) {
+      sendTelegramMessage(chatId, errorMsg, { message_id: thinkingMsgId });
+    } else {
+      sendTelegramMessage(chatId, errorMsg);
+    }
+  }
 }
 
 function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subAction) {
