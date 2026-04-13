@@ -175,3 +175,37 @@ function resolveMerchant(rawName, resolutions) {
   }
   return rawName;
 }
+
+// Check if a merchant is already in the MerchantResolution tab (column A, case-insensitive).
+// If not, add it with a blank Resolved Name. Returns true if a new row was added.
+function addNewMerchantIfNeeded(sheet_id, rawMerchant) {
+  if (!rawMerchant) return false;
+  var tab = getOrCreateResolutionSheet(sheet_id);
+  var lastRow = tab.getLastRow();
+  if (lastRow > 1) {
+    var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
+    var lower = rawMerchant.toLowerCase();
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0].toString().toLowerCase() === lower) return false;
+    }
+  }
+  tab.appendRow([rawMerchant, ""]);
+  return true;
+}
+
+// One-time script: seed MerchantResolution with all unique merchants from the main sheet.
+function populateResolutionSheet() {
+  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+  var merchants = sheet.getRange(2, 3, lastRow - 1, 1).getValues();
+  var added = 0;
+  var seen = {};
+  merchants.forEach(function (row) {
+    var m = row[0] ? row[0].toString().trim() : "";
+    if (!m || seen[m.toLowerCase()]) return;
+    seen[m.toLowerCase()] = true;
+    if (addNewMerchantIfNeeded(SHEET_ID, m)) added++;
+  });
+  Logger.log("Populated MerchantResolution: " + added + " new merchants added");
+}

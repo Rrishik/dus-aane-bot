@@ -175,10 +175,23 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
         return { saved: false, duplicate: false, data: null };
       }
       // Resolve merchant name before saving
+      var rawMerchant = data.merchant;
       if (data.merchant && resolutions) {
         data.merchant = resolveMerchant(data.merchant, resolutions);
       }
       saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
+      // Register new merchant for resolution review
+      if (rawMerchant && addNewMerchantIfNeeded(SHEET_ID, rawMerchant) && !silent) {
+        var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit";
+        var newMerchantMsg =
+          "\uD83C\uDD95 New merchant detected: *" +
+          escapeMarkdown(rawMerchant) +
+          "*\n" +
+          "[Add resolved name in sheet](" +
+          sheetUrl +
+          ")";
+        sendTelegramMessage(CHAT_ID, newMerchantMsg, { parse_mode: "Markdown" });
+      }
       return { saved: true, duplicate: false, data: data };
     } else {
       // AI response was not valid JSON
