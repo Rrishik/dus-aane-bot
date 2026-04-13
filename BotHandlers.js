@@ -40,6 +40,31 @@ function handleMessage(update) {
       showTransactionSummary(chatId);
     } else if (messageText === "📅 Recent Transactions") {
       showRecentTransactions(chatId, "/recent");
+    } else {
+      // Check for pending merchant input
+      var props = PropertiesService.getScriptProperties();
+      var pendingEmailId = props.getProperty("pending_merchant_email_id");
+      var pendingChatId = props.getProperty("pending_merchant_chat_id");
+      if (pendingEmailId && pendingChatId === chatId.toString()) {
+        // Clear pending state
+        props.deleteProperty("pending_merchant_email_id");
+        props.deleteProperty("pending_merchant_chat_id");
+        var merchantName = messageText.trim();
+        var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, pendingEmailId);
+        if (rowNumber < 0) {
+          sendTelegramMessage(chatId, "❌ Transaction not found");
+          return;
+        }
+        updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, 3, merchantName, "");
+        // Also add to MerchantResolution and CategoryOverrides
+        addNewMerchantIfNeeded(SHEET_ID, merchantName);
+        var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+        var category = sheet.getRange(rowNumber, CATEGORY_COLUMN).getValue();
+        if (category) saveCategoryOverride(SHEET_ID, merchantName, category.toString());
+        sendTelegramMessage(chatId, "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*", {
+          parse_mode: "Markdown"
+        });
+      }
     }
   }
 }
@@ -259,6 +284,25 @@ function handleCallbackQuery(update) {
         message_id: telegramMessageId
       });
       answerCallbackQuery(callbackQueryId, "✅ " + newCategory, false);
+      return;
+    }
+
+    // Handle "Set Merchant" — ask user to type merchant name
+    if (action === "setmerch") {
+      var emailMessageId = callbackPayload;
+      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+      if (rowNumber < 0) {
+        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
+        return;
+      }
+      // Store pending state
+      var props = PropertiesService.getScriptProperties();
+      props.setProperty("pending_merchant_email_id", emailMessageId);
+      props.setProperty("pending_merchant_chat_id", chatId.toString());
+      answerCallbackQuery(callbackQueryId, "🏪 Type the merchant name", false);
+      sendTelegramMessage(chatId, "🏪 *Type the merchant name for this transaction:*", {
+        parse_mode: "Markdown"
+      });
       return;
     }
 
