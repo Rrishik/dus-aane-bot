@@ -136,14 +136,14 @@ function formatMonthlyMessage(year, month, data, numMonths) {
     var amount = data.categorySpend[catKey];
     var pct = ((amount / (data.spentByCurrency[cur] || 1)) * 100).toFixed(1);
     var emoji = CATEGORY_EMOJIS[cat] || "•";
-    msg += emoji + " " + cat + ": " + cur + " " + formatAmount(amount) + " (" + pct + "%)\n";
+    msg += emoji + " " + escapeMarkdown(cat) + ": " + cur + " " + formatAmount(amount) + " (" + pct + "%)\n";
   });
 
   // Top merchants
   if (data.topMerchants.length > 0) {
     msg += "\n🏪 *Top Merchants:*\n";
     data.topMerchants.forEach(function (m, i) {
-      msg += i + 1 + ". " + m.merchant + " — " + m.currency + " " + formatAmount(m.amount) + "\n";
+      msg += i + 1 + ". " + escapeMarkdown(m.merchant) + " — " + m.currency + " " + formatAmount(m.amount) + "\n";
     });
   }
 
@@ -159,7 +159,7 @@ function formatMonthlyMessage(year, month, data, numMonths) {
       var parts = Object.keys(perCur).map(function (cur) {
         return cur + " " + formatAmount(perCur[cur]);
       });
-      msg += "• " + user + ": " + parts.join(", ") + "\n";
+      msg += "• " + escapeMarkdown(user) + ": " + parts.join(", ") + "\n";
     });
   }
 
@@ -316,7 +316,7 @@ function formatTrendsMessage(months) {
       deltas.forEach(function (d) {
         var emoji = CATEGORY_EMOJIS[d.category] || "•";
         var arrow = d.delta > 0 ? "↑" : "↓";
-        msg += emoji + " " + d.category + " " + arrow + " ₹" + formatAmount(Math.abs(d.delta)) + "\n";
+        msg += emoji + " " + escapeMarkdown(d.category) + " " + arrow + " ₹" + formatAmount(Math.abs(d.delta)) + "\n";
       });
     }
   }
@@ -400,7 +400,7 @@ function formatWhoOwesMessage(year, month, data) {
     var parts = Object.keys(data.userPaid[user]).map(function (cur) {
       return cur + " " + formatAmount(data.userPaid[user][cur]);
     });
-    msg += "• " + user + ": " + parts.join(", ") + "\n";
+    msg += "• " + escapeMarkdown(user) + ": " + parts.join(", ") + "\n";
   });
 
   // Settlement
@@ -424,7 +424,16 @@ function formatWhoOwesMessage(year, month, data) {
         overpaid.forEach(function (creditor) {
           var amt = Math.min(debtor.amount, creditor.amount);
           if (amt > 0.01) {
-            msg += "➡️ *" + debtor.user + "* owes *" + creditor.user + "* " + cur + " " + formatAmount(amt) + "\n";
+            msg +=
+              "➡️ *" +
+              escapeMarkdown(debtor.user) +
+              "* owes *" +
+              escapeMarkdown(creditor.user) +
+              "* " +
+              cur +
+              " " +
+              formatAmount(amt) +
+              "\n";
           }
         });
       });
