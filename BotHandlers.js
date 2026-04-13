@@ -22,6 +22,9 @@ function handleMessage(update) {
         case "/recent":
           showRecentTransactions(chatId, messageText);
           break;
+        case "/stats":
+          handleStatsCommand(chatId);
+          break;
         case "/backfill":
           handleBackfillCommand(chatId, messageText);
           break;
@@ -51,6 +54,7 @@ function handleHelpCommand(chatId, username) {
     `  ↳ /recent 10 - Last 10 transactions\n` +
     `  ↳ /recent rishik - Filter by user\n` +
     `  ↳ /recent 10 rishik - Both filters\n\n` +
+    `• /stats - Analytics dashboard\n` +
     `• /help - Show this message\n\n` +
     `*Hidden Commands:*\n` +
     `• /backfill - Backfill transactions\n` +
@@ -168,6 +172,16 @@ function handleCallbackQuery(update) {
 
     var action = data.substring(0, separatorIndex); // "personal", "split", "details", "editcat", or "cat"
     var callbackPayload = data.substring(separatorIndex + 1);
+
+    // Handle stats callbacks: stats_monthly, stats_trends, stats_whoowes
+    if (action === "stats") {
+      return handleStatsCallback(chatId, telegramMessageId, callbackQueryId, callbackPayload);
+    }
+
+    // Handle month navigation: monthprev / monthnext
+    if (action === "monthprev" || action === "monthnext") {
+      return handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, callbackPayload);
+    }
 
     // Handle "Edit Category" — show category picker
     if (action === "editcat") {
@@ -481,4 +495,152 @@ function showRecentTransactions(chatId, messageText) {
     console.error("Error in showRecentTransactions:", error);
     sendTelegramMessage(chatId, "❌ *Error fetching recent transactions*\n\nPlease try again later.");
   }
+}
+
+// ─── Stats Command ───────────────────────────────────────────────────
+
+function handleStatsCommand(chatId) {
+  sendTelegramMessage(chatId, "📊 *Analytics Dashboard*\n\nPick an option:", {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "📊 Monthly", callback_data: "stats_monthly" },
+          { text: "📉 Trends", callback_data: "stats_trends" },
+          { text: "💰 Who Owes", callback_data: "stats_whoowes" }
+        ]
+      ]
+    }
+  });
+}
+
+function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subAction) {
+  var now = new Date();
+  var year = now.getFullYear();
+  var month = now.getMonth();
+
+  try {
+    if (subAction === "monthly") {
+      answerCallbackQuery(callbackQueryId, "📊 Loading monthly...", false);
+      var data = getMonthlyAnalytics(year, month);
+      if (!data) {
+        sendTelegramMessage(chatId, "📊 *No transactions this month.*");
+        return;
+      }
+      var msg = formatMonthlyMessage(year, month, data);
+      sendTelegramMessage(chatId, msg, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [buildMonthNavButtons(year, month)]
+        }
+      });
+    } else if (subAction === "trends") {
+      answerCallbackQuery(callbackQueryId, "📉 Loading trends...", false);
+      var months = getTrendsAnalytics(6);
+      var msg = formatTrendsMessage(months);
+      sendTelegramMessage(chatId, msg);
+    } else if (subAction === "whoowes") {
+      answerCallbackQuery(callbackQueryId, "💰 Calculating...", false);
+      var data = getWhoOwesAnalytics(year, month);
+      if (!data) {
+        sendTelegramMessage(chatId, "💰 *No split transactions this month.*");
+        return;
+      }
+      var msg = formatWhoOwesMessage(year, month, data);
+      sendTelegramMessage(chatId, msg, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [buildMonthNavButtons(year, month, "whoowes")]
+        }
+      });
+    }
+  } catch (error) {
+    console.error("Error in handleStatsCallback:", error.message, error.stack);
+    answerCallbackQuery(callbackQueryId, "❌ Error: " + error.message, false);
+  }
+}
+
+function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, payload) {
+  try {
+    // payload: "YYYY_M" or "YYYY_M_whoowes"
+    var parts = payload.split("_");
+    var year = parseInt(parts[0], 10);
+    var month = parseInt(parts[1], 10);
+    var mode = parts[2] || "monthly"; // "monthly" or "whoowes"
+
+    if (action === "monthprev") {
+      month--;
+      if (month < 0) {
+        month = 11;
+        year--;
+      }
+    } else {
+      month++;
+      if (month > 11) {
+        month = 0;
+        year++;
+      }
+    }
+
+    if (mode === "whoowes") {
+      answerCallbackQuery(callbackQueryId, "💰 Loading...", false);
+      var data = getWhoOwesAnalytics(year, month);
+      if (!data) {
+        answerCallbackQuery(callbackQueryId, "No split transactions", false);
+        var tz = Session.getScriptTimeZone();
+        var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
+        sendTelegramMessage(chatId, "💰 *No split transactions in " + label + "*", {
+          parse_mode: "Markdown",
+          message_id: telegramMessageId,
+          reply_markup: {
+            inline_keyboard: [buildMonthNavButtons(year, month, "whoowes")]
+          }
+        });
+        return;
+      }
+      var msg = formatWhoOwesMessage(year, month, data);
+      sendTelegramMessage(chatId, msg, {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId,
+        reply_markup: {
+          inline_keyboard: [buildMonthNavButtons(year, month, "whoowes")]
+        }
+      });
+    } else {
+      answerCallbackQuery(callbackQueryId, "📊 Loading...", false);
+      var data = getMonthlyAnalytics(year, month);
+      if (!data) {
+        answerCallbackQuery(callbackQueryId, "No transactions", false);
+        var tz = Session.getScriptTimeZone();
+        var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
+        sendTelegramMessage(chatId, "📊 *No transactions in " + label + "*", {
+          parse_mode: "Markdown",
+          message_id: telegramMessageId,
+          reply_markup: {
+            inline_keyboard: [buildMonthNavButtons(year, month)]
+          }
+        });
+        return;
+      }
+      var msg = formatMonthlyMessage(year, month, data);
+      sendTelegramMessage(chatId, msg, {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId,
+        reply_markup: {
+          inline_keyboard: [buildMonthNavButtons(year, month)]
+        }
+      });
+    }
+  } catch (error) {
+    console.error("Error in handleMonthNavigation:", error.message, error.stack);
+    answerCallbackQuery(callbackQueryId, "❌ Error: " + error.message, false);
+  }
+}
+
+function buildMonthNavButtons(year, month, mode) {
+  var suffix = mode ? "_" + mode : "";
+  return [
+    { text: "◀️ Prev", callback_data: "monthprev_" + year + "_" + month + suffix },
+    { text: "▶️ Next", callback_data: "monthnext_" + year + "_" + month + suffix }
+  ];
 }
