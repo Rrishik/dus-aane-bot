@@ -520,18 +520,22 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
   var month = now.getMonth();
 
   try {
-    if (subAction === "monthly") {
-      answerCallbackQuery(callbackQueryId, "📊 Loading monthly...", false);
-      var data = getMonthlyAnalytics(year, month);
+    if (subAction === "monthly" || subAction.indexOf("monthly_") === 0) {
+      var numMonths = 1;
+      if (subAction.indexOf("monthly_") === 0) {
+        numMonths = parseInt(subAction.split("_")[1], 10) || 1;
+      }
+      answerCallbackQuery(callbackQueryId, "📊 Loading...", false);
+      var data = getMonthlyAnalytics(year, month, numMonths);
       if (!data) {
-        sendTelegramMessage(chatId, "📊 *No transactions this month.*");
+        sendTelegramMessage(chatId, "📊 *No transactions found.*");
         return;
       }
-      var msg = formatMonthlyMessage(year, month, data);
+      var msg = formatMonthlyMessage(year, month, data, numMonths);
       sendTelegramMessage(chatId, msg, {
         parse_mode: "Markdown",
         reply_markup: {
-          inline_keyboard: [buildMonthNavButtons(year, month)]
+          inline_keyboard: [buildPeriodButtons(year, month), buildMonthNavButtons(year, month)]
         }
       });
     } else if (subAction === "trends") {
@@ -617,7 +621,7 @@ function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, actio
           parse_mode: "Markdown",
           message_id: telegramMessageId,
           reply_markup: {
-            inline_keyboard: [buildMonthNavButtons(year, month)]
+            inline_keyboard: [buildPeriodButtons(year, month), buildMonthNavButtons(year, month)]
           }
         });
         return;
@@ -627,7 +631,7 @@ function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, actio
         parse_mode: "Markdown",
         message_id: telegramMessageId,
         reply_markup: {
-          inline_keyboard: [buildMonthNavButtons(year, month)]
+          inline_keyboard: [buildPeriodButtons(year, month), buildMonthNavButtons(year, month)]
         }
       });
     }
@@ -642,5 +646,14 @@ function buildMonthNavButtons(year, month, mode) {
   return [
     { text: "◀️ Prev", callback_data: "monthprev_" + year + "_" + month + suffix },
     { text: "▶️ Next", callback_data: "monthnext_" + year + "_" + month + suffix }
+  ];
+}
+
+function buildPeriodButtons(year, month) {
+  return [
+    { text: "1M", callback_data: "stats_monthly_1" },
+    { text: "2M", callback_data: "stats_monthly_2" },
+    { text: "3M", callback_data: "stats_monthly_3" },
+    { text: "6M", callback_data: "stats_monthly_6" }
   ];
 }

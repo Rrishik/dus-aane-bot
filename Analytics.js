@@ -30,9 +30,15 @@ function filterByMonth(transactions, year, month) {
 
 // ─── Monthly Analytics ───────────────────────────────────────────────
 
-function getMonthlyAnalytics(year, month) {
+function getMonthlyAnalytics(year, month, numMonths) {
+  numMonths = numMonths || 1;
   var all = getAllTransactions();
-  var txns = filterByMonth(all, year, month);
+
+  var txns = [];
+  for (var i = numMonths - 1; i >= 0; i--) {
+    var d = new Date(year, month - i, 1);
+    txns = txns.concat(filterByMonth(all, d.getFullYear(), d.getMonth()));
+  }
 
   if (txns.length === 0) return null;
 
@@ -93,12 +99,19 @@ function getMonthlyAnalytics(year, month) {
   };
 }
 
-function formatMonthlyMessage(year, month, data) {
+function formatMonthlyMessage(year, month, data, numMonths) {
+  numMonths = numMonths || 1;
   var tz = Session.getScriptTimeZone();
-  var monthDate = new Date(year, month, 1);
-  var monthName = Utilities.formatDate(monthDate, tz, "MMMM yyyy");
+  var endDate = new Date(year, month, 1);
+  var label;
+  if (numMonths === 1) {
+    label = Utilities.formatDate(endDate, tz, "MMMM yyyy");
+  } else {
+    var startDate = new Date(year, month - numMonths + 1, 1);
+    label = Utilities.formatDate(startDate, tz, "MMM yyyy") + " — " + Utilities.formatDate(endDate, tz, "MMM yyyy");
+  }
 
-  var msg = "📊 *Monthly Report — " + monthName + "*\n\n";
+  var msg = "📊 *Report — " + label + "*\n\n";
   msg += "📈 *Transactions:* " + data.totalTransactions + " (" + data.debitCount + " debits)\n\n";
 
   // Total spend — INR first
