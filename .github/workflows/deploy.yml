@@ -56,6 +56,9 @@ jobs:
       - name: Push to Apps Script
         run: clasp push --force
 
+      - name: Deploy new version
+        run: clasp deploy --deploymentId ${{ secrets.DEPLOYMENT_ID }} -d "Auto deploy"
+
       - name: Deploy Cloudflare Worker
         uses: cloudflare/wrangler-action@v3
         with:
