@@ -169,19 +169,27 @@ function getTrendsAnalytics(numMonths) {
     var debits = txns.filter(function (t) {
       return t.type === "Debit";
     });
+    var credits = txns.filter(function (t) {
+      return t.type === "Credit";
+    });
 
-    var spentByCurrency = {};
+    var debitByCurrency = {};
+    var creditByCurrency = {};
     var categorySpend = {};
     debits.forEach(function (t) {
-      spentByCurrency[t.currency] = (spentByCurrency[t.currency] || 0) + t.amount;
+      debitByCurrency[t.currency] = (debitByCurrency[t.currency] || 0) + t.amount;
       categorySpend[t.category] = (categorySpend[t.category] || 0) + t.amount;
+    });
+    credits.forEach(function (t) {
+      creditByCurrency[t.currency] = (creditByCurrency[t.currency] || 0) + t.amount;
     });
 
     months.push({
       year: year,
       month: month,
       txnCount: txns.length,
-      spentByCurrency: spentByCurrency,
+      debitByCurrency: debitByCurrency,
+      creditByCurrency: creditByCurrency,
       categorySpend: categorySpend
     });
   }
@@ -191,40 +199,83 @@ function getTrendsAnalytics(numMonths) {
 
 function formatTrendsMessage(months) {
   var tz = Session.getScriptTimeZone();
-  var msg = "📉 *Spending Trends (last " + months.length + " months)*\n\n";
+  var msg = "📉 *Spending Trends*\n\n";
 
-  // Monthly totals
+  // Compact INR debits with bar chart
+  msg += "💸 *Debits (INR):*\n";
   months.forEach(function (m) {
     var d = new Date(m.year, m.month, 1);
-    var label = Utilities.formatDate(d, tz, "MMM yyyy");
-    var inr = m.spentByCurrency["INR"] || 0;
-    var bar = makeBar(inr, months);
-    msg += "*" + label + "* " + bar + " ₹" + formatAmount(inr) + "\n";
-
-    // Show non-INR currencies if present
-    Object.keys(m.spentByCurrency).forEach(function (cur) {
-      if (cur !== "INR") {
-        msg += "  ↳ " + cur + " " + formatAmount(m.spentByCurrency[cur]) + "\n";
-      }
-    });
+    var label = Utilities.formatDate(d, tz, "MMM yy");
+    var inr = m.debitByCurrency["INR"] || 0;
+    var bar = makeBar(inr, months, "debit");
+    msg += "`" + label + "` " + bar + " ₹" + formatAmount(inr) + "\n";
   });
 
-  // Month-over-month delta (current vs previous)
+  // Non-INR debits — only months that have them, compact
+  var hasOtherDebits = months.some(function (m) {
+    return Object.keys(m.debitByCurrency).some(function (c) {
+      return c !== "INR";
+    });
+  });
+  if (hasOtherDebits) {
+    msg += "\n🌍 *Other Currency Debits:*\n";
+    months.forEach(function (m) {
+      var others = Object.keys(m.debitByCurrency).filter(function (c) {
+        return c !== "INR" && m.debitByCurrency[c] > 0;
+      });
+      if (others.length > 0) {
+        var d = new Date(m.year, m.month, 1);
+        var label = Utilities.formatDate(d, tz, "MMM yy");
+        var parts = others.map(function (c) {
+          return c + " " + formatAmount(m.debitByCurrency[c]);
+        });
+        msg += "`" + label + "` " + parts.join(", ") + "\n";
+      }
+    });
+  }
+
+  // Credits — separate section
+  var hasCredits = months.some(function (m) {
+    return Object.keys(m.creditByCurrency).length > 0;
+  });
+  if (hasCredits) {
+    msg += "\n💰 *Credits:*\n";
+    months.forEach(function (m) {
+      var curs = Object.keys(m.creditByCurrency);
+      if (curs.length > 0) {
+        var d = new Date(m.year, m.month, 1);
+        var label = Utilities.formatDate(d, tz, "MMM yy");
+        var parts = curs.map(function (c) {
+          return c + " " + formatAmount(m.creditByCurrency[c]);
+        });
+        msg += "`" + label + "` " + parts.join(", ") + "\n";
+      }
+    });
+  }
+
+  // Month-over-month delta (debits only)
   if (months.length >= 2) {
     var curr = months[months.length - 1];
     var prev = months[months.length - 2];
-    var currTotal = curr.spentByCurrency["INR"] || 0;
-    var prevTotal = prev.spentByCurrency["INR"] || 0;
+    var currTotal = curr.debitByCurrency["INR"] || 0;
+    var prevTotal = prev.debitByCurrency["INR"] || 0;
 
-    msg += "\n📊 *vs Last Month:*\n";
     if (prevTotal > 0) {
       var delta = currTotal - prevTotal;
       var pct = ((delta / prevTotal) * 100).toFixed(1);
       var arrow = delta >= 0 ? "📈 +" : "📉 ";
-      msg += arrow + "₹" + formatAmount(Math.abs(delta)) + " (" + (delta >= 0 ? "+" : "") + pct + "%)\n";
+      msg +=
+        "\n*vs Last Month:* " +
+        arrow +
+        "₹" +
+        formatAmount(Math.abs(delta)) +
+        " (" +
+        (delta >= 0 ? "+" : "") +
+        pct +
+        "%)\n";
     }
 
-    // Category changes — biggest movers
+    // Top 3 category movers
     var allCats = {};
     Object.keys(curr.categorySpend || {}).forEach(function (c) {
       allCats[c] = true;
@@ -237,7 +288,7 @@ function formatTrendsMessage(months) {
       .map(function (cat) {
         var c = (curr.categorySpend || {})[cat] || 0;
         var p = (prev.categorySpend || {})[cat] || 0;
-        return { category: cat, delta: c - p, current: c, previous: p };
+        return { category: cat, delta: c - p };
       })
       .filter(function (d) {
         return d.delta !== 0;
@@ -378,10 +429,11 @@ function formatAmount(num) {
   return num.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function makeBar(value, months) {
+function makeBar(value, months, type) {
   var max = 0;
   months.forEach(function (m) {
-    var inr = m.spentByCurrency["INR"] || 0;
+    var bucket = type === "debit" ? m.debitByCurrency : m.creditByCurrency;
+    var inr = (bucket || {})["INR"] || 0;
     if (inr > max) max = inr;
   });
   if (max === 0) return "";
