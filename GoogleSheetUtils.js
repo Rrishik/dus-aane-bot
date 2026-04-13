@@ -132,3 +132,46 @@ function deleteSheetRow(sheet_id, row_number) {
   var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
   sheet.deleteRow(row_number);
 }
+
+// --- MerchantResolution tab helpers ---
+// Maps raw merchant patterns to clean names: Raw Pattern | Resolved Name
+
+var RESOLUTION_TAB = "MerchantResolution";
+
+function getOrCreateResolutionSheet(sheet_id) {
+  var ss = SpreadsheetApp.openById(sheet_id);
+  var tab = ss.getSheetByName(RESOLUTION_TAB);
+  if (!tab) {
+    tab = ss.insertSheet(RESOLUTION_TAB);
+    tab.appendRow(["Raw Pattern", "Resolved Name"]);
+  }
+  return tab;
+}
+
+// Load all merchant resolution mappings: [ { pattern: "flipkart", resolved: "Flipkart" }, ... ]
+function getMerchantResolutions(sheet_id) {
+  var tab = getOrCreateResolutionSheet(sheet_id);
+  var lastRow = tab.getLastRow();
+  if (lastRow <= 1) return [];
+  var data = tab.getRange(2, 1, lastRow - 1, 2).getValues();
+  return data
+    .filter(function (row) {
+      return row[0] && row[1];
+    })
+    .map(function (row) {
+      return { pattern: row[0].toString().toLowerCase(), resolved: row[1].toString() };
+    });
+}
+
+// Resolve a raw merchant name using the resolution table (case-insensitive substring match).
+// Returns the resolved name if matched, otherwise the original name.
+function resolveMerchant(rawName, resolutions) {
+  if (!rawName || !resolutions || resolutions.length === 0) return rawName;
+  var lower = rawName.toLowerCase();
+  for (var i = 0; i < resolutions.length; i++) {
+    if (lower.indexOf(resolutions[i].pattern) !== -1) {
+      return resolutions[i].resolved;
+    }
+  }
+  return rawName;
+}

@@ -62,6 +62,15 @@ function answerCallbackQuery(callback_query_id, text = "✅ Updated Successfully
   sendRequest(BOT_ANSWER_CALLBACK_QUERY_URL, "post", payload);
 }
 
+// Utility to delete a Telegram message
+function deleteTelegramMessage(chat_id, message_id) {
+  var payload = {
+    chat_id: chat_id,
+    message_id: message_id
+  };
+  sendRequest(BOT_DELETE_MESSAGE_URL, "post", payload);
+}
+
 function sendRequest(url, method, payload) {
   var MAX_RETRIES = 5; // Maximum number of retries for rate-limited requests
   var INITIAL_RETRY_DELAY_MS = 1000; // Initial delay in milliseconds if retry_after is not provided
