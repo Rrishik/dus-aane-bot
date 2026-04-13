@@ -257,8 +257,11 @@ function getAskSystemPrompt() {
     "- If the question is unrelated to expenses or transactions, politely decline\n" +
     "- If a tool returns empty results, say so clearly — do not guess or hallucinate\n" +
     "- You may call multiple tools to answer complex questions\n" +
-    "- Available categories: " +
+    "- Available debit categories: " +
     CATEGORIES.join(", ") +
+    "\n" +
+    "- Available credit categories: " +
+    CREDIT_CATEGORIES.join(", ") +
     "\n" +
     "- Correct likely typos in merchant names before searching (e.g., flipart → flipkart, swiggi → swiggy, amzn → amazon)\n" +
     "- Use short/common merchant name for search — the data may have suffixes like _mws_merch\n"

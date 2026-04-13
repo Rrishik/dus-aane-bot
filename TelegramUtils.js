@@ -174,14 +174,15 @@ function buildReplyMarkup(buttons) {
   return { inline_keyboard: buttons };
 }
 
-function buildCategoryKeyboard(emailMessageId) {
+function buildCategoryKeyboard(emailMessageId, categories) {
+  var list = categories || CATEGORIES;
   var rows = [];
   var row = [];
-  for (var i = 0; i < CATEGORIES.length; i++) {
-    var emoji = CATEGORY_EMOJIS[CATEGORIES[i]] || "";
-    var label = emoji ? emoji + " " + CATEGORIES[i] : CATEGORIES[i];
+  for (var i = 0; i < list.length; i++) {
+    var emoji = CATEGORY_EMOJIS[list[i]] || "";
+    var label = emoji ? emoji + " " + list[i] : list[i];
     row.push({ text: label, callback_data: "cat_" + emailMessageId + "_" + i });
-    if (row.length === 3 || i === CATEGORIES.length - 1) {
+    if (row.length === 3 || i === list.length - 1) {
       rows.push(row);
       row = [];
     }
