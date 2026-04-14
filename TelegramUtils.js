@@ -14,10 +14,6 @@ function setTelegramWebhook() {
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
 }
 
-function deleteTelegramCommands() {
-  sendRequest(BOT_DELETE_COMMANDS_URL, "post", {});
-}
-
 function setTelegramCommands() {
   var commands = [
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
@@ -165,11 +161,6 @@ function sendRequest(url, method, payload) {
 }
 
 function buildReplyMarkup(buttons) {
-  // Support legacy single-button call: buildReplyMarkup("text", "callback_data")
-  if (typeof buttons === "string") {
-    return { inline_keyboard: [[{ text: arguments[0], callback_data: arguments[1] }]] };
-  }
-  // buttons is an array of rows, each row is an array of {text, callback_data}
   return { inline_keyboard: buttons };
 }
 

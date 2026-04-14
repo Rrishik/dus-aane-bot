@@ -37,27 +37,26 @@ function handleMessage(update) {
       showRecentTransactions(chatId, "/recent");
     } else {
       // Check for pending merchant input
+      var userId = update.message.from.id;
       var props = PropertiesService.getScriptProperties();
-      var pendingEmailId = props.getProperty("pending_merchant_email_id");
-      var pendingChatId = props.getProperty("pending_merchant_chat_id");
-      if (pendingEmailId && pendingChatId === chatId.toString()) {
+      var pendingEmailId = props.getProperty("pending_merchant_" + userId);
+      if (pendingEmailId) {
         // Clear pending state
-        props.deleteProperty("pending_merchant_email_id");
-        props.deleteProperty("pending_merchant_chat_id");
+        props.deleteProperty("pending_merchant_" + userId);
         var merchantName = messageText.trim();
-        var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, pendingEmailId);
+        var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, pendingEmailId);
         if (rowNumber < 0) {
           sendTelegramMessage(chatId, "❌ Transaction not found");
           return;
         }
-        updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, 3, merchantName, "");
+        updateGoogleSheetCellWithFeedback(rowNumber, 3, merchantName, "");
         // Add to MerchantResolution and auto-populate category if available
-        addNewMerchantIfNeeded(SHEET_ID, merchantName);
-        var resolutions = getMerchantResolutions(SHEET_ID);
+        addNewMerchantIfNeeded(merchantName);
+        var resolutions = getMerchantResolutions();
         var resolved = lookupMerchantCategory(merchantName, resolutions);
         var confirmMsg = "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*";
         if (resolved && resolved.category) {
-          updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, CATEGORY_COLUMN, resolved.category, "");
+          updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, "");
           confirmMsg += " \\(" + escapeMarkdown(resolved.category) + "\\)";
         }
         sendTelegramMessage(chatId, confirmMsg, {
@@ -211,7 +210,7 @@ function handleCallbackQuery(update) {
 
     // Handle "Edit Category" — show category picker
     if (action === "editcat") {
-      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, callbackPayload);
+      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, callbackPayload);
       var isCredit = false;
       if (rowNumber > 0) {
         var sheet = getSpreadsheet().getSheets()[0];
@@ -237,7 +236,7 @@ function handleCallbackQuery(update) {
       var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
 
       // Look up transaction type to determine which category list to use
-      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
       if (rowNumber < 0) {
         answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
         return;
@@ -256,13 +255,7 @@ function handleCallbackQuery(update) {
       var newCategory = catList[categoryIndex];
       var currentCategory = rowData[CATEGORY_COLUMN - 1];
       var merchant = rowData[2]; // Column C = Merchant
-      var updateResult = updateGoogleSheetCellWithFeedback(
-        SHEET_ID,
-        rowNumber,
-        CATEGORY_COLUMN,
-        newCategory,
-        currentCategory
-      );
+      var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, newCategory, currentCategory);
 
       if (!updateResult.success) {
         answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
@@ -281,15 +274,15 @@ function handleCallbackQuery(update) {
     // Handle "Set Merchant" — ask user to type merchant name
     if (action === "setmerch") {
       var emailMessageId = callbackPayload;
-      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
       if (rowNumber < 0) {
         answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
         return;
       }
-      // Store pending state
+      // Store pending state per user per user
+      var userId = update.callback_query.from.id;
       var props = PropertiesService.getScriptProperties();
-      props.setProperty("pending_merchant_email_id", emailMessageId);
-      props.setProperty("pending_merchant_chat_id", chatId.toString());
+      props.setProperty("pending_merchant_" + userId, emailMessageId);
       answerCallbackQuery(callbackQueryId, "🏪 Type the merchant name", false);
       sendTelegramMessage(chatId, "🏪 *Type the merchant name for this transaction:*", {
         parse_mode: "Markdown"
@@ -300,13 +293,13 @@ function handleCallbackQuery(update) {
     // Handle delete transaction: del_{messageId}
     if (action === "del") {
       var emailMessageId = callbackPayload;
-      var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
       if (rowNumber < 0) {
         answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
         return;
       }
 
-      deleteSheetRow(SHEET_ID, rowNumber);
+      deleteSheetRow(rowNumber);
 
       sendTelegramMessage(chatId, "🗑️ *Transaction deleted*", {
         parse_mode: "Markdown",
@@ -319,7 +312,7 @@ function handleCallbackQuery(update) {
     var emailMessageId = callbackPayload; // Gmail message ID
 
     // Look up the row by message ID
-    var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, emailMessageId);
+    var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
     if (rowNumber < 0) {
       answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
       sendTelegramMessage(chatId, "❌ *Error:* Could not find the transaction in the sheet.");
@@ -333,7 +326,7 @@ function handleCallbackQuery(update) {
     var currentValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
 
     // Update the cell
-    var updateResult = updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, SPLIT_COLUMN, valueToSet, currentValue);
+    var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, SPLIT_COLUMN, valueToSet, currentValue);
 
     if (!updateResult.success) {
       answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
