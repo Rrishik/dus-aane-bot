@@ -54,40 +54,64 @@ Each transaction notification shows action buttons:
 - **🗑️ Delete** — Removes the transaction row
 - **🏪 Set Merchant** — Appears when merchant is empty; prompts you to type the merchant name, auto-fills category if matched in MerchantResolution
 
-## Extraction Flow
+## Tool-Calling Architecture (MCP-like pattern)
+
+Both extraction and querying use OpenAI function calling in an MCP-like pattern — the LLM is given tool definitions and decides autonomously whether to call them. This is a deliberate architectural choice over two common alternatives:
+
+**Why not RAG?** Transaction data is structured (rows and columns), not unstructured text. Embedding rows into a vector DB and retrieving "similar" transactions adds complexity (chunking, embedding costs, retrieval latency) with no benefit. A direct function call that queries the structured data and returns precise results is simpler and more accurate.
+
+**Why not context injection?** The naive approach is to dump all historical data (merchant→category mappings, past transactions) into the prompt. This floods the context window — 100 merchants × ~40 tokens each = ~4,000 wasted tokens per email. It scales linearly with data and most of the injected context is irrelevant to the current email. Tool calling keeps the base prompt small (~600 tokens) and only fetches data when the LLM needs it.
+
+### Extraction — 1 tool
+
+The LLM extracts transaction details from emails. For well-known merchants (Amazon, Swiggy), it categorizes directly in a single round-trip. For unfamiliar merchants, it calls a tool to look up the category:
 
 ```
-📧 Email arrives (Gmail label trigger)
+📧 Email arrives
     ↓
-🧠 AI extracts: merchant, amount, date, type, currency
-    ↓ (if unsure about category)
-🔧 Tool call: get_merchant_category("merchant_name")
+🧠 LLM receives: system prompt + email text + 1 tool definition
     ↓
-📋 MerchantResolution tab lookup → returns default category
-    ↓
-🔄 Merchant name resolved (FLIPKART_MWS_MERCH → Flipkart)
-    ↓
-💾 Saved to Google Sheet
-    ↓
-💬 Telegram notification with action buttons
+┌─ High confidence → returns JSON directly (1 round-trip)
+│
+└─ Low confidence → calls get_merchant_category("merchant_name")
+                   → tool queries data, returns category
+                   → LLM returns final JSON (2 round-trips)
 ```
 
-- Well-known merchants (Amazon, Swiggy) → categorized directly in 1 LLM call
-- Unknown merchants → tool call checks MerchantResolution → 2 LLM calls
-- Non-transaction emails (surveys, OTPs) → skipped with notification
-- New merchants → auto-registered to MerchantResolution tab
+| Tool | Description |
+|------|-------------|
+| `get_merchant_category` | Looks up default category for a merchant. Only called when the LLM is unsure. |
 
-## `/ask` — AI Queries
+The LLM self-optimizes: common merchants cost 1 API call, rare merchants cost 2. No tokens wasted on irrelevant merchant history.
 
-Ask natural language questions about your transactions:
+### `/ask` Queries — 6 tools
+
+The LLM answers natural language spending questions by calling tools that query the transaction data:
 
 ```
 /ask how much did I spend on food last week?
 /ask top 5 merchants this month
-/ask show all credit transactions
+/ask compare my spending with rishik
 ```
 
-Uses 6 tools: `get_spending_summary`, `get_category_breakdown`, `get_top_merchants`, `get_user_spend`, `get_split_summary`, `search_transactions`
+| Tool | Description |
+|------|-------------|
+| `get_spending_summary` | Total debits/credits by currency for a date range |
+| `get_category_breakdown` | Spending grouped by category |
+| `get_top_merchants` | Top N merchants by spend amount |
+| `get_user_spend` | Per-user spending totals |
+| `get_split_summary` | Split vs personal totals, settlement calculation |
+| `search_transactions` | Filter by merchant, category, user, amount, type, date range |
+
+The LLM chains up to 3 tool calls per query. The system prompt provides only metadata (today's date, available categories, field names) — no actual transaction data enters the context until a tool is called and returns targeted results.
+
+### Token comparison
+
+| Approach | Tokens per email | Scales with |
+|----------|-----------------|-------------|
+| Context injection | ~4,500+ | Number of merchants |
+| RAG | ~2,000+ (retrieval) | Corpus size |
+| **Tool calling** | **~600 base** | **Nothing** (constant) |
 
 ## `/stats` — Analytics Dashboard
 
@@ -114,33 +138,6 @@ Navigate months with ◀️/▶️ buttons.
 ├── worker/src/index.js     # Cloudflare Worker proxy
 └── .github/workflows/deploy.yml  # CI/CD pipeline
 ```
-
-## Google Sheets
-
-### Main Sheet (columns)
-
-| Email Date | Transaction Date | Merchant | Amount | Category | Type | User | Split | Message ID | Currency | Email Link |
-|------------|-----------------|----------|--------|----------|------|------|-------|------------|----------|------------|
-
-### MerchantResolution Tab
-
-| Raw Pattern | Resolved Name | Default Category |
-|-------------|---------------|------------------|
-| flipkart | Flipkart | Shopping |
-| swiggy | Swiggy | Food & Dining |
-| mudavath srinu | Mudavath Srinu | Food & Dining |
-
-- **Raw Pattern** — Substring match (case-insensitive) against AI-extracted merchant names
-- **Resolved Name** — Clean display name saved to the main sheet
-- **Default Category** — Used by the `get_merchant_category` tool and Set Merchant flow
-- New merchants are auto-registered with blank Resolved Name/Category for you to fill in
-- Run `populateResolutionSheet()` once to seed from existing data
-
-### Categories
-
-**Debit:** Shopping, Groceries, Food & Dining, Healthcare, Fuel, Entertainment, Travel, Bills & Utilities, Education, Investment, Subscriptions, CC Bill Payment
-
-**Credit:** Salary, Refund, Cashback, Transfer In, Reimbursement, Interest/Dividend
 
 ## Architecture
 
@@ -177,8 +174,8 @@ GitHub Actions on push to `main`:
 - Review Apps Script logs for errors
 
 ### Wrong categories
-- Fill in Default Category in MerchantResolution tab
-- Use ✏️ Category button to correct — the AI uses tool calling to look up mappings
+- Use ✏️ Category button to correct
+- The extraction pipeline uses tool calling to look up mappings — ensure your data is up to date
 
 ## 📝 License
 
