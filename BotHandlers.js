@@ -56,12 +56,16 @@ function handleMessage(update) {
           return;
         }
         updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, 3, merchantName, "");
-        // Also add to MerchantResolution and CategoryOverrides
+        // Add to MerchantResolution and auto-populate category if available
         addNewMerchantIfNeeded(SHEET_ID, merchantName);
-        var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-        var category = sheet.getRange(rowNumber, CATEGORY_COLUMN).getValue();
-        if (category) saveCategoryOverride(SHEET_ID, merchantName, category.toString());
-        sendTelegramMessage(chatId, "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*", {
+        var resolutions = getMerchantResolutions(SHEET_ID);
+        var resolved = lookupMerchantCategory(merchantName, resolutions);
+        var confirmMsg = "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*";
+        if (resolved && resolved.category) {
+          updateGoogleSheetCellWithFeedback(SHEET_ID, rowNumber, CATEGORY_COLUMN, resolved.category, "");
+          confirmMsg += " \\(" + escapeMarkdown(resolved.category) + "\\)";
+        }
+        sendTelegramMessage(chatId, confirmMsg, {
           parse_mode: "Markdown"
         });
       }
@@ -271,11 +275,6 @@ function handleCallbackQuery(update) {
       if (!updateResult.success) {
         answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
         return;
-      }
-
-      // Save merchant→category override for future AI categorization
-      if (merchant) {
-        saveCategoryOverride(SHEET_ID, merchant.toString(), newCategory);
       }
 
       // Edit the picker message to show confirmation

@@ -79,54 +79,6 @@ function ensureSheetHeaders(sheet_id) {
   }
 }
 
-// --- CategoryOverrides tab helpers ---
-// Stores merchant-category frequency: Merchant | Category | Count
-
-var OVERRIDES_TAB = "CategoryOverrides";
-
-function getOrCreateOverridesSheet(sheet_id) {
-  var ss = SpreadsheetApp.openById(sheet_id);
-  var tab = ss.getSheetByName(OVERRIDES_TAB);
-  if (!tab) {
-    tab = ss.insertSheet(OVERRIDES_TAB);
-    tab.appendRow(["Merchant", "Category", "Count"]);
-  }
-  return tab;
-}
-
-// Get merchant→category frequency map: { merchant: { category: count, ... }, ... }
-function getCategoryOverrides(sheet_id) {
-  var tab = getOrCreateOverridesSheet(sheet_id);
-  var lastRow = tab.getLastRow();
-  if (lastRow <= 1) return {};
-  var data = tab.getRange(2, 1, lastRow - 1, 3).getValues();
-  var overrides = {};
-  data.forEach(function (row) {
-    if (!row[0]) return;
-    var merchant = row[0].toString().toLowerCase();
-    if (!overrides[merchant]) overrides[merchant] = {};
-    overrides[merchant][row[1]] = parseInt(row[2]) || 1;
-  });
-  return overrides;
-}
-
-// Increment the count for a merchant-category pair (upsert)
-function saveCategoryOverride(sheet_id, merchant, category) {
-  var tab = getOrCreateOverridesSheet(sheet_id);
-  var lastRow = tab.getLastRow();
-  if (lastRow > 1) {
-    var data = tab.getRange(2, 1, lastRow - 1, 3).getValues();
-    for (var i = 0; i < data.length; i++) {
-      if (data[i][0].toString().toLowerCase() === merchant.toLowerCase() && data[i][1] === category) {
-        var newCount = (parseInt(data[i][2]) || 1) + 1;
-        tab.getRange(i + 2, 3).setValue(newCount);
-        return;
-      }
-    }
-  }
-  tab.appendRow([merchant, category, 1]);
-}
-
 // Delete a row from the first sheet by row number
 function deleteSheetRow(sheet_id, row_number) {
   var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
@@ -134,7 +86,8 @@ function deleteSheetRow(sheet_id, row_number) {
 }
 
 // --- MerchantResolution tab helpers ---
-// Maps raw merchant patterns to clean names: Raw Pattern | Resolved Name
+// Maps raw merchant patterns to clean names with optional default category:
+// Raw Pattern | Resolved Name | Default Category
 
 var RESOLUTION_TAB = "MerchantResolution";
 
@@ -143,37 +96,63 @@ function getOrCreateResolutionSheet(sheet_id) {
   var tab = ss.getSheetByName(RESOLUTION_TAB);
   if (!tab) {
     tab = ss.insertSheet(RESOLUTION_TAB);
-    tab.appendRow(["Raw Pattern", "Resolved Name"]);
+    tab.appendRow(["Raw Pattern", "Resolved Name", "Default Category"]);
   }
   return tab;
 }
 
-// Load all merchant resolution mappings: [ { pattern: "flipkart", resolved: "Flipkart" }, ... ]
+// Load all merchant resolution mappings:
+// [ { pattern: "flipkart", resolved: "Flipkart", category: "Shopping" }, ... ]
 function getMerchantResolutions(sheet_id) {
   var tab = getOrCreateResolutionSheet(sheet_id);
   var lastRow = tab.getLastRow();
   if (lastRow <= 1) return [];
-  var data = tab.getRange(2, 1, lastRow - 1, 2).getValues();
+  var data = tab.getRange(2, 1, lastRow - 1, 3).getValues();
   return data
     .filter(function (row) {
-      return row[0] && row[1];
+      return row[0];
     })
     .map(function (row) {
-      return { pattern: row[0].toString().toLowerCase(), resolved: row[1].toString() };
+      return {
+        pattern: row[0].toString().toLowerCase(),
+        resolved: row[1] ? row[1].toString() : "",
+        category: row[2] ? row[2].toString() : ""
+      };
     });
 }
 
 // Resolve a raw merchant name using the resolution table (case-insensitive substring match).
-// Returns the resolved name if matched, otherwise the original name.
+// Returns { merchant: resolvedName, category: defaultCategory } or { merchant: rawName, category: "" }
 function resolveMerchant(rawName, resolutions) {
-  if (!rawName || !resolutions || resolutions.length === 0) return rawName;
+  if (!rawName || !resolutions || resolutions.length === 0) return { merchant: rawName, category: "" };
   var lower = rawName.toLowerCase();
   for (var i = 0; i < resolutions.length; i++) {
     if (lower.indexOf(resolutions[i].pattern) !== -1) {
-      return resolutions[i].resolved;
+      return {
+        merchant: resolutions[i].resolved || rawName,
+        category: resolutions[i].category || ""
+      };
     }
   }
-  return rawName;
+  return { merchant: rawName, category: "" };
+}
+
+// Lookup merchant category from resolutions by resolved name (exact, case-insensitive).
+// Used by the get_merchant_category tool.
+function lookupMerchantCategory(merchantName, resolutions) {
+  if (!merchantName || !resolutions || resolutions.length === 0) return null;
+  var lower = merchantName.toLowerCase();
+  for (var i = 0; i < resolutions.length; i++) {
+    if (
+      resolutions[i].pattern === lower ||
+      (resolutions[i].resolved && resolutions[i].resolved.toLowerCase() === lower)
+    ) {
+      if (resolutions[i].category) {
+        return { merchant: resolutions[i].resolved || merchantName, category: resolutions[i].category };
+      }
+    }
+  }
+  return null;
 }
 
 // Check if a merchant is already in the MerchantResolution tab (column A, case-insensitive).
@@ -189,7 +168,7 @@ function addNewMerchantIfNeeded(sheet_id, rawMerchant) {
       if (data[i][0].toString().toLowerCase() === lower) return false;
     }
   }
-  tab.appendRow([rawMerchant, ""]);
+  tab.appendRow([rawMerchant, "", ""]);
   return true;
 }
 
