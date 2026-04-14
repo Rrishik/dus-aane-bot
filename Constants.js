@@ -1,11 +1,3 @@
-// AI Provider
-const AI_PROVIDERS = {
-  GEMINI: 0,
-  AZURE_OPENAI: 1
-};
-
-const AI_PROVIDER = AI_PROVIDERS.AZURE_OPENAI;
-
 const CHAT_ID = GROUP_CHAT_ID;
 const BOT_UPDATE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getUpdates`;
 const BOT_EDIT_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`;

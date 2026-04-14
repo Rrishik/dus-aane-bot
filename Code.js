@@ -212,7 +212,7 @@ function continueBackfill() {
 function testSplitTransactionUpdate(testRowNumber) {
   // If no row number provided, use the last row
   if (!testRowNumber) {
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    var sheet = getSpreadsheet().getSheets()[0];
     testRowNumber = sheet.getLastRow();
   }
 

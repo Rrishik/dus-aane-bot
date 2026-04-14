@@ -1,6 +1,15 @@
+// Lazy-cached spreadsheet accessor — avoids redundant openById calls within a single execution
+var _cachedSpreadsheet = null;
+function getSpreadsheet() {
+  if (!_cachedSpreadsheet) {
+    _cachedSpreadsheet = SpreadsheetApp.openById(SHEET_ID);
+  }
+  return _cachedSpreadsheet;
+}
+
 // Find the row number where a column has a specific value. Returns -1 if not found.
 function findRowByColumnValue(sheet_id, column_number, value) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+  var sheet = getSpreadsheet().getSheets()[0];
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return -1;
   var data = sheet.getRange(2, column_number, lastRow - 1, 1).getValues();
@@ -15,7 +24,7 @@ function findRowByColumnValue(sheet_id, column_number, value) {
 // Enhanced version that returns detailed feedback
 function updateGoogleSheetCellWithFeedback(sheet_id, row_number, column_number, value, currentValue) {
   try {
-    var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+    var sheet = getSpreadsheet().getSheets()[0];
 
     if (isNaN(row_number) || row_number <= 0) {
       return { success: false, message: "Invalid row number: " + row_number };
@@ -49,7 +58,7 @@ function updateGoogleSheetCellWithFeedback(sheet_id, row_number, column_number, 
 // Utility to append a row to a Google Sheet
 function appendRowToGoogleSheet(sheet_id, row_data) {
   try {
-    var ss = SpreadsheetApp.openById(sheet_id);
+    var ss = getSpreadsheet();
     var sheet = ss.getSheets()[0];
 
     sheet.appendRow(row_data);
@@ -61,7 +70,7 @@ function appendRowToGoogleSheet(sheet_id, row_data) {
 
 // Utility to ensure headers are present in the Google Sheet
 function ensureSheetHeaders(sheet_id) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+  var sheet = getSpreadsheet().getSheets()[0];
   if (sheet.getLastRow() === 0) {
     appendRowToGoogleSheet(sheet_id, [
       "Email Date",
@@ -81,7 +90,7 @@ function ensureSheetHeaders(sheet_id) {
 
 // Delete a row from the first sheet by row number
 function deleteSheetRow(sheet_id, row_number) {
-  var sheet = SpreadsheetApp.openById(sheet_id).getSheets()[0];
+  var sheet = getSpreadsheet().getSheets()[0];
   sheet.deleteRow(row_number);
 }
 
@@ -92,7 +101,7 @@ function deleteSheetRow(sheet_id, row_number) {
 var RESOLUTION_TAB = "MerchantResolution";
 
 function getOrCreateResolutionSheet(sheet_id) {
-  var ss = SpreadsheetApp.openById(sheet_id);
+  var ss = getSpreadsheet();
   var tab = ss.getSheetByName(RESOLUTION_TAB);
   if (!tab) {
     tab = ss.insertSheet(RESOLUTION_TAB);
@@ -174,7 +183,7 @@ function addNewMerchantIfNeeded(sheet_id, rawMerchant) {
 
 // One-time script: seed MerchantResolution with all unique merchants from the main sheet.
 function populateResolutionSheet() {
-  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  var sheet = getSpreadsheet().getSheets()[0];
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return;
   var merchants = sheet.getRange(2, 3, lastRow - 1, 1).getValues();

@@ -1,6 +1,6 @@
 // Read all transactions from the sheet as structured objects
 function getAllTransactions() {
-  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+  var sheet = getSpreadsheet().getSheets()[0];
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
   data.shift(); // remove header
@@ -55,24 +55,42 @@ function getMonthlyAnalytics(year, month, numMonths) {
     categorySpend[key] = (categorySpend[key] || 0) + t.amount;
   });
 
-  var topMerchants = aggregateByField(debits, "merchant")
+  // Previous period category data for deltas
+  var prevCategorySpend = {};
+  if (numMonths === 1) {
+    var prevMonth = new Date(year, month - 1, 1);
+    var prevTxns = filterByMonth(all, prevMonth.getFullYear(), prevMonth.getMonth());
+    var prevDebits = prevTxns.filter(function (t) {
+      return t.type === "Debit";
+    });
+    prevDebits.forEach(function (t) {
+      var key = t.category + "|||" + t.currency;
+      prevCategorySpend[key] = (prevCategorySpend[key] || 0) + t.amount;
+    });
+  }
+
+  // Top 5 transactions by amount
+  var topTransactions = debits
+    .slice()
+    .sort(function (a, b) {
+      return b.amount - a.amount;
+    })
     .slice(0, 5)
-    .map(function (m) {
-      return { merchant: m.name, currency: m.currency, amount: m.amount };
+    .map(function (t) {
+      return { merchant: t.merchant, amount: t.amount, currency: t.currency, date: t.date };
     });
 
-  var splitCount = debits.filter(function (t) {
-    return t.split === SPLIT_STATUS.SPLIT;
-  }).length;
+  // Split settlement data
+  var settlement = calcSplitSettlement(debits);
 
   return {
     totalTransactions: txns.length,
     debitCount: debits.length,
     spentByCurrency: spentByCurrency,
     categorySpend: categorySpend,
-    topMerchants: topMerchants,
-    splitCount: splitCount,
-    personalCount: debits.length - splitCount,
+    prevCategorySpend: prevCategorySpend,
+    topTransactions: topTransactions,
+    settlement: settlement,
     userSpend: aggregateByUser(debits)
   };
 }
@@ -89,56 +107,136 @@ function formatMonthlyMessage(year, month, data, numMonths) {
     label = Utilities.formatDate(startDate, tz, "MMM yyyy") + " — " + Utilities.formatDate(endDate, tz, "MMM yyyy");
   }
 
-  var msg = "📊 *Report — " + label + "*\n\n";
-  msg += "📈 *Transactions:* " + data.totalTransactions + " (" + data.debitCount + " debits)\n\n";
+  // Header with total
+  var inrTotal = data.spentByCurrency["INR"] || 0;
+  var msg = "📊 *" + label + "* — ₹" + formatAmount(inrTotal) + "\n\n";
 
-  // Total spend — INR first
-  msg += "💰 *Total Spent:*\n";
-  var currencies = Object.keys(data.spentByCurrency);
-  var inrFirst = currencies.sort(function (a, b) {
-    return a === "INR" ? -1 : b === "INR" ? 1 : a.localeCompare(b);
+  // Other currencies if present
+  var otherCurs = Object.keys(data.spentByCurrency).filter(function (c) {
+    return c !== "INR" && data.spentByCurrency[c] > 0;
   });
-  inrFirst.forEach(function (cur) {
-    msg += "  " + cur + " " + formatAmount(data.spentByCurrency[cur]) + "\n";
-  });
+  if (otherCurs.length > 0) {
+    var otherParts = otherCurs.map(function (c) {
+      return c + " " + formatAmount(data.spentByCurrency[c]);
+    });
+    msg += "🌍 " + otherParts.join(" · ") + "\n\n";
+  }
 
-  // Category breakdown
-  msg += "\n📂 *By Category:*\n";
+  // Category breakdown — top 5 with deltas, rest collapsed
   var sortedCats = Object.keys(data.categorySpend).sort(function (a, b) {
     return data.categorySpend[b] - data.categorySpend[a];
   });
-  sortedCats.forEach(function (catKey) {
+
+  var maxCatNameLen = 0;
+  sortedCats.slice(0, 5).forEach(function (catKey) {
+    var catName = catKey.split("|||")[0];
+    if (catName.length > maxCatNameLen) maxCatNameLen = catName.length;
+  });
+
+  var topCats = sortedCats.slice(0, 5);
+  var restAmount = 0;
+  var restCount = 0;
+  sortedCats.slice(5).forEach(function (catKey) {
+    restAmount += data.categorySpend[catKey];
+    restCount++;
+  });
+
+  topCats.forEach(function (catKey) {
     var parts = catKey.split("|||");
     var cat = parts[0];
     var cur = parts[1];
     var amount = data.categorySpend[catKey];
-    var pct = ((amount / (data.spentByCurrency[cur] || 1)) * 100).toFixed(1);
     var emoji = CATEGORY_EMOJIS[cat] || "•";
-    msg += emoji + " " + escapeMarkdown(cat) + ": " + cur + " " + formatAmount(amount) + " (" + pct + "%)\n";
+    var padded = cat + " ".repeat(Math.max(0, maxCatNameLen - cat.length));
+
+    // Delta vs previous month
+    var delta = "";
+    if (data.prevCategorySpend && numMonths === 1) {
+      var prevAmt = data.prevCategorySpend[catKey] || 0;
+      var diff = amount - prevAmt;
+      if (diff > 0) delta = "  ↑" + formatAmount(diff);
+      else if (diff < 0) delta = "  ↓" + formatAmount(Math.abs(diff));
+    }
+
+    msg += emoji + " `" + padded + "  ₹" + formatAmount(amount) + "`" + delta + "\n";
   });
 
-  // Top merchants
-  if (data.topMerchants.length > 0) {
-    msg += "\n🏪 *Top Merchants:*\n";
-    data.topMerchants.forEach(function (m, i) {
-      msg += i + 1 + ". " + escapeMarkdown(m.merchant) + " — " + m.currency + " " + formatAmount(m.amount) + "\n";
+  if (restCount > 0) {
+    msg +=
+      "   `\\+" +
+      restCount +
+      " more" +
+      " ".repeat(Math.max(0, maxCatNameLen - 6)) +
+      "  ₹" +
+      formatAmount(restAmount) +
+      "`\n";
+  }
+
+  // Top 5 transactions by amount
+  if (data.topTransactions && data.topTransactions.length > 0) {
+    msg += "\n💳 *Top Transactions:*\n";
+    data.topTransactions.forEach(function (t, i) {
+      var dateStr = t.date instanceof Date ? Utilities.formatDate(t.date, tz, "MMM dd") : t.date;
+      msg +=
+        i +
+        1 +
+        "\\. " +
+        escapeMarkdown(t.merchant || "Unknown") +
+        "  ₹" +
+        formatAmount(t.amount) +
+        "  " +
+        dateStr +
+        "\n";
     });
   }
 
-  // Split ratio
-  msg += "\n✂️ *Split:* " + data.splitCount + " | *Personal:* " + data.personalCount + "\n";
-
-  // Per-user spend
+  // Per-user total spend
   var users = Object.keys(data.userSpend);
-  if (users.length > 1) {
-    msg += "\n👥 *Per User:*\n";
+  if (users.length > 0) {
+    msg += "\n";
     users.forEach(function (user) {
       var perCur = data.userSpend[user];
-      var parts = Object.keys(perCur).map(function (cur) {
-        return cur + " " + formatAmount(perCur[cur]);
-      });
-      msg += "• " + escapeMarkdown(user) + ": " + parts.join(", ") + "\n";
+      var inr = perCur["INR"] || 0;
+      msg += "👤 " + escapeMarkdown(user) + "  ₹" + formatAmount(inr) + "\n";
     });
+  }
+
+  // Split settlement
+  var s = data.settlement;
+  if (s && s.splitCount > 0) {
+    var splitInr = s.splitTotal["INR"] || 0;
+    msg += "\n✂️ *Split Total:* ₹" + formatAmount(splitInr) + "\n";
+    s.users.forEach(function (u) {
+      var paid = (s.userPaid[u] || {})["INR"] || 0;
+      msg += "   " + escapeMarkdown(u) + " paid  ₹" + formatAmount(paid) + "\n";
+    });
+
+    // Settlement lines
+    var inrSettlement = s.settlements["INR"];
+    if (inrSettlement) {
+      var overpaid = [];
+      var underpaid = [];
+      s.users.forEach(function (u) {
+        var bal = inrSettlement.balances[u];
+        if (bal > 0.01) overpaid.push({ user: u, amount: bal });
+        else if (bal < -0.01) underpaid.push({ user: u, amount: Math.abs(bal) });
+      });
+      underpaid.forEach(function (debtor) {
+        overpaid.forEach(function (creditor) {
+          var amt = Math.min(debtor.amount, creditor.amount);
+          if (amt > 0.01) {
+            msg +=
+              "   ➡️ " +
+              escapeMarkdown(debtor.user) +
+              " owes " +
+              escapeMarkdown(creditor.user) +
+              " ₹" +
+              formatAmount(amt) +
+              "\n";
+          }
+        });
+      });
+    }
   }
 
   return msg;

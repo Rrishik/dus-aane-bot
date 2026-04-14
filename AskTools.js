@@ -107,8 +107,8 @@ var ASK_TOOLS = [
 
 // ─── Tool Executor ───────────────────────────────────────────────────
 
-function executeAskTool(toolName, args) {
-  var all = getAllTransactions();
+function executeAskTool(toolName, args, allTransactions) {
+  var all = allTransactions;
   var filtered = all;
 
   // Apply date filter if present
@@ -229,8 +229,7 @@ function execSearchTransactions(filtered, args) {
         currency: t.currency,
         category: t.category,
         type: t.type,
-        user: t.user,
-        split: t.split
+        user: t.user
       };
     })
   };
@@ -285,6 +284,8 @@ function runAskLoop(question) {
     { role: "user", content: question }
   ];
 
+  var allTransactions = getAllTransactions();
+
   for (var i = 0; i < ASK_MAX_ITERATIONS; i++) {
     var response = callAIWithTools(messages, ASK_TOOLS);
 
@@ -307,7 +308,7 @@ function runAskLoop(question) {
       // Execute each tool call and add results
       choice.message.tool_calls.forEach(function (toolCall) {
         var args = JSON.parse(toolCall.function.arguments);
-        var result = executeAskTool(toolCall.function.name, args);
+        var result = executeAskTool(toolCall.function.name, args, allTransactions);
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
