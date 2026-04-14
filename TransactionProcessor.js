@@ -1,64 +1,72 @@
-function getTransactionPrompt(email_text, overrides) {
+// Tool definition for extraction tool calling
+var EXTRACTION_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "get_merchant_category",
+      description:
+        "Look up the default category for a merchant. Call this when you are unsure about the category for a merchant. Do NOT call for well-known merchants where the category is obvious (e.g., Amazon=Shopping, Swiggy=Food & Dining).",
+      parameters: {
+        type: "object",
+        properties: {
+          merchant: {
+            type: "string",
+            description: "The merchant name extracted from the email"
+          }
+        },
+        required: ["merchant"]
+      }
+    }
+  }
+];
+
+function getExtractionSystemPrompt() {
   var categoryList = CATEGORIES.join(", ");
   var creditCategoryList = CREDIT_CATEGORIES.join(", ");
 
-  var overrideHints = "";
-  if (!overrides) overrides = getCategoryOverrides(SHEET_ID);
-  var merchants = Object.keys(overrides);
-  if (merchants.length > 0) {
-    var lines = merchants.map(function (m) {
-      var cats = overrides[m];
-      var parts = Object.keys(cats)
-        .sort(function (a, b) {
-          return cats[b] - cats[a];
-        })
-        .map(function (c) {
-          return c + " (" + cats[c] + "x)";
-        });
-      return "- " + m + ": " + parts.join(", ");
-    });
-    overrideHints =
-      "\n\nPast category history per merchant (use as hints, but prioritize email content for the final decision):\n" +
-      lines.join("\n") +
-      "\n";
-  }
-
-  var prompt_text = `Extract structured transaction details from this email in JSON format with fields: 
-- transaction_date (YYYY-MM-DD)
-- merchant (if identifiable from the email; use empty string "" if the email is a generic bank alert without a specific merchant/payee)
-- amount (only numeric, no currency symbols)
-- currency (3-letter ISO code, e.g. INR, JPY, USD. Default to INR if unclear)
-- category
-- transaction_type (Debit or Credit based on email content)
-
-Rules for transaction_type:
-- If money is spent (e.g., purchase, bill payment), mark it as "Debit".
-- If money is received (e.g., refund, salary, cashback), mark it as "Credit".
-
-Rules for merchant:
-- Extract the actual merchant/payee name, NOT the bank name
-- If the email is a generic bank debit/credit alert with no merchant info, set merchant to ""
-
-Rules for category:
-- For Debit transactions, category must be one of: ${categoryList}
-- For Credit transactions, category must be one of: ${creditCategoryList}
-
-If the email is NOT a transaction (e.g., surveys, OTPs, marketing, feedback requests, account alerts with no monetary transaction), return:
-{"not_a_transaction": true, "reason": "brief reason why"}
-${overrideHints}
-Example JSON Output:
-{
-  "transaction_date": "2025-03-15",
-  "merchant": "Amazon",
-  "amount": 1500.00,
-  "currency": "INR",
-  "category": "Shopping",
-  "transaction_type": "Debit"
+  return (
+    "You are a transaction extraction assistant. Extract structured transaction details from emails.\n\n" +
+    "Return a JSON object with fields:\n" +
+    "- transaction_date (YYYY-MM-DD)\n" +
+    '- merchant (if identifiable; use empty string "" if generic bank alert with no merchant/payee)\n' +
+    "- amount (numeric only, no currency symbols)\n" +
+    "- currency (3-letter ISO code, default INR)\n" +
+    "- category\n" +
+    "- transaction_type (Debit or Credit)\n\n" +
+    "Rules for transaction_type:\n" +
+    '- Money spent (purchase, bill payment) = "Debit"\n' +
+    '- Money received (refund, salary, cashback) = "Credit"\n\n' +
+    "Rules for merchant:\n" +
+    "- Extract the actual merchant/payee name, NOT the bank name\n" +
+    '- Generic bank debit/credit alert with no merchant info = ""\n\n' +
+    "Rules for category:\n" +
+    "- Debit: must be one of: " +
+    categoryList +
+    "\n" +
+    "- Credit: must be one of: " +
+    creditCategoryList +
+    "\n\n" +
+    "If the email is NOT a transaction (surveys, OTPs, marketing, feedback, alerts with no monetary value), return:\n" +
+    '{"not_a_transaction": true, "reason": "brief reason"}\n\n' +
+    "Use the get_merchant_category tool ONLY when you are unsure about the category. " +
+    "For well-known merchants (Amazon, Flipkart, Swiggy, Zomato, Uber, etc.) categorize directly."
+  );
 }
 
-Here is the email content:
-${email_text}`;
-  return prompt_text;
+// Execute the get_merchant_category tool call
+function executeExtractionTool(toolName, args, resolutions) {
+  if (toolName === "get_merchant_category") {
+    var result = lookupMerchantCategory(args.merchant, resolutions);
+    if (result) {
+      return JSON.stringify(result);
+    }
+    return JSON.stringify({
+      merchant: args.merchant,
+      category: null,
+      message: "No mapping found, use your best guess"
+    });
+  }
+  return JSON.stringify({ error: "Unknown tool" });
 }
 
 /**
@@ -72,11 +80,10 @@ function extractTransactions() {
   var messagesToProcess = fetchAndFilterMessages(cutoffDate);
 
   var userEmail = Session.getEffectiveUser().getEmail();
-  var overrides = getCategoryOverrides(SHEET_ID);
   var resolutions = getMerchantResolutions(SHEET_ID);
 
   messagesToProcess.forEach((message) => {
-    processSingleEmail(message, userEmail, false, overrides, resolutions);
+    processSingleEmail(message, userEmail, false, resolutions);
 
     Utilities.sleep(500);
   });
@@ -129,10 +136,10 @@ function fetchAndFilterMessages(startDate, endDate) {
 }
 
 /**
- * Processes a single email message: calls the AI provider, parses response, saves to sheet, and notifies Telegram.
+ * Processes a single email message: calls the AI provider with tool calling, parses response, saves to sheet.
  * Returns { saved: true/false, duplicate: true/false, data: parsed transaction or null }.
  */
-function processSingleEmail(message, userEmail, silent, overrides, resolutions) {
+function processSingleEmail(message, userEmail, silent, resolutions) {
   var emailText = message.getPlainBody();
   var emailDate = message.getDate();
   var messageId = message.getId();
@@ -143,10 +150,37 @@ function processSingleEmail(message, userEmail, silent, overrides, resolutions) 
   }
 
   try {
-    var responseText = callAI(getTransactionPrompt(emailText, overrides));
-    if (responseText) {
-      var emailLink = "https://mail.google.com/mail/u/0/#all/" + messageId;
-      return handleAIResponse(responseText, emailDate, userEmail, messageId, emailLink, silent, resolutions);
+    var messages = [
+      { role: "system", content: getExtractionSystemPrompt() },
+      { role: "user", content: "Extract transaction details from this email:\n\n" + emailText }
+    ];
+
+    // Tool-calling loop (max 2 iterations: initial + one tool response)
+    var maxIterations = 2;
+    for (var iter = 0; iter < maxIterations; iter++) {
+      var apiResponse = callAIWithTools(messages, EXTRACTION_TOOLS);
+      if (!apiResponse) break;
+
+      var choice = apiResponse.choices[0];
+      var msg = choice.message;
+
+      // If the model made a tool call, execute it and continue
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        messages.push(msg);
+        for (var t = 0; t < msg.tool_calls.length; t++) {
+          var tc = msg.tool_calls[t];
+          var args = JSON.parse(tc.function.arguments);
+          var toolResult = executeExtractionTool(tc.function.name, args, resolutions);
+          messages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
+        }
+        continue;
+      }
+
+      // No tool call — we have the final response
+      if (msg.content) {
+        var emailLink = "https://mail.google.com/mail/u/0/#all/" + messageId;
+        return handleAIResponse(msg.content, emailDate, userEmail, messageId, emailLink, silent, resolutions);
+      }
     }
   } catch (e) {
     // Error processing email
@@ -181,7 +215,12 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
       // Resolve merchant name before saving
       var rawMerchant = data.merchant;
       if (data.merchant && resolutions) {
-        data.merchant = resolveMerchant(data.merchant, resolutions);
+        var resolved = resolveMerchant(data.merchant, resolutions);
+        data.merchant = resolved.merchant;
+        // If tool call didn't set category but resolution has a default, use it
+        if (resolved.category && (!data.category || data.category === "Uncategorized")) {
+          data.category = resolved.category;
+        }
       }
       saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
       // Register new merchant for resolution review
@@ -249,7 +288,6 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
 
   var userEmail = Session.getEffectiveUser().getEmail();
-  var overrides = getCategoryOverrides(SHEET_ID);
   var resolutions = getMerchantResolutions(SHEET_ID);
   var savedCount = 0;
   var duplicateCount = 0;
@@ -269,7 +307,7 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
       }
     }
 
-    var result = processSingleEmail(messagesToProcess[i], userEmail, true, overrides, resolutions);
+    var result = processSingleEmail(messagesToProcess[i], userEmail, true, resolutions);
     processed++;
 
     if (result.duplicate) {
