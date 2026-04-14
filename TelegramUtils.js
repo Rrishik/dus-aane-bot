@@ -20,7 +20,6 @@ function deleteTelegramCommands() {
 
 function setTelegramCommands() {
   var commands = [
-    { command: "/summary", description: "View spending summary (e.g. /summary 20)" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
     { command: "/ask", description: "Ask AI about your spending (e.g. /ask food spending last month)" },

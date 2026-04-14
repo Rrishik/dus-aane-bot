@@ -158,7 +158,7 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
     // Tool-calling loop (max 2 iterations: initial + one tool response)
     var maxIterations = 2;
     for (var iter = 0; iter < maxIterations; iter++) {
-      var apiResponse = callAIWithTools(messages, EXTRACTION_TOOLS);
+      var apiResponse = callAIWithTools(messages, EXTRACTION_TOOLS, 300);
       if (!apiResponse) break;
 
       var choice = apiResponse.choices[0];

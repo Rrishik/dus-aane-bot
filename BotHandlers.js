@@ -16,9 +16,6 @@ function handleMessage(update) {
         case "/help":
           handleHelpCommand(chatId, username);
           break;
-        case "/summary":
-          showTransactionSummary(chatId, messageText);
-          break;
         case "/recent":
           showRecentTransactions(chatId, messageText);
           break;
@@ -36,9 +33,7 @@ function handleMessage(update) {
       }
     }
     // Handle menu button clicks
-    else if (messageText === "📊 View Summary") {
-      showTransactionSummary(chatId);
-    } else if (messageText === "📅 Recent Transactions") {
+    else if (messageText === " Recent Transactions") {
       showRecentTransactions(chatId, "/recent");
     } else {
       // Check for pending merchant input
@@ -79,9 +74,6 @@ function handleHelpCommand(chatId, username) {
   var message =
     greeting +
     `📚 *Available Commands:*\n\n` +
-    `• /summary - View spending summary\n` +
-    `  ↳ /summary 20 - Last 20 transactions\n` +
-    `  ↳ /summary - Last 10 (default)\n\n` +
     `• /recent - View recent transactions\n` +
     `  ↳ /recent 10 - Last 10 transactions\n` +
     `  ↳ /recent rishik - Filter by user\n` +
@@ -222,7 +214,7 @@ function handleCallbackQuery(update) {
       var rowNumber = findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, callbackPayload);
       var isCredit = false;
       if (rowNumber > 0) {
-        var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+        var sheet = getSpreadsheet().getSheets()[0];
         var txnType = sheet.getRange(rowNumber, 6).getValue(); // Column F = Transaction Type
         isCredit = txnType && txnType.toString().toLowerCase() === "credit";
       }
@@ -251,7 +243,7 @@ function handleCallbackQuery(update) {
         return;
       }
 
-      var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+      var sheet = getSpreadsheet().getSheets()[0];
       var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
       var txnType = rowData[5]; // Column F = Transaction Type
       var catList = txnType && txnType.toString().toLowerCase() === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
@@ -337,7 +329,7 @@ function handleCallbackQuery(update) {
     var valueToSet = action === "personal" ? SPLIT_STATUS.PERSONAL : SPLIT_STATUS.SPLIT;
 
     // Read current value
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    var sheet = getSpreadsheet().getSheets()[0];
     var currentValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
 
     // Update the cell
@@ -377,105 +369,6 @@ function handleCallbackQuery(update) {
 }
 
 // Function to show transaction summary. Optional limit param: /summary 10
-function showTransactionSummary(chatId, messageText) {
-  try {
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
-    var data = sheet.getDataRange().getValues();
-
-    // Check if sheet is empty
-    if (data.length <= 1) {
-      sendTelegramMessage(chatId, "📊 *No transactions found yet!*");
-      return;
-    }
-
-    // Skip header row
-    data.shift();
-
-    // Parse optional limit from message (e.g. "/summary 20"), default 10
-    var limit = 10;
-    if (messageText) {
-      var parts = messageText.split(" ");
-      if (parts.length >= 2) {
-        var parsed = parseInt(parts[1]);
-        if (!isNaN(parsed) && parsed > 0) limit = parsed;
-      }
-    }
-
-    // Apply limit — take last N transactions
-    if (data.length > limit) {
-      data = data.slice(-limit);
-    }
-
-    var spentByCurrency = {};
-    var receivedByCurrency = {};
-    var categorySpending = {};
-    var transactionCount = 0;
-
-    data.forEach(function (row) {
-      var amount = parseFloat(row[3]) || 0;
-      var type = row[5];
-      var category = row[4] || "Uncategorized";
-      var currency = row[9] || "INR";
-
-      if (type === "Debit") {
-        spentByCurrency[currency] = (spentByCurrency[currency] || 0) + amount;
-        var catKey = category + "|||" + currency;
-        categorySpending[catKey] = (categorySpending[catKey] || 0) + amount;
-      } else if (type === "Credit") {
-        receivedByCurrency[currency] = (receivedByCurrency[currency] || 0) + amount;
-      }
-      transactionCount++;
-    });
-
-    var message = limit > 0 ? `📊 *Summary (last ${limit} transactions)*\n\n` : `📊 *Transaction Summary*\n\n`;
-    message += `📈 *Total Transactions:* ${transactionCount}\n\n`;
-
-    // Spent per currency
-    var spentCurrencies = Object.keys(spentByCurrency);
-    if (spentCurrencies.length === 1) {
-      message += `💰 *Total Spent:* ${spentCurrencies[0]} ${spentByCurrency[spentCurrencies[0]].toFixed(2)}\n`;
-    } else if (spentCurrencies.length > 1) {
-      message += `💰 *Total Spent:*\n`;
-      spentCurrencies.forEach(function (cur) {
-        message += `  • ${cur} ${spentByCurrency[cur].toFixed(2)}\n`;
-      });
-    }
-
-    // Received per currency
-    var receivedCurrencies = Object.keys(receivedByCurrency);
-    if (receivedCurrencies.length === 1) {
-      message += `💵 *Total Received:* ${receivedCurrencies[0]} ${receivedByCurrency[receivedCurrencies[0]].toFixed(2)}\n`;
-    } else if (receivedCurrencies.length > 1) {
-      message += `💵 *Total Received:*\n`;
-      receivedCurrencies.forEach(function (cur) {
-        message += `  • ${cur} ${receivedByCurrency[cur].toFixed(2)}\n`;
-      });
-    }
-
-    message += `\n📂 *Category-wise Spending:*\n`;
-
-    // Sort categories by amount spent
-    var sortedCatKeys = Object.keys(categorySpending).sort(function (a, b) {
-      return categorySpending[b] - categorySpending[a];
-    });
-
-    sortedCatKeys.forEach(function (catKey) {
-      var parts = catKey.split("|||");
-      var category = parts[0];
-      var currency = parts[1];
-      var amount = categorySpending[catKey];
-      var totalSpentInCurrency = spentByCurrency[currency] || 1;
-      var percentage = ((amount / totalSpentInCurrency) * 100).toFixed(1);
-      message += `• ${category}: ${currency} ${amount.toFixed(2)} (${percentage}%)\n`;
-    });
-
-    sendTelegramMessage(chatId, message);
-  } catch (error) {
-    console.error("Error in showTransactionSummary:", error);
-    sendTelegramMessage(chatId, "❌ *Error generating summary*\n\nPlease try again later.");
-  }
-}
-
 // Function to show recent transactions
 // Supports: /recent, /recent 10, /recent rishik, /recent 10 rishik
 function showRecentTransactions(chatId, messageText) {
@@ -495,7 +388,7 @@ function showRecentTransactions(chatId, messageText) {
       }
     });
 
-    var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
+    var sheet = getSpreadsheet().getSheets()[0];
     var data = sheet.getDataRange().getValues();
 
     // Check if sheet is empty
