@@ -96,6 +96,7 @@ var ASK_TOOLS = [
           user: { type: "string", description: "Username to filter by (partial match)" },
           min_amount: { type: "number", description: "Minimum transaction amount" },
           max_amount: { type: "number", description: "Maximum transaction amount" },
+          transaction_type: { type: "string", description: "Filter by transaction type: Debit or Credit" },
           limit: { type: "number", description: "Max results to return. Default 10." }
         },
         required: []
@@ -195,6 +196,12 @@ function execSearchTransactions(filtered, args) {
     var u = args.user.toLowerCase();
     results = results.filter(function (t) {
       return t.user.toLowerCase().indexOf(u) !== -1;
+    });
+  }
+  if (args.transaction_type) {
+    var tt = args.transaction_type;
+    results = results.filter(function (t) {
+      return t.type === tt;
     });
   }
   if (args.min_amount !== undefined) {
