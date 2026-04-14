@@ -8,7 +8,7 @@ function getSpreadsheet() {
 }
 
 // Find the row number where a column has a specific value. Returns -1 if not found.
-function findRowByColumnValue(sheet_id, column_number, value) {
+function findRowByColumnValue(column_number, value) {
   var sheet = getSpreadsheet().getSheets()[0];
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) return -1;
@@ -22,7 +22,7 @@ function findRowByColumnValue(sheet_id, column_number, value) {
 }
 
 // Enhanced version that returns detailed feedback
-function updateGoogleSheetCellWithFeedback(sheet_id, row_number, column_number, value, currentValue) {
+function updateGoogleSheetCellWithFeedback(row_number, column_number, value, currentValue) {
   try {
     var sheet = getSpreadsheet().getSheets()[0];
 
@@ -56,7 +56,7 @@ function updateGoogleSheetCellWithFeedback(sheet_id, row_number, column_number, 
 }
 
 // Utility to append a row to a Google Sheet
-function appendRowToGoogleSheet(sheet_id, row_data) {
+function appendRowToGoogleSheet(row_data) {
   try {
     var ss = getSpreadsheet();
     var sheet = ss.getSheets()[0];
@@ -69,10 +69,10 @@ function appendRowToGoogleSheet(sheet_id, row_data) {
 }
 
 // Utility to ensure headers are present in the Google Sheet
-function ensureSheetHeaders(sheet_id) {
+function ensureSheetHeaders() {
   var sheet = getSpreadsheet().getSheets()[0];
   if (sheet.getLastRow() === 0) {
-    appendRowToGoogleSheet(sheet_id, [
+    appendRowToGoogleSheet([
       "Email Date",
       "Transaction Date",
       "Merchant",
@@ -89,7 +89,7 @@ function ensureSheetHeaders(sheet_id) {
 }
 
 // Delete a row from the first sheet by row number
-function deleteSheetRow(sheet_id, row_number) {
+function deleteSheetRow(row_number) {
   var sheet = getSpreadsheet().getSheets()[0];
   sheet.deleteRow(row_number);
 }
@@ -100,7 +100,7 @@ function deleteSheetRow(sheet_id, row_number) {
 
 var RESOLUTION_TAB = "MerchantResolution";
 
-function getOrCreateResolutionSheet(sheet_id) {
+function getOrCreateResolutionSheet() {
   var ss = getSpreadsheet();
   var tab = ss.getSheetByName(RESOLUTION_TAB);
   if (!tab) {
@@ -112,8 +112,8 @@ function getOrCreateResolutionSheet(sheet_id) {
 
 // Load all merchant resolution mappings:
 // [ { pattern: "flipkart", resolved: "Flipkart", category: "Shopping" }, ... ]
-function getMerchantResolutions(sheet_id) {
-  var tab = getOrCreateResolutionSheet(sheet_id);
+function getMerchantResolutions() {
+  var tab = getOrCreateResolutionSheet();
   var lastRow = tab.getLastRow();
   if (lastRow <= 1) return [];
   var data = tab.getRange(2, 1, lastRow - 1, 3).getValues();
@@ -166,9 +166,9 @@ function lookupMerchantCategory(merchantName, resolutions) {
 
 // Check if a merchant is already in the MerchantResolution tab (column A, case-insensitive).
 // If not, add it with a blank Resolved Name. Returns true if a new row was added.
-function addNewMerchantIfNeeded(sheet_id, rawMerchant) {
+function addNewMerchantIfNeeded(rawMerchant) {
   if (!rawMerchant) return false;
-  var tab = getOrCreateResolutionSheet(sheet_id);
+  var tab = getOrCreateResolutionSheet();
   var lastRow = tab.getLastRow();
   if (lastRow > 1) {
     var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
@@ -193,7 +193,7 @@ function populateResolutionSheet() {
     var m = row[0] ? row[0].toString().trim() : "";
     if (!m || seen[m.toLowerCase()]) return;
     seen[m.toLowerCase()] = true;
-    if (addNewMerchantIfNeeded(SHEET_ID, m)) added++;
+    if (addNewMerchantIfNeeded(m)) added++;
   });
   Logger.log("Populated MerchantResolution: " + added + " new merchants added");
 }

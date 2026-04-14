@@ -21,7 +21,7 @@ function doPost(e) {
             propsAck.setProperty("backfill_ack_chat_id", chatId.toString());
           }
         } catch (e) {
-          // ignore
+          console.error("Backfill ack parse error:", e);
         }
       } else if (commandText.startsWith("/ask")) {
         // Send thinking message immediately and store its ID for later editing
@@ -33,7 +33,7 @@ function doPost(e) {
             props2.setProperty("ask_thinking_msg_id", parsed.result.message_id.toString());
           }
         } catch (e) {
-          // ignore
+          console.error("Ask thinking msg parse error:", e);
         }
       }
 
@@ -85,14 +85,7 @@ function triggerEmailProcessing() {
   extractTransactions();
 }
 
-// Run from Apps Script editor to backfill for the logged-in user's Gmail
-function manualBackfill() {
-  var startDate = new Date("2026-01-01");
-  var endDate = new Date("2026-04-12");
-  startChunkedBackfill(startDate, endDate);
-}
-
-// Shared entry point for chunked backfill (used by both /backfill and manualBackfill)
+// Shared entry point for chunked backfill (used by /backfill command)
 function startChunkedBackfill(startDate, endDate) {
   endDate.setHours(23, 59, 59, 999);
   var tz = Session.getScriptTimeZone();
@@ -205,30 +198,4 @@ function continueBackfill() {
     props.deleteProperty("backfill_total_processed");
     props.deleteProperty("backfill_chunk");
   }
-}
-
-// Test function to manually test split transaction update
-// Run this function from the Apps Script editor to test updating a specific row
-function testSplitTransactionUpdate(testRowNumber) {
-  // If no row number provided, use the last row
-  if (!testRowNumber) {
-    var sheet = getSpreadsheet().getSheets()[0];
-    testRowNumber = sheet.getLastRow();
-  }
-
-  var result = updateGoogleSheetCellWithFeedback(SHEET_ID, testRowNumber, SPLIT_COLUMN, SPLIT_STATUS.SPLIT, "");
-
-  // Send result to Telegram for visibility
-  var message = "🧪 *Test Update Result*\n\n";
-  message += "Row: " + testRowNumber + "\n";
-  message += "Column: " + SPLIT_COLUMN + "\n";
-  message += "Value: " + SPLIT_STATUS.SPLIT + "\n\n";
-  message += result.success ? "✅ Success!" : "❌ Failed";
-  message += "\n" + result.message;
-  if (result.oldValue) message += "\nOld: " + result.oldValue;
-  if (result.newValue) message += "\nNew: " + result.newValue;
-
-  sendTelegramMessage(CHAT_ID, message);
-
-  return result;
 }

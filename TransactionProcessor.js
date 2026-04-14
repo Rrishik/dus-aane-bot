@@ -73,14 +73,14 @@ function executeExtractionTool(toolName, args, resolutions) {
  * Main function to orchestrate the email processing flow.
  */
 function extractTransactions() {
-  ensureSheetHeaders(SHEET_ID);
+  ensureSheetHeaders();
 
   var cutoffDate = getCutoffDate();
 
   var messagesToProcess = fetchAndFilterMessages(cutoffDate);
 
   var userEmail = Session.getEffectiveUser().getEmail();
-  var resolutions = getMerchantResolutions(SHEET_ID);
+  var resolutions = getMerchantResolutions();
 
   messagesToProcess.forEach((message) => {
     processSingleEmail(message, userEmail, false, resolutions);
@@ -145,7 +145,7 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
   var messageId = message.getId();
 
   // Dedup: skip if this message was already processed
-  if (findRowByColumnValue(SHEET_ID, MESSAGE_ID_COLUMN, messageId) > 0) {
+  if (findRowByColumnValue(MESSAGE_ID_COLUMN, messageId) > 0) {
     return { saved: false, duplicate: true, data: null };
   }
 
@@ -183,7 +183,7 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
       }
     }
   } catch (e) {
-    // Error processing email
+    console.error("[processSingleEmail] Error:", e.message);
   }
   return { saved: false, duplicate: false, data: null };
 }
@@ -224,7 +224,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
       }
       saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
       // Register new merchant for resolution review
-      if (rawMerchant && addNewMerchantIfNeeded(SHEET_ID, rawMerchant) && !silent) {
+      if (rawMerchant && addNewMerchantIfNeeded(rawMerchant) && !silent) {
         var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit";
         var newMerchantMsg =
           "\uD83C\uDD95 New merchant detected: *" +
@@ -240,7 +240,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
       // AI response was not valid JSON
     }
   } catch (e) {
-    // Failed to parse AI JSON
+    console.error("[handleAIResponse] JSON parse failed:", e.message);
   }
   return { saved: false, duplicate: false, data: null };
 }
@@ -258,7 +258,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
   var user = userEmail.split("@")[0];
   var splitStatus = SPLIT_STATUS.PERSONAL; // Default to Personal
 
-  appendRowToGoogleSheet(SHEET_ID, [
+  appendRowToGoogleSheet([
     emailDate,
     transactionDate,
     merchant,
@@ -283,12 +283,12 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
  * Returns { savedCount, duplicateCount, failedCount, totalEmails, timedOut }
  */
 function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
-  ensureSheetHeaders(SHEET_ID);
+  ensureSheetHeaders();
 
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
 
   var userEmail = Session.getEffectiveUser().getEmail();
-  var resolutions = getMerchantResolutions(SHEET_ID);
+  var resolutions = getMerchantResolutions();
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;
