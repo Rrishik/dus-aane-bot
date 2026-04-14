@@ -46,7 +46,7 @@ function getExtractionSystemPrompt() {
     "- Credit: must be one of: " +
     creditCategoryList +
     "\n\n" +
-    "If the email is NOT a transaction (surveys, OTPs, marketing, feedback, alerts with no monetary value), return:\n" +
+    "If the email is NOT a transaction (surveys, OTPs, marketing, feedback, declined transactions, alerts with no monetary value), return:\n" +
     '{"not_a_transaction": true, "reason": "brief reason"}\n\n' +
     "Use the get_merchant_category tool ONLY when you are unsure about the category. " +
     "For well-known merchants (Amazon, Flipkart, Swiggy, Zomato, Uber, etc.) categorize directly."
