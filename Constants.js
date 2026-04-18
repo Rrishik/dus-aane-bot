@@ -17,8 +17,9 @@ const EMAIL_LINK_COLUMN = 11; // Column K
 
 // Split Status Values (enum-like constants)
 const SPLIT_STATUS = {
-  PERSONAL: "Personal",
-  SPLIT: "Split"
+  PERSONAL: "Personal", // 100% mine
+  SPLIT: "Split", // 50/50 between users
+  PARTNER: "Partner" // I paid, 100% belongs to the other user
 };
 
 // Category options for the picker

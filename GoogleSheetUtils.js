@@ -95,37 +95,66 @@ function deleteSheetRow(row_number) {
 }
 
 // --- MerchantResolution tab helpers ---
-// Maps raw merchant patterns to clean names with optional default category:
-// Raw Pattern | Resolved Name | Default Category
+// Maps raw merchant patterns to clean names.
+// Categories are stored in a separate CategoryOverrides tab (resolved merchant → category).
 
 var RESOLUTION_TAB = "MerchantResolution";
+var OVERRIDES_TAB = "CategoryOverrides";
 
 function getOrCreateResolutionSheet() {
   var ss = getSpreadsheet();
   var tab = ss.getSheetByName(RESOLUTION_TAB);
   if (!tab) {
     tab = ss.insertSheet(RESOLUTION_TAB);
-    tab.appendRow(["Raw Pattern", "Resolved Name", "Default Category"]);
+    tab.appendRow(["Raw Pattern", "Resolved Name"]);
   }
   return tab;
 }
 
-// Load all merchant resolution mappings:
-// [ { pattern: "flipkart", resolved: "Flipkart", category: "Shopping" }, ... ]
+function getOrCreateOverridesSheet() {
+  var ss = getSpreadsheet();
+  var tab = ss.getSheetByName(OVERRIDES_TAB);
+  if (!tab) {
+    tab = ss.insertSheet(OVERRIDES_TAB);
+    tab.appendRow(["Merchant", "Category"]);
+  }
+  return tab;
+}
+
+// Build a { merchantLowerCase: category } index from CategoryOverrides.
+function getCategoryOverrides() {
+  var tab = getOrCreateOverridesSheet();
+  var lastRow = tab.getLastRow();
+  if (lastRow <= 1) return {};
+  var data = tab.getRange(2, 1, lastRow - 1, 2).getValues();
+  var map = {};
+  data.forEach(function (row) {
+    var m = (row[0] || "").toString().trim();
+    var c = (row[1] || "").toString().trim();
+    if (m && c) map[m.toLowerCase()] = c;
+  });
+  return map;
+}
+
+// Load all merchant resolution mappings, joined with CategoryOverrides:
+// [ { pattern: "flipkart_mws_merch", resolved: "Flipkart", category: "Shopping" }, ... ]
 function getMerchantResolutions() {
   var tab = getOrCreateResolutionSheet();
   var lastRow = tab.getLastRow();
   if (lastRow <= 1) return [];
-  var data = tab.getRange(2, 1, lastRow - 1, 3).getValues();
+  var data = tab.getRange(2, 1, lastRow - 1, 2).getValues();
+  var overrides = getCategoryOverrides();
   return data
     .filter(function (row) {
       return row[0];
     })
     .map(function (row) {
+      var resolved = row[1] ? row[1].toString() : "";
+      var key = (resolved || row[0]).toString().toLowerCase();
       return {
         pattern: row[0].toString().toLowerCase(),
-        resolved: row[1] ? row[1].toString() : "",
-        category: row[2] ? row[2].toString() : ""
+        resolved: resolved,
+        category: overrides[key] || ""
       };
     });
 }
@@ -177,8 +206,47 @@ function addNewMerchantIfNeeded(rawMerchant) {
       if (data[i][0].toString().toLowerCase() === lower) return false;
     }
   }
-  tab.appendRow([rawMerchant, "", ""]);
+  tab.appendRow([rawMerchant, ""]);
   return true;
+}
+
+// Update Resolved Name for a Pattern row in MerchantResolution.
+// Returns { success, message }. Used by the "Save Mapping" inline button.
+function setMerchantResolution(rawMerchant, resolvedName) {
+  if (!rawMerchant) return { success: false, message: "Empty merchant" };
+  var tab = getOrCreateResolutionSheet();
+  var lastRow = tab.getLastRow();
+  if (lastRow <= 1) return { success: false, message: "No merchants in sheet" };
+  var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
+  var lower = rawMerchant.toString().toLowerCase();
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][0] && data[i][0].toString().toLowerCase() === lower) {
+      var rowNum = i + 2; // header is row 1, data starts at row 2
+      tab.getRange(rowNum, 2).setValue(resolvedName || "");
+      return { success: true, message: "Mapping saved" };
+    }
+  }
+  return { success: false, message: "Pattern not found in MerchantResolution" };
+}
+
+// Upsert a (merchant → category) row in CategoryOverrides.
+// Case-insensitive match on the merchant column; overwrites category if row exists.
+function setCategoryOverride(merchant, category) {
+  if (!merchant || !category) return { success: false, message: "Empty merchant or category" };
+  var tab = getOrCreateOverridesSheet();
+  var lastRow = tab.getLastRow();
+  var lower = merchant.toString().toLowerCase();
+  if (lastRow > 1) {
+    var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString().toLowerCase() === lower) {
+        tab.getRange(i + 2, 2).setValue(category);
+        return { success: true, message: "Override updated" };
+      }
+    }
+  }
+  tab.appendRow([merchant, category]);
+  return { success: true, message: "Override added" };
 }
 
 // One-time script: seed MerchantResolution with all unique merchants from the main sheet.
@@ -196,4 +264,139 @@ function populateResolutionSheet() {
     if (addNewMerchantIfNeeded(m)) added++;
   });
   Logger.log("Populated MerchantResolution: " + added + " new merchants added");
+}
+
+// ─── Bulk maintenance scripts ────────────────────────────────────────
+// Run from the Apps Script editor. Not wired to Telegram.
+
+// Re-apply current MerchantResolution mappings to ALL existing main-sheet transactions.
+// Updates merchant name (col C) to the resolved name when a mapping exists.
+// Does NOT touch categories — use CategoryOverrides flow for that.
+function reapplyMerchantResolutions() {
+  var sheet = getSpreadsheet().getSheets()[0];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    Logger.log("No transactions to update");
+    return;
+  }
+  var resolutions = getMerchantResolutions();
+  if (resolutions.length === 0) {
+    Logger.log("MerchantResolution is empty");
+    return;
+  }
+
+  var range = sheet.getRange(2, 3, lastRow - 1, 1); // col C only
+  var values = range.getValues();
+  var changed = 0;
+
+  for (var i = 0; i < values.length; i++) {
+    var rawMerchant = (values[i][0] || "").toString();
+    if (!rawMerchant) continue;
+    var resolved = resolveMerchant(rawMerchant, resolutions);
+    if (resolved && resolved.merchant && resolved.merchant !== rawMerchant) {
+      values[i][0] = resolved.merchant;
+      changed++;
+    }
+  }
+
+  range.setValues(values);
+  Logger.log("reapplyMerchantResolutions: merchants updated=" + changed);
+}
+
+// Populate CategoryOverrides for review:
+// For each merchant seen in the main sheet that is NOT already in CategoryOverrides,
+// pick the most-frequent category and append a row. Safe to re-run — never overwrites
+// existing rows, so manual corrections are preserved.
+function populateCategoryOverridesForReview() {
+  var sheet = getSpreadsheet().getSheets()[0];
+  var mainLast = sheet.getLastRow();
+  if (mainLast <= 1) {
+    Logger.log("No transactions to infer from");
+    return;
+  }
+
+  // Build merchant -> {category: count}
+  var mainData = sheet.getRange(2, 3, mainLast - 1, 3).getValues(); // C..E (merchant, amount, category)
+  var index = {};
+  var original = {}; // preserve display-cased merchant name
+  mainData.forEach(function (row) {
+    var m = (row[0] || "").toString().trim();
+    var c = (row[2] || "").toString().trim();
+    if (!m || !c || c.toLowerCase() === "uncategorized") return;
+    var key = m.toLowerCase();
+    if (!index[key]) {
+      index[key] = {};
+      original[key] = m;
+    }
+    index[key][c] = (index[key][c] || 0) + 1;
+  });
+
+  // Existing entries (case-insensitive) to skip
+  var tab = getOrCreateOverridesSheet();
+  var existing = {};
+  var lastRow = tab.getLastRow();
+  if (lastRow > 1) {
+    tab
+      .getRange(2, 1, lastRow - 1, 1)
+      .getValues()
+      .forEach(function (row) {
+        var m = (row[0] || "").toString().trim().toLowerCase();
+        if (m) existing[m] = true;
+      });
+  }
+
+  // Build new rows and batch-append
+  var rowsToAppend = [];
+  Object.keys(index).forEach(function (key) {
+    if (existing[key]) return;
+    var counts = index[key];
+    var best = null;
+    var bestCount = 0;
+    Object.keys(counts).forEach(function (cat) {
+      if (counts[cat] > bestCount) {
+        best = cat;
+        bestCount = counts[cat];
+      }
+    });
+    if (best) rowsToAppend.push([original[key], best]);
+  });
+
+  if (rowsToAppend.length > 0) {
+    tab.getRange(tab.getLastRow() + 1, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
+  }
+  Logger.log("populateCategoryOverridesForReview: appended=" + rowsToAppend.length);
+}
+
+// Apply CategoryOverrides to ALL existing main-sheet transactions.
+// For every main-sheet row whose merchant (case-insensitive exact) matches an entry in
+// CategoryOverrides, overwrite col E with the mapped category. Overrides always win.
+function applyCategoryOverridesToMainSheet() {
+  var overrides = getCategoryOverrides();
+  if (Object.keys(overrides).length === 0) {
+    Logger.log("CategoryOverrides is empty — nothing to apply");
+    return;
+  }
+  var sheet = getSpreadsheet().getSheets()[0];
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) {
+    Logger.log("No transactions to update");
+    return;
+  }
+
+  var range = sheet.getRange(2, 3, lastRow - 1, 3); // C..E
+  var values = range.getValues();
+  var changed = 0;
+
+  for (var i = 0; i < values.length; i++) {
+    var merchant = (values[i][0] || "").toString().trim();
+    if (!merchant) continue;
+    var mapped = overrides[merchant.toLowerCase()];
+    if (mapped && values[i][2] !== mapped) {
+      values[i][2] = mapped;
+      changed++;
+    }
+  }
+
+  range.setValues(values);
+  Logger.log("applyCategoryOverridesToMainSheet: categories updated=" + changed);
 }

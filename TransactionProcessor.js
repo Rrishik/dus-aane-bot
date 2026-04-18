@@ -206,8 +206,18 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
       if (data.not_a_transaction) {
         if (!silent) {
           var reason = data.reason || "Not a transaction";
+          var user = (userEmail || "").split("@")[0] || "unknown";
           var skipMsg =
-            "ℹ️ *New email detected but skipped*\n" + "Reason: " + reason + "\n" + "[View email](" + emailLink + ")";
+            "ℹ️ *New email detected but skipped*\n" +
+            "👤 *By:* " +
+            escapeMarkdown(user) +
+            "\n" +
+            "Reason: " +
+            reason +
+            "\n" +
+            "[View email](" +
+            emailLink +
+            ")";
           sendTelegramMessage(CHAT_ID, skipMsg, { parse_mode: "Markdown" });
         }
         return { saved: false, duplicate: false, data: null };
@@ -222,19 +232,10 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
           data.category = resolved.category;
         }
       }
-      saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
-      // Register new merchant for resolution review
-      if (rawMerchant && addNewMerchantIfNeeded(rawMerchant) && !silent) {
-        var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/edit";
-        var newMerchantMsg =
-          "\uD83C\uDD95 New merchant detected: *" +
-          escapeMarkdown(rawMerchant) +
-          "*\n" +
-          "[Add resolved name in sheet](" +
-          sheetUrl +
-          ")";
-        sendTelegramMessage(CHAT_ID, newMerchantMsg, { parse_mode: "Markdown" });
-      }
+      // Register new merchant for resolution review (must run BEFORE the transaction message
+      // so the inline keyboard can include a one-tap "Save mapping" button when applicable)
+      var isNewMerchant = !!(rawMerchant && addNewMerchantIfNeeded(rawMerchant));
+      saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent, isNewMerchant);
       return { saved: true, duplicate: false, data: data };
     } else {
       // AI response was not valid JSON
@@ -248,7 +249,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
 /**
  * Saves the transaction structure to the sheet and sends a notification.
  */
-function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent) {
+function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent, isNewMerchant) {
   var transactionDate = data.transaction_date || "N/A";
   var merchant = data.merchant || "Unknown";
   var amount = data.amount || 0;
@@ -274,7 +275,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
 
   if (!silent) {
     data.email_date = emailDate;
-    sendTransactionMessage(data, messageId, user);
+    sendTransactionMessage(data, messageId, user, isNewMerchant);
   }
 }
 

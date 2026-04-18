@@ -164,14 +164,15 @@ function buildReplyMarkup(buttons) {
   return { inline_keyboard: buttons };
 }
 
-function buildCategoryKeyboard(emailMessageId, categories) {
+function buildCategoryKeyboard(emailMessageId, categories, prefix) {
   var list = categories || CATEGORIES;
+  var pfx = prefix || "cat";
   var rows = [];
   var row = [];
   for (var i = 0; i < list.length; i++) {
     var emoji = CATEGORY_EMOJIS[list[i]] || "";
     var label = emoji ? emoji + " " + list[i] : list[i];
-    row.push({ text: label, callback_data: "cat_" + emailMessageId + "_" + i });
+    row.push({ text: label, callback_data: pfx + "_" + emailMessageId + "_" + i });
     if (row.length === 3 || i === list.length - 1) {
       rows.push(row);
       row = [];
@@ -213,7 +214,7 @@ function getTransactionMessageAsString(transaction_details, user) {
   return message;
 }
 
-function sendTransactionMessage(transaction_details, messageId, user) {
+function sendTransactionMessage(transaction_details, messageId, user, isNewMerchant) {
   var message = getTransactionMessageAsString(transaction_details, user);
 
   var options = {
@@ -230,6 +231,13 @@ function sendTransactionMessage(transaction_details, messageId, user) {
     // Add "Set Merchant" button if merchant is empty
     if (!transaction_details.merchant) {
       rows.unshift([{ text: "🏠 Set Merchant", callback_data: "setmerch_" + messageId }]);
+    }
+    // New-merchant flow: one-tap Save plus Edit Merchant (which then prompts for category).
+    if (isNewMerchant && transaction_details.merchant) {
+      var saveLabel =
+        "🆕 Save: " + transaction_details.merchant + " → " + (transaction_details.category || "Uncategorized");
+      rows.unshift([{ text: "🏪 Edit Merchant", callback_data: "editmerchname_" + messageId }]);
+      rows.unshift([{ text: saveLabel, callback_data: "savemerch_" + messageId }]);
     }
     options.reply_markup = buildReplyMarkup(rows);
   }

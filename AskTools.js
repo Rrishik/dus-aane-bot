@@ -69,7 +69,7 @@ var ASK_TOOLS = [
     function: {
       name: "get_split_summary",
       description:
-        "Get split vs personal expense summary for a date range. Shows totals, per-user paid amounts, and who owes whom.",
+        "Get shared-expense summary for a date range. Covers Split (50/50), Partner (payer paid 100% on behalf of the other user), and Personal totals, plus per-user paid amounts and who owes whom.",
       parameters: {
         type: "object",
         properties: {
@@ -162,8 +162,10 @@ function executeAskTool(toolName, args, allTransactions) {
       var settlement = calcSplitSettlement(debits);
       return {
         split_count: settlement.splitCount,
+        partner_count: settlement.partnerCount,
         personal_count: settlement.personalCount,
         split_total_by_currency: settlement.splitTotal,
+        partner_total_by_currency: settlement.partnerTotal,
         personal_total_by_currency: settlement.personalTotal,
         user_paid: settlement.userPaid,
         settlements: settlement.settlements
