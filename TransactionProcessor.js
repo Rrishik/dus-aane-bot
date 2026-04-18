@@ -109,13 +109,15 @@ function getCutoffDate() {
  * Accepts a start date, and an optional end date for range queries.
  */
 function fetchAndFilterMessages(startDate, endDate) {
-  var startStr = Utilities.formatDate(startDate, Session.getScriptTimeZone(), "yyyy/MM/dd");
-  var query = `${GMAIL_SEARCH_QUERY} after:${startStr}`;
+  var query;
   if (endDate) {
-    var endStr = Utilities.formatDate(endDate, Session.getScriptTimeZone(), "yyyy/MM/dd");
-    query += ` before:${endStr}`;
+    // Use Unix timestamps (seconds) for exact precision. Gmail's date-form `before:`
+    // is exclusive of the given day's midnight, which drops messages on the end date.
+    var afterSec = Math.floor(startDate.getTime() / 1000);
+    var beforeSec = Math.floor(endDate.getTime() / 1000);
+    query = `${GMAIL_SEARCH_QUERY} after:${afterSec} before:${beforeSec}`;
   } else {
-    // Use the simpler newer_than for the regular trigger flow
+    // Regular trigger flow: simple lookback window
     query = `${GMAIL_SEARCH_QUERY} newer_than:${MAILS_LOOKBACK_PERIOD}`;
   }
   var threads = GmailApp.search(query).reverse();
