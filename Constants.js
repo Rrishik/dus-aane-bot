@@ -63,3 +63,19 @@ const CATEGORY_EMOJIS = {
 
 // Gmail
 const MAILS_LOOKBACK_PERIOD = "1h";
+
+// Gmail search query — matches bank transaction emails by sender domain.
+// Covers major Indian banks + common legacy domains. Add new banks here, no label setup needed.
+// The LLM's not_a_transaction branch handles any remaining noise (OTPs, marketing, etc.).
+const GMAIL_SEARCH_QUERY =
+  "from:(" +
+  "bank.in OR bank.com OR bank.net OR bank.co.in" +
+  " OR sbi.co.in OR hsbc.co.in OR idbi.co.in OR pnbindia.in" +
+  " OR bobmail.in OR bankofbaroda.com OR bobcard.in" +
+  " OR sc.com OR standardchartered.com" +
+  " OR citi.com" +
+  " OR kotak.com OR indusind.com" +
+  " OR americanexpress.com" +
+  " OR goniyo.com" +
+  ') -subject:(statement OR "e-statement")' +
+  " -category:(promotions OR social OR forums)";
