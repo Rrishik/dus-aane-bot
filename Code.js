@@ -87,23 +87,39 @@ function triggerEmailProcessing() {
 
 // Shared entry point for chunked backfill (used by /backfill command)
 function startChunkedBackfill(startDate, endDate) {
-  endDate.setHours(23, 59, 59, 999);
+  // For day-granular backfills (endDate set to 00:00 of some day), extend to end-of-day.
+  // For sub-day backfills (e.g. /backfill 10m), endDate already carries the intended time.
+  var isMidnight =
+    endDate.getHours() === 0 &&
+    endDate.getMinutes() === 0 &&
+    endDate.getSeconds() === 0 &&
+    endDate.getMilliseconds() === 0;
+  if (isMidnight) {
+    endDate.setHours(23, 59, 59, 999);
+  }
   var tz = Session.getScriptTimeZone();
   var props = PropertiesService.getScriptProperties();
-  props.setProperty("backfill_start", Utilities.formatDate(startDate, tz, "yyyy-MM-dd"));
-  props.setProperty("backfill_end", Utilities.formatDate(endDate, tz, "yyyy-MM-dd"));
+  props.setProperty("backfill_start", Utilities.formatDate(startDate, tz, "yyyy-MM-dd'T'HH:mm:ss"));
+  props.setProperty("backfill_end", Utilities.formatDate(endDate, tz, "yyyy-MM-dd'T'HH:mm:ss"));
   props.setProperty("backfill_total_saved", "0");
   props.setProperty("backfill_total_dupes", "0");
   props.setProperty("backfill_total_failed", "0");
   props.setProperty("backfill_total_processed", "0");
   props.setProperty("backfill_chunk", "1");
 
+  // Pick format based on whether the range is sub-day (minute/hour) or multi-day.
+  var spanMs = endDate.getTime() - startDate.getTime();
+  var fmt = spanMs < 24 * 60 * 60 * 1000 ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd";
+  var humanSpan = formatDurationMs(spanMs);
+
   sendTelegramMessage(
     CHAT_ID,
-    "⏳ *Backfill started*\n" +
-      Utilities.formatDate(startDate, tz, "yyyy-MM-dd") +
+    "⏳ *Backfill started* _(" +
+      humanSpan +
+      ")_\n" +
+      Utilities.formatDate(startDate, tz, fmt) +
       " → " +
-      Utilities.formatDate(endDate, tz, "yyyy-MM-dd")
+      Utilities.formatDate(endDate, tz, fmt)
   );
 
   // Delete the initial ack message from doPost
@@ -137,7 +153,13 @@ function continueBackfill() {
 
   var start = new Date(startStr);
   var end = new Date(endStr);
-  end.setHours(23, 59, 59, 999);
+  // Only extend to end-of-day if the stored end is at midnight (multi-day backfill).
+  // For sub-day backfills (e.g. /backfill 10m) the exact time was preserved and must be respected.
+  var isMidnight =
+    end.getHours() === 0 && end.getMinutes() === 0 && end.getSeconds() === 0 && end.getMilliseconds() === 0;
+  if (isMidnight) {
+    end.setHours(23, 59, 59, 999);
+  }
 
   var chunk = parseInt(props.getProperty("backfill_chunk") || "1", 10);
   var skipCount = parseInt(props.getProperty("backfill_total_processed") || "0", 10);
@@ -198,4 +220,22 @@ function continueBackfill() {
     props.deleteProperty("backfill_total_processed");
     props.deleteProperty("backfill_chunk");
   }
+}
+
+// Human-readable duration formatter: 90000 → "1m 30s", 3660000 → "1h 1m", 90061000 → "1d 1h".
+function formatDurationMs(ms) {
+  if (!ms || ms < 0) return "0s";
+  var s = Math.floor(ms / 1000);
+  var d = Math.floor(s / 86400);
+  s -= d * 86400;
+  var h = Math.floor(s / 3600);
+  s -= h * 3600;
+  var m = Math.floor(s / 60);
+  s -= m * 60;
+  var parts = [];
+  if (d) parts.push(d + "d");
+  if (h) parts.push(h + "h");
+  if (m) parts.push(m + "m");
+  if (s && parts.length === 0) parts.push(s + "s"); // only show seconds for very short spans
+  return parts.length ? parts.join(" ") : "<1m";
 }
