@@ -10,7 +10,7 @@ Telegram bot that parses transaction emails via AI and logs them to Google Sheet
 - **Telegram bot** — `/summary`, `/recent`, `/stats`, `/ask`, `/backfill` commands with inline buttons
 - **Analytics dashboard** — Monthly breakdown, spending trends, split settlement via `/stats`
 - **AI-powered queries** — Natural language questions about your spending via `/ask`
-- **Split tracking** — Mark transactions as Personal or Split
+- **Split tracking** — Mark transactions as Personal, Split (50/50), or Partner (I paid on behalf of the other user)
 - **Category management** — Separate debit/credit category lists with inline picker
 - **Non-transaction filtering** — AI skips surveys, OTPs, marketing emails and notifies you
 - **Empty merchant handling** — "Set Merchant" button for generic bank alerts
@@ -35,21 +35,21 @@ Telegram bot that parses transaction emails via AI and logs them to Google Sheet
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/summary [N]` | Spending summary (default: last 10) |
-| `/recent [N] [user]` | Recent transactions with optional filters |
-| `/stats` | Analytics dashboard — monthly, trends, who owes |
-| `/ask <question>` | AI-powered spending queries (e.g., "food spending last month") |
-| `/backfill 3 days` | Backfill last 3 days/weeks/months |
-| `/backfill YYYY-MM-DD YYYY-MM-DD` | Backfill a date range |
-| `/help` | Show commands |
+| Command                           | Description                                                    |
+| --------------------------------- | -------------------------------------------------------------- |
+| `/summary [N]`                    | Spending summary (default: last 10)                            |
+| `/recent [N] [user]`              | Recent transactions with optional filters                      |
+| `/stats`                          | Analytics dashboard — monthly, trends, who owes                |
+| `/ask <question>`                 | AI-powered spending queries (e.g., "food spending last month") |
+| `/backfill 3 days`                | Backfill last 3 days/weeks/months                              |
+| `/backfill YYYY-MM-DD YYYY-MM-DD` | Backfill a date range                                          |
+| `/help`                           | Show commands                                                  |
 
 ## Inline Buttons
 
 Each transaction notification shows action buttons:
 
-- **✂️ Split** — Toggles between Personal/Split
+- **✂️ Split** — Cycles through `Personal` → `Split` (50/50) → `Partner` (you paid 100% on behalf of the other user) → `Personal`
 - **✏️ Category** — Shows category picker (debit or credit categories based on transaction type)
 - **🗑️ Delete** — Removes the transaction row
 - **🏪 Set Merchant** — Appears when merchant is empty; prompts you to type the merchant name, auto-fills category if matched in MerchantResolution
@@ -78,8 +78,8 @@ The LLM extracts transaction details from emails. For well-known merchants (Amaz
                    → LLM returns final JSON (2 round-trips)
 ```
 
-| Tool | Description |
-|------|-------------|
+| Tool                    | Description                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------- |
 | `get_merchant_category` | Looks up default category for a merchant. Only called when the LLM is unsure. |
 
 The LLM self-optimizes: common merchants cost 1 API call, rare merchants cost 2. No tokens wasted on irrelevant merchant history.
@@ -94,24 +94,24 @@ The LLM answers natural language spending questions by calling tools that query 
 /ask compare my spending with rishik
 ```
 
-| Tool | Description |
-|------|-------------|
-| `get_spending_summary` | Total debits/credits by currency for a date range |
-| `get_category_breakdown` | Spending grouped by category |
-| `get_top_merchants` | Top N merchants by spend amount |
-| `get_user_spend` | Per-user spending totals |
-| `get_split_summary` | Split vs personal totals, settlement calculation |
-| `search_transactions` | Filter by merchant, category, user, amount, type, date range |
+| Tool                     | Description                                                  |
+| ------------------------ | ------------------------------------------------------------ |
+| `get_spending_summary`   | Total debits/credits by currency for a date range            |
+| `get_category_breakdown` | Spending grouped by category                                 |
+| `get_top_merchants`      | Top N merchants by spend amount                              |
+| `get_user_spend`         | Per-user spending totals                                     |
+| `get_split_summary`      | Split vs personal totals, settlement calculation             |
+| `search_transactions`    | Filter by merchant, category, user, amount, type, date range |
 
 The LLM chains up to 3 tool calls per query. The system prompt provides only metadata (today's date, available categories, field names) — no actual transaction data enters the context until a tool is called and returns targeted results.
 
 ### Token comparison
 
-| Approach | Tokens per email | Scales with |
-|----------|-----------------|-------------|
-| Context injection | ~4,500+ | Number of merchants |
-| RAG | ~2,000+ (retrieval) | Corpus size |
-| **Tool calling** | **~600 base** | **Nothing** (constant) |
+| Approach          | Tokens per email    | Scales with            |
+| ----------------- | ------------------- | ---------------------- |
+| Context injection | ~4,500+             | Number of merchants    |
+| RAG               | ~2,000+ (retrieval) | Corpus size            |
+| **Tool calling**  | **~600 base**       | **Nothing** (constant) |
 
 ## `/stats` — Analytics Dashboard
 
@@ -164,16 +164,19 @@ GitHub Actions on push to `main`:
 ## 🐛 Troubleshooting
 
 ### Bot not responding
+
 - Verify webhook: run `setTelegramWebhook()` from Apps Script editor
 - Check Apps Script execution logs
 - Ensure bot token is valid
 
 ### Transactions not being logged
+
 - Verify Gmail label exists and has emails
 - Check AI provider API quota
 - Review Apps Script logs for errors
 
 ### Wrong categories
+
 - Use ✏️ Category button to correct
 - The extraction pipeline uses tool calling to look up mappings — ensure your data is up to date
 

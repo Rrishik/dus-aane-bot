@@ -201,11 +201,17 @@ function formatMonthlyMessage(year, month, data, numMonths) {
     });
   }
 
-  // Split settlement
+  // Split + Partner settlement
   var s = data.settlement;
-  if (s && s.splitCount > 0) {
-    var splitInr = s.splitTotal["INR"] || 0;
-    msg += "\n✂️ *Split Total:* ₹" + formatAmount(splitInr) + "\n";
+  var sharedCount = s ? (s.splitCount || 0) + (s.partnerCount || 0) : 0;
+  if (s && sharedCount > 0) {
+    var splitInr = (s.splitTotal && s.splitTotal["INR"]) || 0;
+    var partnerInr = (s.partnerTotal && s.partnerTotal["INR"]) || 0;
+    msg += "\n✂️ *Shared Total:* ₹" + formatAmount(splitInr + partnerInr);
+    if (partnerInr > 0) {
+      msg += "  _(split ₹" + formatAmount(splitInr) + " + partner ₹" + formatAmount(partnerInr) + ")_";
+    }
+    msg += "\n";
     s.users.forEach(function (u) {
       var paid = (s.userPaid[u] || {})["INR"] || 0;
       msg += "   " + escapeMarkdown(u) + " paid  ₹" + formatAmount(paid) + "\n";
@@ -416,7 +422,7 @@ function getWhoOwesAnalytics(year, month) {
     return t.type === "Debit";
   });
   var result = calcSplitSettlement(debits);
-  if (result.splitCount === 0) return null;
+  if (result.splitCount === 0 && result.partnerCount === 0) return null;
   return result;
 }
 
@@ -426,7 +432,7 @@ function formatWhoOwesMessage(year, month, data) {
   var monthName = Utilities.formatDate(monthDate, tz, "MMMM yyyy");
 
   var msg = "💰 *Who Owes — " + monthName + "*\n\n";
-  msg += "✂️ *Split transactions:* " + data.splitCount + "\n\n";
+  msg += "✂️ *Split:* " + data.splitCount + "   👤 *Partner:* " + data.partnerCount + "\n\n";
 
   // Per-user paid
   msg += "💳 *Each Person Paid:*\n";
@@ -441,8 +447,9 @@ function formatWhoOwesMessage(year, month, data) {
   msg += "\n⚖️ *Settlement:*\n";
   Object.keys(data.settlements).forEach(function (cur) {
     var s = data.settlements[cur];
-    msg +=
-      "\n*" + cur + "* (total: " + formatAmount(s.total) + ", fair share: " + formatAmount(s.fairShare) + "/person)\n";
+    var breakdown = "split " + formatAmount(s.splitTotal);
+    if (s.partnerTotal > 0) breakdown += ", partner " + formatAmount(s.partnerTotal);
+    msg += "\n*" + cur + "* (total: " + formatAmount(s.total) + " — " + breakdown + ")\n";
 
     var overpaid = [];
     var underpaid = [];
@@ -551,38 +558,103 @@ function aggregateByUser(transactions) {
 }
 
 // Calculate split settlements between users
+// Split = 50/50 shared; Partner = payer paid 100% on behalf of other user(s)
 function calcSplitSettlement(debits) {
   var splitTxns = debits.filter(function (t) {
     return t.split === SPLIT_STATUS.SPLIT;
   });
+  var partnerTxns = debits.filter(function (t) {
+    return t.split === SPLIT_STATUS.PARTNER;
+  });
   var personalTxns = debits.filter(function (t) {
-    return t.split !== SPLIT_STATUS.SPLIT;
+    return t.split !== SPLIT_STATUS.SPLIT && t.split !== SPLIT_STATUS.PARTNER;
   });
 
   var splitTotal = sumByCurrency(splitTxns);
+  var partnerTotal = sumByCurrency(partnerTxns);
   var personalTotal = sumByCurrency(personalTxns);
-  var userPaid = aggregateByUser(splitTxns);
-  var users = Object.keys(userPaid);
+  var userPaidSplit = aggregateByUser(splitTxns);
+  var userPaidPartner = aggregateByUser(partnerTxns);
 
-  // Per currency: fair share = total / num_users
+  // All known users = union of payers in split/partner txns + anyone else seen in debits
+  // (needed so Partner txns can identify "the other user" for settlement)
+  var userSet = {};
+  debits.forEach(function (t) {
+    if (t.user) userSet[t.user] = true;
+  });
+  var users = Object.keys(userSet);
+
+  // All currencies seen in shared txns
+  var currencySet = {};
+  Object.keys(splitTotal).forEach(function (c) {
+    currencySet[c] = true;
+  });
+  Object.keys(partnerTotal).forEach(function (c) {
+    currencySet[c] = true;
+  });
+
   var settlements = {};
-  Object.keys(splitTotal).forEach(function (cur) {
-    var total = splitTotal[cur];
-    var fairShare = total / Math.max(users.length, 1);
+  Object.keys(currencySet).forEach(function (cur) {
     var balances = {};
     users.forEach(function (u) {
-      var paid = (userPaid[u] || {})[cur] || 0;
-      balances[u] = paid - fairShare;
+      balances[u] = 0;
     });
-    settlements[cur] = { total: total, fairShare: fairShare, balances: balances };
+
+    // Split: each user's share = splitTotal / n_users, payer gets credited full amount
+    var splitCur = splitTotal[cur] || 0;
+    var fairShare = users.length > 0 ? splitCur / users.length : 0;
+    users.forEach(function (u) {
+      var paid = (userPaidSplit[u] || {})[cur] || 0;
+      balances[u] += paid - fairShare;
+    });
+
+    // Partner: payer credited full amount; the other user(s) share the full cost equally
+    partnerTxns.forEach(function (t) {
+      if (t.currency !== cur) return;
+      var others = users.filter(function (u) {
+        return u !== t.user;
+      });
+      if (others.length === 0) return; // Can't settle without a counterparty
+      var shareOther = t.amount / others.length;
+      balances[t.user] += t.amount;
+      others.forEach(function (u) {
+        balances[u] -= shareOther;
+      });
+    });
+
+    settlements[cur] = {
+      total: splitCur + (partnerTotal[cur] || 0),
+      splitTotal: splitCur,
+      partnerTotal: partnerTotal[cur] || 0,
+      fairShare: fairShare,
+      balances: balances
+    };
+  });
+
+  // Combined userPaid for display (split + partner)
+  var userPaid = {};
+  users.forEach(function (u) {
+    userPaid[u] = {};
+    var s = userPaidSplit[u] || {};
+    var p = userPaidPartner[u] || {};
+    Object.keys(s).forEach(function (c) {
+      userPaid[u][c] = (userPaid[u][c] || 0) + s[c];
+    });
+    Object.keys(p).forEach(function (c) {
+      userPaid[u][c] = (userPaid[u][c] || 0) + p[c];
+    });
   });
 
   return {
     splitCount: splitTxns.length,
+    partnerCount: partnerTxns.length,
     personalCount: personalTxns.length,
     splitTotal: splitTotal,
+    partnerTotal: partnerTotal,
     personalTotal: personalTotal,
     userPaid: userPaid,
+    userPaidSplit: userPaidSplit,
+    userPaidPartner: userPaidPartner,
     users: users,
     settlements: settlements
   };
