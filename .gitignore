@@ -1,3 +1,5 @@
 Lol.js
 node_modules/
 worker/node_modules/
+scripts/
+.clasp.json.*.bak
