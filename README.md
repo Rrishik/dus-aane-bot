@@ -5,7 +5,7 @@ Telegram bot that parses transaction emails via AI and logs them to Google Sheet
 ## Features
 
 - **AI-powered extraction** — Azure OpenAI (GPT-5.2) extracts transaction details from emails using tool calling
-- **Zero-config email discovery** — Finds bank transaction emails via a sender-based Gmail search query (no label setup required)
+- **Forward-based ingestion** — Users auto-forward bank emails from their own Gmail to `dus-aane-bot@healthvault.online` (Cloudflare Email Routing → bot's Gmail → Apps Script). Multi-tenant ready; no Gmail OAuth per user.
 - **Smart merchant resolution** — `MerchantResolution` tab maps raw bank names to clean ones (e.g., `FLIPKART_MWS_MERCH` → `Flipkart`)
 - **Category overrides** — Separate `CategoryOverrides` tab maps resolved merchants to categories; reviewable/editable in bulk
 - **Google Sheets logging** — 11-column format with multi-currency support
@@ -25,17 +25,37 @@ Telegram bot that parses transaction emails via AI and logs them to Google Sheet
 
 ### Prerequisites
 
-- Google Account, Telegram Bot Token, Azure OpenAI API key, Cloudflare account (free)
+- Dedicated Gmail account for the bot (reads forwarded mail)
+- Telegram Bot Token, Azure OpenAI API key, Cloudflare account (free)
+- A domain on Cloudflare with Email Routing enabled (e.g., `healthvault.online`)
 
-### Quick Start
+### Admin setup (one-time)
 
-1. `npm install -g @google/clasp && clasp login`
-2. Create `Lol.js` (gitignored) with secrets: `BOT_TOKEN`, `GROUP_CHAT_ID`, `SCRIPT_APP_URL`, `WORKER_PROXY_URL`, `PROD_SHEET_ID`, `SHEET_NAME`, Azure OpenAI keys
-3. (Optional) Edit `GMAIL_SEARCH_QUERY` in [Constants.js](Constants.js) if your bank sender isn't already in the default list
-4. `clasp push`
-5. Deploy Cloudflare Worker: `cd worker && npx wrangler secret put APPS_SCRIPT_URL && npx wrangler deploy`
-6. Run `setTelegramWebhook()` and `setTelegramCommands()` from Apps Script editor
-7. Set up a time-based trigger for `triggerEmailProcessing` in Apps Script
+1. **Bot Gmail account**: create `dus-aane-bot-inbox@gmail.com` (or similar); this is where all tenant forwards land
+2. **Cloudflare Email Routing**: route `dus-aane-bot@healthvault.online` → bot Gmail (verify destination)
+3. **Apps Script**: `npm install -g @google/clasp && clasp login` (as bot Gmail) → `clasp create --type standalone --title "dus-aane-bot" --rootDir .`
+4. **Secrets**: create `Lol.js` (gitignored) with `BOT_TOKEN`, `GROUP_CHAT_ID`, `SCRIPT_APP_URL`, `WORKER_PROXY_URL`, `PROD_SHEET_ID`, `SHEET_NAME`, Azure OpenAI keys
+5. `clasp push` → authorize all scopes in the script editor
+6. Deploy as Web App (execute as bot account, access: Anyone) → note `/exec` URL + deployment ID
+7. Deploy Cloudflare Worker: set `APPS_SCRIPT_URL` secret, `wrangler deploy` (or use GitHub Actions)
+8. Run `setTelegramWebhook()` and `setTelegramCommands()` from script editor
+9. Add an hourly trigger for `triggerEmailProcessing`
+
+### User onboarding (per tenant)
+
+Each user sets up one Gmail filter in their personal account to forward bank alerts:
+
+1. Gmail → Settings → Forwarding and POP/IMAP → **Add forwarding address** → `dus-aane-bot@healthvault.online` → verify (code arrives in bot inbox, bot relays via Telegram)
+2. Settings → Filters and Blocked Addresses → **Create a new filter**
+3. Paste the generated query (see `scripts/gen-gmail-filter.js`) into **Has the words**
+4. Check **Forward it to: `dus-aane-bot@healthvault.online`**, optionally **Skip the Inbox**
+5. Save
+
+Generate the filter query locally from the current bank allowlists:
+
+```powershell
+node scripts/gen-gmail-filter.js
+```
 
 ## Commands
 
@@ -67,20 +87,13 @@ When a brand-new merchant is detected, two extra buttons appear above the standa
 
 ## Email Discovery
 
-The bot locates bank transaction emails via a Gmail search query defined in [Constants.js](Constants.js) as `GMAIL_SEARCH_QUERY`. No Gmail labels or filters needed — the query matches common Indian bank domains directly:
+Two-stage filtering:
 
-```
-from:(bank.in OR bank.com OR bank.net OR bank.co.in
-      OR sbi.co.in OR hsbc.co.in OR idbi.co.in OR pnbindia.in
-      OR bobmail.in OR bankofbaroda.com OR bobcard.in
-      OR sc.com OR standardchartered.com
-      OR citi.com OR kotak.com OR indusind.com
-      OR americanexpress.com OR goniyo.com)
--subject:(statement OR "e-statement")
--category:(promotions OR social OR forums)
-```
+**Stage 1 — User's Gmail filter** (client side): each user's Gmail runs a filter composed from `BANK_FROM_DOMAINS`, `IGNORE_SENDERS`, and `IGNORE_SUBJECTS` in [Constants.js](Constants.js). Matching emails are auto-forwarded to `dus-aane-bot@healthvault.online`. Covers HDFC, Axis, ICICI, SBI, Kotak, IndusInd, HSBC, SC, Citi, AmEx, IDFC First, Equitas, Yes Bank, BoB, SBM, and more. Generate the user's filter string with `node scripts/gen-gmail-filter.js`.
 
-Covers HDFC, Axis, ICICI, SBI, Kotak, IndusInd, HSBC, SC, Citi, AmEx, IDFC First, AU Small Finance, Equitas, Yes Bank, Bank of Baroda, SBM, and more. Edit the list in `Constants.js` to add banks. The LLM's `not_a_transaction` branch handles any remaining noise.
+**Stage 2 — Bot inbox polling** (server side): Apps Script searches the bot Gmail with `GMAIL_SEARCH_QUERY = to:(dus-aane-bot@healthvault.online)` on an hourly trigger. The forwarder's email address (extracted from the `From:` header) becomes the transaction's user tag.
+
+The LLM's `not_a_transaction` branch handles any remaining noise that slips past the Gmail filter.
 
 ## Data Model
 
@@ -197,9 +210,15 @@ Typical workflow after bulk edits:
 ## Architecture
 
 ```
-Telegram → Cloudflare Worker (200 OK) → Apps Script → process & respond
+User's bank → User's Gmail (filter) → dus-aane-bot@healthvault.online
+    → Cloudflare Email Routing → Bot's Gmail inbox
+    → Apps Script (hourly trigger) → AI extraction → Google Sheet → Telegram
+
+Telegram → Cloudflare Worker (200 OK) → Apps Script Web App → process & respond
 ```
 
+- Inbound email path is async via Gmail polling; no webhook from Cloudflare
+- Inbound Telegram path uses the Worker proxy to eliminate 302-redirect retries
 - `/backfill` and `/ask` are deferred to async triggers (avoids Telegram timeout)
 - Backfill runs in 5-minute chunks via time-based triggers
 - `/ask` sends an immediate "🤔 Thinking..." message, then edits it with the response
@@ -226,7 +245,9 @@ GitHub Actions on push to `main`:
 
 ### Transactions not being logged
 
-- Verify `GMAIL_SEARCH_QUERY` in [Constants.js](Constants.js) matches your bank senders
+- Verify your Gmail forwarding filter is active and matches the expected bank emails
+- Check the bot inbox (`dus-aane-bot@healthvault.online` → Cloudflare destination) for delivered forwards
+- Confirm `GMAIL_SEARCH_QUERY` in [Constants.js](Constants.js) still matches `to:(dus-aane-bot@healthvault.online)`
 - Check AI provider API quota
 - Review Apps Script logs for errors
 
