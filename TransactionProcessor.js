@@ -110,7 +110,34 @@ function getCutoffDate() {
 }
 
 /**
- * Fetches threads and filters individual messages by date.
+ * Checks whether a Gmail message should be skipped based on IGNORE_SENDERS /
+ * IGNORE_SUBJECTS from Constants.js. Works on both direct bank emails (where
+ * `from` is the bank) and on manually-forwarded emails (where `from` is the
+ * forwarder but the subject typically still contains the original subject
+ * prefixed with "Fwd:").
+ *
+ * Ignore tokens with spaces must be surrounded by double-quotes in Constants;
+ * this function strips those quotes and does a case-insensitive substring match.
+ */
+function shouldIgnoreMessage(msg) {
+  var fromHeader = (msg.getFrom() || "").toLowerCase();
+  var subject = (msg.getSubject() || "").toLowerCase();
+
+  function norm(token) {
+    return token.replace(/^"|"$/g, "").toLowerCase();
+  }
+
+  for (var i = 0; i < IGNORE_SENDERS.length; i++) {
+    if (fromHeader.indexOf(norm(IGNORE_SENDERS[i])) !== -1) return true;
+  }
+  for (var j = 0; j < IGNORE_SUBJECTS.length; j++) {
+    if (subject.indexOf(norm(IGNORE_SUBJECTS[j])) !== -1) return true;
+  }
+  return false;
+}
+
+/**
+ * Fetches threads and filters individual messages by date + sender/subject ignore lists.
  * Accepts a start date, and an optional end date for range queries.
  */
 function fetchAndFilterMessages(startDate, endDate) {
@@ -134,6 +161,7 @@ function fetchAndFilterMessages(startDate, endDate) {
       var msgDate = msg.getDate();
       if (msgDate < startDate) return false;
       if (endDate && msgDate > endDate) return false;
+      if (shouldIgnoreMessage(msg)) return false;
       return true;
     });
     filteredMessages = filteredMessages.concat(validMessages);
