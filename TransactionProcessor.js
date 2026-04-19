@@ -137,6 +137,45 @@ function shouldIgnoreMessage(msg) {
 }
 
 /**
+ * Extracts the original sender's email from a forwarded message's body.
+ * Gmail's forward preamble format: "---------- Forwarded message ---------\nFrom: Name <addr@x>\n..."
+ * Returns the extracted address (lowercase) or null if no preamble is found.
+ */
+function extractForwardedFrom(msg) {
+  try {
+    var body = msg.getPlainBody() || "";
+    var preamble = body.match(/Forwarded message[\s\S]{0,200}?From:\s*([^\r\n]+)/i);
+    if (!preamble) return null;
+    var line = preamble[1];
+    var addrMatch = line.match(/<([^>]+)>/) || line.match(/([^\s<>]+@[^\s<>]+)/);
+    return addrMatch ? addrMatch[1].toLowerCase() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Checks whether the message's effective sender is from an allowed bank domain.
+ * For direct emails, checks `getFrom()`. For forwarded emails (subject starts
+ * with "Fwd:" or similar), falls back to the original sender parsed from the
+ * forward preamble in the body.
+ */
+function isFromAllowedBank(msg) {
+  var fromHeader = (msg.getFrom() || "").toLowerCase();
+  for (var i = 0; i < BANK_FROM_DOMAINS.length; i++) {
+    if (fromHeader.indexOf(BANK_FROM_DOMAINS[i].toLowerCase()) !== -1) return true;
+  }
+  // Not directly from a bank — check the forwarded preamble.
+  var origFrom = extractForwardedFrom(msg);
+  if (origFrom) {
+    for (var j = 0; j < BANK_FROM_DOMAINS.length; j++) {
+      if (origFrom.indexOf(BANK_FROM_DOMAINS[j].toLowerCase()) !== -1) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Fetches threads and filters individual messages by date + sender/subject ignore lists.
  * Accepts a start date, and an optional end date for range queries.
  */
@@ -161,6 +200,7 @@ function fetchAndFilterMessages(startDate, endDate) {
       var msgDate = msg.getDate();
       if (msgDate < startDate) return false;
       if (endDate && msgDate > endDate) return false;
+      if (!isFromAllowedBank(msg)) return false;
       if (shouldIgnoreMessage(msg)) return false;
       return true;
     });
