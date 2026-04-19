@@ -11,6 +11,13 @@
   "jsonExtensions": [
     ".json"
   ],
-  "filePushOrder": [],
+  "filePushOrder": [
+    "Lol.js",
+    "Constants.js",
+    "TelegramUtils.js",
+    "GoogleSheetUtils.js",
+    "TransactionProcessor.js",
+    "BotHandlers.js"
+  ],
   "skipSubdirectories": false
 }
