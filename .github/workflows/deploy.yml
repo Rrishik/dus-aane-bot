@@ -49,6 +49,9 @@ jobs:
           CLASP_TOKEN: ${{ secrets.CLASP_TOKEN }}
         run: |
           printf '%s' "$CLASP_TOKEN" > ~/.clasprc.json
+          echo "File size: $(wc -c < ~/.clasprc.json) bytes"
+          echo "Top-level keys:"
+          node -e "const j=require(require('os').homedir()+'/.clasprc.json'); console.log(Object.keys(j)); if(j.tokens){console.log('tokens keys:', Object.keys(j.tokens)); if(j.tokens.default){console.log('default keys:', Object.keys(j.tokens.default));}}"
 
       - name: Push to Apps Script
         run: clasp push --force
