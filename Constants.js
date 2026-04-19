@@ -74,6 +74,7 @@ const BANK_FROM_DOMAINS = [
   "sbi.co.in",
   "hsbc.co.in",
   "idbi.co.in",
+  "idfcfirstbank.com",
   "pnbindia.in",
   "bobmail.in",
   "bankofbaroda.com",
@@ -178,9 +179,10 @@ const IGNORE_SUBJECTS = [
 // as Promotions, so we rely on sender/subject filters instead.
 const IGNORE_CATEGORIES = [];
 
-// Gmail search query: match emails forwarded to our routing address.
-// Users set up a filter in their own Gmail (using the BANK_FROM_DOMAINS /
-// IGNORE_* arrays above, composed via scripts/gen-gmail-filter.js) that
-// forwards bank alerts to dus-aane-bot@healthvault.online. Those land in
-// the bot inbox with the To: header preserved by Cloudflare Email Routing.
-const GMAIL_SEARCH_QUERY = `to:(dus-aane-bot@healthvault.online)`;
+// Gmail search query: process any email that arrives in the bot inbox.
+// The bot account exists only for this bot, so every inbox message is a
+// forwarded bank alert (either via Cloudflare Email Routing from
+// dus-aane-bot@healthvault.online, or forwarded directly to
+// dusaanebot.inbox@gmail.com). The forwarder's email is extracted from
+// the From: header per-message to tag the transaction's user.
+const GMAIL_SEARCH_QUERY = `in:inbox`;
