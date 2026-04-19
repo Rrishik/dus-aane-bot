@@ -1,6 +1,6 @@
 {
-  "scriptId": "17nMZx9yKtqjz2EemPNZy0DXxRfmoscMW3H6ejtU4QAAlLjKEiPOOQOkQ",
-  "rootDir": ".",
+  "scriptId": "1qniavlVa8h7_ELDUC3qbui1TewywLY2WC_N12pGtGW7E0R6AhjYF7FeY",
+  "rootDir": "",
   "scriptExtensions": [
     ".js",
     ".gs"
@@ -11,14 +11,6 @@
   "jsonExtensions": [
     ".json"
   ],
-  "filePushOrder": [
-    "Lol.js",
-    "Constants.js",
-    "TelegramUtils.js",
-    "GoogleSheetUtils.js",
-    "TransactionProcessor.js",
-    "BotHandlers.js",
-    "Code.js"
-  ],
-  "skipSubdirectories": true
+  "filePushOrder": [],
+  "skipSubdirectories": false
 }
