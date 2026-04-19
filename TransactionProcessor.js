@@ -79,10 +79,15 @@ function extractTransactions() {
 
   var messagesToProcess = fetchAndFilterMessages(cutoffDate);
 
-  var userEmail = Session.getEffectiveUser().getEmail();
   var resolutions = getMerchantResolutions();
 
   messagesToProcess.forEach((message) => {
+    // Forwarder's email (original user), extracted from the `From:` header.
+    // Format: `Name <addr@x>` or just `addr@x`.
+    var fromHeader = message.getFrom();
+    var match = fromHeader.match(/<([^>]+)>/);
+    var userEmail = match ? match[1] : fromHeader.trim();
+
     processSingleEmail(message, userEmail, false, resolutions);
 
     Utilities.sleep(500);
@@ -290,7 +295,6 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
 
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
 
-  var userEmail = Session.getEffectiveUser().getEmail();
   var resolutions = getMerchantResolutions();
   var savedCount = 0;
   var duplicateCount = 0;
@@ -309,6 +313,11 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
         break;
       }
     }
+
+    // Forwarder's email, extracted per-message from the From: header.
+    var fromHeader = messagesToProcess[i].getFrom();
+    var match = fromHeader.match(/<([^>]+)>/);
+    var userEmail = match ? match[1] : fromHeader.trim();
 
     var result = processSingleEmail(messagesToProcess[i], userEmail, true, resolutions);
     processed++;
