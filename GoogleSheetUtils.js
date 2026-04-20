@@ -1,7 +1,13 @@
 // Per-execution tenant context: when set, getSpreadsheet() opens the tenant's
-// sheet instead of the default SHEET_ID. Entry points (doPost, triggers,
+// sheet instead of the admin sheet. Entry points (doPost, triggers,
 // extractTransactions per-message) call setCurrentTenant() before touching the
-// sheet or Telegram. Falls back to SHEET_ID + CHAT_ID when unset (tenant 0).
+// sheet or Telegram.
+//
+// Fallback behavior: when no tenant is set, getTenantSheetId() / getTenantChatId()
+// return the admin values (ADMIN_SHEET_ID / ADMIN_CHAT_ID). This is a safety net
+// for legacy code paths (tenant 0 / admin commands run manually from the script
+// editor). Any runtime code path that fires from a user-supplied chat_id MUST
+// set tenant context first — silent fallback would cross-tenant-leak data.
 var _currentTenant = null;
 
 function setCurrentTenant(tenant) {
@@ -19,11 +25,11 @@ function getCurrentTenant() {
 }
 
 function getTenantSheetId() {
-  return (_currentTenant && _currentTenant.sheet_id) || SHEET_ID;
+  return (_currentTenant && _currentTenant.sheet_id) || ADMIN_SHEET_ID;
 }
 
 function getTenantChatId() {
-  return (_currentTenant && _currentTenant.chat_id) || CHAT_ID;
+  return (_currentTenant && _currentTenant.chat_id) || ADMIN_CHAT_ID;
 }
 
 // Lazy-cached spreadsheet accessor — avoids redundant openById calls within a single execution

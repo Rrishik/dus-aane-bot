@@ -592,6 +592,10 @@ function showRecentTransactions(chatId, messageText) {
       }
     });
 
+    // Cap limit to keep the webhook response snappy.
+    if (limit > 50) limit = 50;
+    if (limit < 1) limit = 1;
+
     var sheet = getSpreadsheet().getSheets()[0];
     var data = sheet.getDataRange().getValues();
 

@@ -1,147 +1,193 @@
 # 💰 Dus Aane Bot
 
-Telegram bot that parses transaction emails via AI and logs them to Google Sheets. Built on Google Apps Script with a Cloudflare Worker proxy.
+Open-source, multi-tenant Telegram bot that reads forwarded bank transaction emails, extracts structured data with an LLM, and logs it to a per-user Google Sheet.
+
+Built on Google Apps Script + a Cloudflare Worker proxy. Self-host your own instance or run it for a group of friends — each tenant gets their own isolated sheet.
+
+- 🔒 **Privacy by construction** — the bot's Gmail only ever receives the narrow allowlist of transaction-alert senders you configure. OTPs, statements, security codes and marketing are excluded at the Gmail-filter layer before anything reaches the bot.
+- 🔓 **Auditable** — the full code lives in this repo. See [docs/PRIVACY.md](docs/PRIVACY.md) for what the bot reads, stores and shares.
+- 🏠 **Multi-tenant** — one deploy serves many users. Each tenant is onboarded with a single `/register` command after proving inbox ownership.
+
+## Table of contents
+
+- [Features](#features)
+- [How it works](#how-it-works)
+- [User onboarding (`/start` → `/register`)](#user-onboarding)
+- [Commands](#commands)
+- [Admin setup (one-time, per deployment)](#admin-setup)
+- [Data model](#data-model)
+- [Architecture](#architecture)
+- [Project structure](#project-structure)
+- [CI/CD](#cicd)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
 ## Features
 
-- **AI-powered extraction** — Azure OpenAI (GPT-5.2) extracts transaction details from emails using tool calling
-- **Forward-based ingestion** — Users auto-forward bank emails from their own Gmail to `dusaanebot.inbox@gmail.com` (Apps Script polls the bot inbox). Multi-tenant ready; no Gmail OAuth per user.
-- **Smart merchant resolution** — `MerchantResolution` tab maps raw bank names to clean ones (e.g., `FLIPKART_MWS_MERCH` → `Flipkart`)
-- **Category overrides** — Separate `CategoryOverrides` tab maps resolved merchants to categories; reviewable/editable in bulk
-- **Google Sheets logging** — 11-column format with multi-currency support
-- **Telegram bot** — `/recent`, `/stats`, `/ask`, `/backfill` commands with inline buttons
-- **Analytics dashboard** — Monthly breakdown, spending trends, split settlement via `/stats`
-- **AI-powered queries** — Natural language questions about your spending via `/ask`
-- **Split tracking** — Mark transactions as Personal, Split (50/50), or Partner (I paid on behalf of the other user)
-- **One-tap merchant mapping** — New-merchant detections get inline `Save` / `Edit Merchant` buttons on the transaction itself
-- **Category management** — Separate debit/credit category lists with inline picker
-- **Non-transaction filtering** — LLM skips surveys, OTPs, marketing, declined transactions and notifies you with reason + who it was for
-- **Empty merchant handling** — "Set Merchant" button for generic bank alerts
-- **Bulk maintenance scripts** — Reapply resolutions, populate categories for review, apply category overrides across the main sheet
-- **Cloudflare Worker proxy** — Eliminates Telegram retries from Apps Script 302 redirects
-- **CI/CD** — GitHub Actions auto-deploys to Apps Script and Cloudflare on push
+- **Multi-tenant** — Tenants registry (`Tenants` tab on the admin sheet) maps `chat_id`/`email` → per-tenant `sheet_id`. Each tenant's transactions are written to their own spreadsheet.
+- **AI-powered extraction** — Azure OpenAI with tool calling pulls merchant, amount, date, category, currency and type from emails. Falls back to a `get_merchant_category` tool when unsure.
+- **Forward-based ingestion** — Users auto-forward bank emails from their own Gmail to `dusaanebot.inbox@gmail.com`. No Gmail OAuth per user.
+- **Smart merchant resolution** — `MerchantResolution` tab maps raw bank strings to clean names (`FLIPKART_MWS_MERCH` → `Flipkart`).
+- **Category overrides** — Separate `CategoryOverrides` tab maps merchant → category, reviewable in bulk.
+- **Inline action buttons** — `✂️ Split` / `✏️ Category` / `🗑️ Delete` / `🏠 Set Merchant` on every transaction message.
+- **Analytics** — `/stats` for monthly/trends/who-owes dashboards; `/ask` for natural-language queries via tool calling.
+- **`/backfill`** — reprocess a date range in 5-minute chunks with progress updates.
+- **CI/CD** — GitHub Actions push to Apps Script and Cloudflare on every commit to `main`.
 
-## Setup
+## How it works
 
-### Prerequisites
-
-- Dedicated Gmail account for the bot (reads forwarded mail)
-- Telegram Bot Token, Azure OpenAI API key, Cloudflare account (free, for the Telegram proxy Worker)
-
-### Admin setup (one-time)
-
-1. **Bot Gmail account**: create `dusaanebot.inbox@gmail.com` (or similar); this is where all tenant forwards land
-2. **Apps Script**: `npm install -g @google/clasp && clasp login` (as bot Gmail) → `clasp create --type standalone --title "dus-aane-bot" --rootDir .`
-3. **Secrets**: create `Lol.js` (gitignored) with `BOT_TOKEN`, `GROUP_CHAT_ID`, `SCRIPT_APP_URL`, `WORKER_PROXY_URL`, `PROD_SHEET_ID`, `SHEET_NAME`, `TEMPLATE_SHEET_ID`, Azure OpenAI keys
-4. `clasp push` → authorize all scopes in the script editor
-5. Deploy as Web App (execute as bot account, access: Anyone) → note `/exec` URL + deployment ID
-6. Deploy Cloudflare Worker (Telegram proxy): set `APPS_SCRIPT_URL` secret, `wrangler deploy` (or use GitHub Actions)
-7. Run `setTelegramWebhook()` and `setTelegramCommands()` from script editor
-8. Add an hourly trigger for `triggerEmailProcessing`
-
-### User onboarding (per tenant)
-
-Each user sets up one Gmail filter in their personal account to forward bank alerts:
-
-1. Gmail → Settings → Forwarding and POP/IMAP → **Add forwarding address** → `dusaanebot.inbox@gmail.com` → verify (code arrives in bot inbox, bot relays via Telegram)
-2. Settings → Filters and Blocked Addresses → **Create a new filter**
-3. Paste the narrow query generated by `node scripts/gen-gmail-filter.js` into **Has the words**
-4. Check **Forward it to: `dusaanebot.inbox@gmail.com`**, optionally **Skip the Inbox**
-5. Save
-
-Generate the filter query locally from the current bank allowlists:
-
-```powershell
-node scripts/gen-gmail-filter.js
 ```
+Bank → your Gmail (filter auto-forwards) → dusaanebot.inbox@gmail.com
+     → Apps Script (hourly trigger, per-message tenant routing) → your sheet
+     → Telegram (transaction DM with inline buttons)
+```
+
+1. Each user sets up a Gmail filter that forwards only verified transaction-alert senders (see `TRANSACTION_SENDERS` in [Constants.js](Constants.js)) to the bot inbox.
+2. An hourly Apps Script trigger polls the bot inbox, extracts the forwarder's email from the `X-Forwarded-For` or `From:` header, looks up the tenant, and writes to their sheet.
+3. For each saved transaction the bot DMs the user with inline buttons for split status, category edit and delete.
+
+The Gmail filter on the user's side is the **primary privacy boundary** — the bot literally never sees mail that doesn't match the allowlist.
+
+## User onboarding
+
+This is the flow once the bot is deployed.
+
+**From Telegram (this chat):**
+
+1. `/start` — bot shows the welcome + 2-step setup
+2. **Forward any recent bank transaction email** from your Gmail to `dusaanebot.inbox@gmail.com`
+3. `/register your.name@gmail.com` — bot searches its inbox for the forward to prove ownership, then:
+   - Provisions a new Google Sheet (a copy of the template)
+   - Shares the sheet with `your.name@gmail.com` as editor
+   - DMs you the sheet link + a Gmail filter query to automate future forwards
+
+**Automate forwarding (one-time, in your Gmail):**
+
+1. Gmail → Settings → Forwarding and POP/IMAP → **Add forwarding address** → `dusaanebot.inbox@gmail.com`. Gmail emails a verification code to the bot inbox; the bot relays it to you on Telegram.
+2. Settings → Filters and Blocked Addresses → **Create a new filter** → paste the query the bot sent you into **Has the words** → **Forward it to** `dusaanebot.inbox@gmail.com`. Optional: **Skip the Inbox** if you don't want these in your Gmail inbox.
+
+From here, every matching transaction email auto-forwards; the hourly trigger processes it and you get a Telegram notification within the hour.
 
 ## Commands
 
 | Command                           | Description                                                      |
 | --------------------------------- | ---------------------------------------------------------------- |
+| `/start`                          | Welcome + onboarding instructions                                |
+| `/register <email>`               | Claim a Gmail address (after forwarding a bank email to the bot) |
+| `/myinfo`                         | Show your tenant status, registered emails, sheet link           |
 | `/recent [N] [user]`              | Recent transactions with optional filters                        |
-| `/stats`                          | Analytics dashboard — monthly, trends, who owes                  |
+| `/stats`                          | Analytics dashboard — monthly / trends / who owes                |
 | `/ask <question>`                 | AI-powered spending queries (e.g., "food spending last month")   |
+| `/help`                           | Show commands                                                    |
 | `/backfill 10m`                   | Backfill last N minutes/hours (compact: `10m`, `2h`, `3d`, `1w`) |
 | `/backfill 3 days`                | Backfill last N days/weeks/months                                |
 | `/backfill YYYY-MM-DD YYYY-MM-DD` | Backfill a date range                                            |
-| `/help`                           | Show commands                                                    |
 
-## Inline Buttons
+### Inline buttons
 
-Each transaction notification shows action buttons:
+Each transaction notification includes action buttons:
 
-- **✂️ Split** — Cycles through `Personal` → `Split` (50/50) → `Partner` (you paid 100% on behalf of the other user) → `Personal`
-- **✏️ Category** — Shows category picker (debit or credit categories based on transaction type)
-- **🗑️ Delete** — Removes the transaction row
-- **🏠 Set Merchant** — Appears when merchant is empty; prompts you to type the merchant name, auto-fills category if `CategoryOverrides` has an entry for it
+- **✂️ Split** — cycles `Personal` → `Split (50/50)` → `Partner (I paid 100% on their behalf)` → `Personal`
+- **✏️ Category** — shows a category picker (debit or credit categories based on the row's type)
+- **🗑️ Delete** — removes the transaction row
+- **🏠 Set Merchant** — shown when the LLM couldn't identify a merchant; you type the name and the category auto-fills if there's a `CategoryOverrides` entry
 
 ### New-merchant flow
 
 When a brand-new merchant is detected, two extra buttons appear above the standard row:
 
-- **🆕 Save: `<merchant>` → `<category>`** — One-tap confirm. Writes the LLM's resolved name to `MerchantResolution` and the category to `CategoryOverrides`.
-- **🏪 Edit Merchant** — Force-reply prompt for the merchant name, then shows the category picker. Updates both sheets plus the transaction row itself.
+- **🆕 Save: `<merchant>` → `<category>`** — one-tap confirm. Writes the resolved name to `MerchantResolution` and the category to `CategoryOverrides`.
+- **🏪 Edit Merchant** — force-reply prompt for the merchant name, then shows the category picker. Updates both sheets plus the transaction row.
 
-## Email Discovery
+## Admin setup
 
-Two-stage filtering:
+Admin = the person deploying and operating the bot. Users don't need any of this.
 
-**Stage 1 — User's Gmail filter** (client side): each user pastes the narrow `TRANSACTION_SENDERS` query from [Constants.js](Constants.js) into a Gmail filter. Matching emails are auto-forwarded to `dusaanebot.inbox@gmail.com`. Covers HDFC, Axis, ICICI, SBI, Kotak, IndusInd, HSBC, SC, Citi, AmEx, IDFC First, Equitas, Yes Bank, BoB, AU, and more. Generate the query with `node scripts/gen-gmail-filter.js`.
+### Prerequisites
 
-**Stage 2 — Bot inbox polling** (server side): Apps Script searches the bot Gmail with `GMAIL_SEARCH_QUERY = in:inbox` on an hourly trigger. The forwarder's email address (extracted from the `From:` header) becomes the transaction's user tag, and is used to route the transaction to the correct tenant's sheet.
+- Dedicated Gmail account for the bot (this is where all tenant forwards land)
+- Telegram bot token, Azure OpenAI API key, Cloudflare account (free, for the Telegram proxy Worker)
+- Node.js + `npm install -g @google/clasp`
 
-The LLM's `not_a_transaction` branch handles any remaining noise that slips past the Gmail filter.
+### One-time setup
 
-## Data Model
+1. **Bot Gmail account** — create `dusaanebot.inbox@gmail.com` (or your own address — update `BOT_INBOX_EMAIL` in [Constants.js](Constants.js) if different).
+2. **Apps Script project** — `clasp login` as the bot Gmail → `clasp create --type standalone --title "dus-aane-bot" --rootDir .`.
+3. **Secrets (`Lol.js`, gitignored)** — create it locally with these constants:
+   ```js
+   const BOT_TOKEN = "...";
+   const GROUP_CHAT_ID = "..."; // admin / founder chat id (tenant 0)
+   const SCRIPT_APP_URL = "https://script.google.com/macros/s/.../exec";
+   const WORKER_PROXY_URL = "https://your-worker.workers.dev";
+   const PROD_SHEET_ID = "..."; // admin sheet — hosts the Tenants registry + tenant 0's data
+   const SHEET_NAME = "Transactions";
+   const TEMPLATE_SHEET_ID = ""; // filled in step 6 below
+   const AZURE_OPENAI_ENDPOINT = "...";
+   const AZURE_OPENAI_API_KEY = "...";
+   const AZURE_OPENAI_DEPLOYMENT_NAME = "...";
+   const AZURE_OPENAI_API_VERSION = "2024-08-01-preview";
+   ```
+4. `clasp push` → open the project in the script editor → authorize all OAuth scopes (Gmail, Sheets, Drive, URL fetch).
+5. Deploy as Web App (execute as bot account, access: Anyone) → note the `/exec` URL + deployment ID.
+6. **Create the template sheet** — in the script editor, run `adminCreateTemplateSheet()`. It copies your admin sheet structure, clears the data, and logs the new sheet ID. Put that ID in `Lol.js` as `TEMPLATE_SHEET_ID` and in the GitHub secret.
+7. **Cloudflare Worker** — set `APPS_SCRIPT_URL` secret, `wrangler deploy` (or use the GitHub Actions workflow).
+8. **Bot wiring** — from the script editor, run `setTelegramWebhook()` (points Telegram at the worker) and `setTelegramCommands()` (registers the slash-menu).
+9. **Trigger** — add an hourly trigger for `triggerEmailProcessing` (Triggers panel in the script editor).
+10. **Seed tenant 0** — run `adminSeedTenantZero()` once; optionally `adminAddEmailToTenantZero("you@gmail.com")` for each forwarder.
 
-The spreadsheet has three tabs:
+That's it — the bot is live. Share it with others by just giving them the Telegram handle; they self-onboard with `/start`.
 
-| Tab                    | Columns                                                                                               | Purpose                                                          |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| **Main sheet**         | Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link | One row per transaction                                          |
-| **MerchantResolution** | Raw Pattern, Resolved Name                                                                            | Maps raw bank strings to clean merchant names                    |
-| **CategoryOverrides**  | Merchant, Category                                                                                    | Maps resolved merchants to categories (separate from resolution) |
+### Updating the bank sender allowlist
 
-## Tool-Calling Architecture (MCP-like pattern)
+Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank. The `scripts/gen-gmail-filter.js` script regenerates the Gmail filter query from that list, but **users don't need to re-paste their filter** when you add a sender — their existing filter just won't match the new sender until they re-paste. The bot now auto-sends the fresh query on `/register` so new tenants always get the latest.
 
-Both extraction and querying use OpenAI function calling in an MCP-like pattern — the LLM is given tool definitions and decides autonomously whether to call them. This is a deliberate architectural choice over two common alternatives:
+## Data model
 
-**Why not RAG?** Transaction data is structured (rows and columns), not unstructured text. Embedding rows into a vector DB and retrieving "similar" transactions adds complexity (chunking, embedding costs, retrieval latency) with no benefit. A direct function call that queries the structured data and returns precise results is simpler and more accurate.
+Each tenant's spreadsheet has three tabs:
 
-**Why not context injection?** The naive approach is to dump all historical data (merchant→category mappings, past transactions) into the prompt. This floods the context window — 100 merchants × ~40 tokens each = ~4,000 wasted tokens per email. It scales linearly with data and most of the injected context is irrelevant to the current email. Tool calling keeps the base prompt small (~600 tokens) and only fetches data when the LLM needs it.
+| Tab                    | Columns                                                                                               | Purpose                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **Main sheet**         | Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link | One row per transaction                       |
+| **MerchantResolution** | Raw Pattern, Resolved Name                                                                            | Maps raw bank strings to clean merchant names |
+| **CategoryOverrides**  | Merchant, Category                                                                                    | Maps resolved merchants to default categories |
 
-### Extraction — 1 tool
+The admin sheet (the one pointed at by `PROD_SHEET_ID`) additionally hosts a **`Tenants`** tab — the registry:
 
-The LLM extracts transaction details from emails. For well-known merchants (Amazon, Swiggy), it categorizes directly in a single round-trip. For unfamiliar merchants, it calls a tool to look up the category:
+| Column     | Type   | Purpose                              |
+| ---------- | ------ | ------------------------------------ |
+| chat_id    | string | Telegram chat/group id (primary key) |
+| name       | string | Display label                        |
+| emails     | string | Comma-separated forwarder gmails     |
+| sheet_id   | string | Tenant's own spreadsheet             |
+| status     | enum   | `pending` \| `active` \| `disabled`  |
+| created_at | iso    | Timestamp of row creation            |
+| notes      | string | Free-form                            |
+
+## Architecture
 
 ```
-📧 Email arrives
-    ↓
-🧠 LLM receives: system prompt + email text + 1 tool definition
-    ↓
-┌─ High confidence → returns JSON directly (1 round-trip)
-│
-└─ Low confidence → calls get_merchant_category("merchant_name")
-                   → tool queries data, returns category
-                   → LLM returns final JSON (2 round-trips)
+User's bank → User's Gmail (filter) → dusaanebot.inbox@gmail.com
+    → Apps Script (hourly trigger) → per-message tenant routing
+    → AI extraction → tenant's Google Sheet → Telegram DM
+
+Telegram → Cloudflare Worker (200 OK) → Apps Script Web App → process & respond
 ```
 
-| Tool                    | Description                                                                   |
-| ----------------------- | ----------------------------------------------------------------------------- |
-| `get_merchant_category` | Looks up default category for a merchant. Only called when the LLM is unsure. |
+- **Inbound email path** is async via Gmail polling; no webhook from Cloudflare.
+- **Inbound Telegram path** goes through the Worker proxy so Apps Script 302 redirects don't retry webhooks.
+- **Per-message tenant routing** — `extractForwarderEmail(msg)` reads `X-Forwarded-For` (Gmail filter auto-forward) first, falls back to `From:` (manual forwards). That email keys into the Tenants registry.
+- **`/backfill` and `/ask`** are deferred to async time-based triggers (keeps the webhook under Telegram's 60s budget). `/backfill` self-schedules in 5-minute chunks until the range is done.
+- **`/ask`** sends an immediate "🤔 Thinking..." message and edits it with the final answer.
 
-The LLM self-optimizes: common merchants cost 1 API call, rare merchants cost 2. No tokens wasted on irrelevant merchant history.
+### Tool-calling (MCP-like pattern)
 
-### `/ask` Queries — 6 tools
+Both extraction and `/ask` use OpenAI function calling. Tools are defined once, the LLM decides when to call them, and only the tool's response (not the full dataset) enters the context.
 
-The LLM answers natural language spending questions by calling tools that query the transaction data:
+**Why not RAG or context injection?** Transaction data is structured — embedding rows into a vector DB adds cost with no benefit, and stuffing all merchant→category mappings into the prompt floods the context window. Tool calling stays at ~600 base tokens regardless of data volume.
 
-```
-/ask how much did I spend on food last week?
-/ask top 5 merchants this month
-/ask compare my spending with rishik
-```
+**Extraction — 1 tool** (`get_merchant_category`): the LLM categorises well-known merchants directly; calls the tool only for unfamiliar ones. Self-optimises: common merchants cost 1 round-trip, rare ones cost 2.
+
+**`/ask` — 6 tools**:
 
 | Tool                     | Description                                                  |
 | ------------------------ | ------------------------------------------------------------ |
@@ -149,76 +195,29 @@ The LLM answers natural language spending questions by calling tools that query 
 | `get_category_breakdown` | Spending grouped by category                                 |
 | `get_top_merchants`      | Top N merchants by spend amount                              |
 | `get_user_spend`         | Per-user spending totals                                     |
-| `get_split_summary`      | Split vs personal totals, settlement calculation             |
+| `get_split_summary`      | Split vs personal totals, settlement calc                    |
 | `search_transactions`    | Filter by merchant, category, user, amount, type, date range |
 
-The LLM chains up to 3 tool calls per query. The system prompt provides only metadata (today's date, available categories, field names) — no actual transaction data enters the context until a tool is called and returns targeted results.
+The LLM chains up to 3 tool calls per query.
 
-### Token comparison
-
-| Approach          | Tokens per email    | Scales with            |
-| ----------------- | ------------------- | ---------------------- |
-| Context injection | ~4,500+             | Number of merchants    |
-| RAG               | ~2,000+ (retrieval) | Corpus size            |
-| **Tool calling**  | **~600 base**       | **Nothing** (constant) |
-
-## `/stats` — Analytics Dashboard
-
-Three views accessible via inline buttons:
-
-- **📊 Monthly** — Total spend, category breakdown, top merchants, user spend (supports 1M/2M/3M/6M periods)
-- **📈 Trends** — Month-over-month spending comparison
-- **💰 Who Owes** — Split settlement calculation between users
-
-Navigate months with ◀️/▶️ buttons.
-
-## Bulk Maintenance Scripts
-
-Run from the Apps Script editor (not wired to Telegram). Useful after manually editing the resolution/override tabs.
-
-| Function                             | Purpose                                                                                          |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `reapplyMerchantResolutions`         | Walks the main sheet; rewrites merchant names using current `MerchantResolution` entries         |
-| `populateCategoryOverridesForReview` | Scans main sheet, writes best-guess (most-frequent) category per merchant to `CategoryOverrides` |
-| `applyCategoryOverridesToMainSheet`  | Overwrites main-sheet categories based on `CategoryOverrides`                                    |
-| `populateResolutionSheet`            | One-time: seed `MerchantResolution` with all unique merchants currently in the main sheet        |
-
-Typical workflow after bulk edits:
-
-1. Manually update `MerchantResolution` → run `reapplyMerchantResolutions()`
-2. Run `populateCategoryOverridesForReview()` → review/edit the `CategoryOverrides` tab
-3. Run `applyCategoryOverridesToMainSheet()`
-
-## Project Structure
+## Project structure
 
 ```
 ├── Code.js                 # Webhook endpoint, async triggers, backfill orchestration
-├── Constants.js            # Categories, column mappings, GMAIL_SEARCH_QUERY
+├── Constants.js            # Categories, column mappings, bank sender allowlists, Gmail query
 ├── AIProviders.js          # Azure OpenAI tool-calling client
-├── TransactionProcessor.js # Email extraction, merchant resolution, transaction saving
-├── BotHandlers.js          # Command & callback handlers, merchant edit flow
-├── TelegramUtils.js        # Telegram API, message formatting, command registration
-├── GoogleSheetUtils.js     # Sheet CRUD, MerchantResolution + CategoryOverrides helpers, bulk scripts
-├── Analytics.js            # Aggregation helpers, /stats data & formatters, split settlement
+├── TransactionProcessor.js # Email extraction, forwarder-email parsing, merchant resolution, saving
+├── BotHandlers.js          # Command / callback handlers, merchant-edit flow
+├── TelegramUtils.js        # Telegram API, message formatting, retry/backoff
+├── GoogleSheetUtils.js     # Sheet CRUD, MerchantResolution + CategoryOverrides, bulk scripts
+├── Analytics.js            # /stats data + formatters, split settlement
 ├── AskTools.js             # /ask tool definitions, executor, system prompt
+├── TenantRegistry.js       # Tenants tab CRUD, tenant lookup helpers
+├── Onboarding.js           # /start, /register, /myinfo, sheet provisioning, filter-query DM
+├── AdminHelpers.js         # adminCreateTemplateSheet, adminProvisionTenantSheet, seed helpers
 ├── worker/src/index.js     # Cloudflare Worker proxy
 └── .github/workflows/deploy.yml  # CI/CD pipeline
 ```
-
-## Architecture
-
-```
-User's bank → User's Gmail (filter) → dusaanebot.inbox@gmail.com
-    → Apps Script (hourly trigger) → AI extraction → Google Sheet → Telegram
-
-Telegram → Cloudflare Worker (200 OK) → Apps Script Web App → process & respond
-```
-
-- Inbound email path is async via Gmail polling; no webhook from Cloudflare
-- Inbound Telegram path uses the Worker proxy to eliminate 302-redirect retries
-- `/backfill` and `/ask` are deferred to async triggers (avoids Telegram timeout)
-- Backfill runs in 5-minute chunks via time-based triggers
-- `/ask` sends an immediate "🤔 Thinking..." message, then edits it with the response
 
 ## CI/CD
 
@@ -230,45 +229,55 @@ GitHub Actions on push to `main`:
 4. `clasp deploy` with deployment ID
 5. Deploy Cloudflare Worker via wrangler
 
-**Required GitHub Secrets:** `CLASP_TOKEN`, `DEPLOYMENT_ID`, `APPS_SCRIPT_URL`, plus all `Lol.js` variables
+**Required GitHub Secrets**: `CLASP_TOKEN`, `DEPLOYMENT_ID`, `APPS_SCRIPT_URL`, plus every variable in `Lol.js` (see step 3 above) — in particular `PROD_SHEET_ID` and `TEMPLATE_SHEET_ID`.
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Bot not responding
 
-- Verify webhook: run `setTelegramWebhook()` from Apps Script editor
-- Check Apps Script execution logs
-- Ensure bot token is valid
+- Run `setTelegramWebhook()` from the script editor; check the webhook URL points at the Worker.
+- Check Apps Script → Executions for errors.
+- Verify `BOT_TOKEN` is valid (`GET https://api.telegram.org/bot<token>/getMe`).
 
-### Transactions not being logged
+### Transactions not showing up
 
-- Verify your Gmail forwarding filter is active and matches the expected bank emails
-- Check the bot inbox (`dusaanebot.inbox@gmail.com`) for delivered forwards
-- Confirm `GMAIL_SEARCH_QUERY` in [Constants.js](Constants.js) is `in:inbox`
-- Check AI provider API quota
-- Review Apps Script logs for errors
+- Check the bot inbox — is the forward actually landing? If not, the user's Gmail filter isn't matching. Regenerate via `node scripts/gen-gmail-filter.js` and re-paste.
+- Run `/checknow`-style manual trigger: from the script editor, run `triggerEmailProcessing` — it processes everything since the last run without waiting for the hourly trigger.
+- Check `Tenants` tab — is the user's email registered against their `chat_id`? Multi-forwarder setups need `upsertPendingTenant(chatId, email)` for each.
+- Check Apps Script logs for `[extractTransactions] No tenant for <email>` lines — that's a forward from an unregistered address.
 
-### Wrong categories
+### `/register` says "I haven't seen any forward"
 
-- Use the ✏️ Category button on any transaction to fix that row
-- For bulk cleanup: edit `CategoryOverrides` manually, then run `applyCategoryOverridesToMainSheet()`
-- New merchants get a one-tap 🆕 Save button on the transaction message to persist the mapping
+- The user must forward from the _same_ Gmail address they're trying to register. `X-Forwarded-For` (auto-forward) or `From:` (manual forward) must match.
+- Forwards are searched for the last 2 days only.
+- Check the bot inbox in a browser — is the forward actually there?
 
-## 📝 License
+### "I couldn't create your sheet" (Dutch / localized Drive error)
 
-This project is available for personal and educational use.
+- `TEMPLATE_SHEET_ID` in `Lol.js` / CI secret is wrong or the script account can't access it.
+- Run `adminCreateTemplateSheet()` from the script editor, copy the logged ID, update `TEMPLATE_SHEET_ID` secret, redeploy.
 
-## 🤝 Contributing
+### Wrong category on a transaction
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
+- Use the **✏️ Category** button on the row to fix that transaction only.
+- For bulk cleanup: edit `CategoryOverrides` manually, then run `applyCategoryOverridesToMainSheet()`.
+- New merchants get a one-tap **🆕 Save** button to persist the mapping.
 
-## 👥 Authors
+## Contributing
 
-- Project maintained by the dus-aane team
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
-## 🙏 Acknowledgments
+## Privacy
+
+See [docs/PRIVACY.md](docs/PRIVACY.md) for what the bot reads, stores and shares, and how to take your data out.
+
+## License
+
+MIT. The code is open — audit it, fork it, self-host it.
+
+## Acknowledgments
 
 - Azure OpenAI for transaction extraction
-- Telegram Bot API for bot interface
-- Google Apps Script for serverless execution
-- Cloudflare Workers for webhook proxy
+- Telegram Bot API
+- Google Apps Script
+- Cloudflare Workers

@@ -13,7 +13,7 @@
 function adminCreateTemplateSheet() {
   var TEMPLATE_NAME = "Dus Aane — Template";
 
-  var srcFile = DriveApp.getFileById(SHEET_ID);
+  var srcFile = DriveApp.getFileById(ADMIN_SHEET_ID);
   var copy = srcFile.makeCopy(TEMPLATE_NAME);
   var ss = SpreadsheetApp.openById(copy.getId());
 
