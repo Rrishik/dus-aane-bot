@@ -1,16 +1,9 @@
 {
   "scriptId": "1qniavlVa8h7_ELDUC3qbui1TewywLY2WC_N12pGtGW7E0R6AhjYF7FeY",
   "rootDir": "",
-  "scriptExtensions": [
-    ".js",
-    ".gs"
-  ],
-  "htmlExtensions": [
-    ".html"
-  ],
-  "jsonExtensions": [
-    ".json"
-  ],
+  "scriptExtensions": [".js", ".gs"],
+  "htmlExtensions": [".html"],
+  "jsonExtensions": [".json"],
   "filePushOrder": [
     "Lol.js",
     "Constants.js",
