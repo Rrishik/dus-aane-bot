@@ -48,17 +48,19 @@ Azure OpenAI's data handling follows Microsoft's Azure terms — prompts are not
 
 Per-tenant data, in a Google Sheet **owned by your bot's Google account** and shared with your registered Gmail as an editor:
 
-| Where                  | What                                                                                                                            |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| **Main sheet tab**     | One row per transaction: date, merchant, amount, category, type, user tag, split status, Gmail message id, currency, email link |
-| **MerchantResolution** | Raw bank string → cleaned merchant name mappings                                                                                |
-| **CategoryOverrides**  | Merchant → default category mappings                                                                                            |
+| Where              | What                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Main sheet tab** | One row per transaction: date, merchant, amount, category, type, user tag, split status, Gmail message id, currency, email link |
 
-**Admin sheet only** (not in per-tenant sheets):
+**Admin sheet** (shared across all tenants — the admin can see it, tenants cannot):
 
-| Tab       | What                                                                                                         |
-| --------- | ------------------------------------------------------------------------------------------------------------ |
-| `Tenants` | chat_id, display name, forwarder emails, sheet id, status (`pending`/`active`/`disabled`), created_at, notes |
+| Tab                  | What                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `Tenants`            | chat_id, display name, forwarder emails, sheet id, status (`pending`/`active`/`disabled`), created_at, notes  |
+| `MerchantResolution` | Raw bank strings → cleaned merchant names (e.g. `FLIPKART_MWS_MERCH` → `Flipkart`). Universal across tenants. |
+| `CategoryOverrides`  | Merchant → default category (e.g. `Swiggy` → `Food & Dining`). Universal across tenants.                      |
+
+`MerchantResolution` and `CategoryOverrides` are shared because the raw patterns banks use are identical for every tenant — centralising them means new tenants inherit a pre-trained bot, and every tenant's new-merchant corrections improve categorisation for everyone. Per-row category edits (the ✏️ Category button) write only to the tenant's own sheet.
 
 The bot also uses Apps Script's `PropertiesService` for ephemeral state (pending merchant-edit prompts, backfill progress markers, async webhook payloads). These are cleaned up after each operation.
 

@@ -143,25 +143,21 @@ Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank. Th
 
 ## Data model
 
-Each tenant's spreadsheet has three tabs:
+Each tenant's spreadsheet has **one** tab — their transactions:
 
-| Tab                    | Columns                                                                                               | Purpose                                       |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| **Main sheet**         | Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link | One row per transaction                       |
-| **MerchantResolution** | Raw Pattern, Resolved Name                                                                            | Maps raw bank strings to clean merchant names |
-| **CategoryOverrides**  | Merchant, Category                                                                                    | Maps resolved merchants to default categories |
+| Columns                                                                                               | Purpose                 |
+| ----------------------------------------------------------------------------------------------------- | ----------------------- |
+| Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link | One row per transaction |
 
-The admin sheet (the one pointed at by `PROD_SHEET_ID`) additionally hosts a **`Tenants`** tab — the registry:
+The admin sheet (pointed at by `PROD_SHEET_ID`) hosts **shared registry + mapping** tabs used across all tenants:
 
-| Column     | Type   | Purpose                              |
-| ---------- | ------ | ------------------------------------ |
-| chat_id    | string | Telegram chat/group id (primary key) |
-| name       | string | Display label                        |
-| emails     | string | Comma-separated forwarder gmails     |
-| sheet_id   | string | Tenant's own spreadsheet             |
-| status     | enum   | `pending` \| `active` \| `disabled`  |
-| created_at | iso    | Timestamp of row creation            |
-| notes      | string | Free-form                            |
+| Tab                    | Columns                                                    | Purpose                                                                  |
+| ---------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **Tenants**            | chat_id, name, emails, sheet_id, status, created_at, notes | Registry — maps Telegram chat / forwarder gmail → per-tenant spreadsheet |
+| **MerchantResolution** | Raw Pattern, Resolved Name                                 | Raw bank strings (`FLIPKART_MWS_MERCH`) → clean names (`Flipkart`)       |
+| **CategoryOverrides**  | Merchant, Category                                         | Default category per merchant                                            |
+
+**Why `MerchantResolution` and `CategoryOverrides` are shared:** these mappings are universal — every bank sends the same raw patterns to every tenant. Centralising means new tenants inherit a pre-trained bot on day 1 and every tenant's new-merchant taps improve the pool for everyone. Per-transaction category edits (the ✏️ Category button) still write to the tenant's main sheet only — customising your own categorisation doesn't affect anyone else.
 
 ## Architecture
 

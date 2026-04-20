@@ -131,12 +131,29 @@ function deleteSheetRow(row_number) {
 // --- MerchantResolution tab helpers ---
 // Maps raw merchant patterns to clean names.
 // Categories are stored in a separate CategoryOverrides tab (resolved merchant → category).
+//
+// Both tabs live on the ADMIN sheet, not per-tenant. Merchant patterns are
+// universal — every bank sends the same raw strings to every tenant — so
+// sharing the mapping means new tenants inherit a pre-trained bot on day 1.
+// Per-transaction overrides (the ✏️ Category button) still write to the
+// tenant's main sheet row, not to CategoryOverrides, so a tenant customising
+// their own categorisation doesn't affect anyone else.
 
 var RESOLUTION_TAB = "MerchantResolution";
 var OVERRIDES_TAB = "CategoryOverrides";
 
+// Open the admin spreadsheet directly, independent of the per-execution tenant
+// context. Used for the shared MerchantResolution / CategoryOverrides tabs.
+var _cachedAdminSpreadsheet = null;
+function _getAdminSpreadsheet() {
+  if (!_cachedAdminSpreadsheet) {
+    _cachedAdminSpreadsheet = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  }
+  return _cachedAdminSpreadsheet;
+}
+
 function getOrCreateResolutionSheet() {
-  var ss = getSpreadsheet();
+  var ss = _getAdminSpreadsheet();
   var tab = ss.getSheetByName(RESOLUTION_TAB);
   if (!tab) {
     tab = ss.insertSheet(RESOLUTION_TAB);
@@ -146,7 +163,7 @@ function getOrCreateResolutionSheet() {
 }
 
 function getOrCreateOverridesSheet() {
-  var ss = getSpreadsheet();
+  var ss = _getAdminSpreadsheet();
   var tab = ss.getSheetByName(OVERRIDES_TAB);
   if (!tab) {
     tab = ss.insertSheet(OVERRIDES_TAB);
