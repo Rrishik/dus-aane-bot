@@ -9,7 +9,7 @@ const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook
 
 // Public email address that tenants forward their bank emails to.
 // Displayed in /start and /email onboarding copy.
-const BOT_INBOX_EMAIL = "dus-aane-bot@healthvault.online";
+const BOT_INBOX_EMAIL = "dusaanebot.inbox@gmail.com";
 
 // Google Sheets
 const SHEET_ID = PROD_SHEET_ID;
@@ -220,8 +220,7 @@ const IGNORE_CATEGORIES = [];
 
 // Gmail search query: process any email that arrives in the bot inbox.
 // The bot account exists only for this bot, so every inbox message is a
-// forwarded bank alert (either via Cloudflare Email Routing from
-// dus-aane-bot@healthvault.online, or forwarded directly to
-// dusaanebot.inbox@gmail.com). The forwarder's email is extracted from
-// the From: header per-message to tag the transaction's user.
+// forwarded bank alert. Users forward directly to dusaanebot.inbox@gmail.com.
+// The forwarder's email is extracted from the From: header per-message to tag
+// the transaction's user.
 const GMAIL_SEARCH_QUERY = `in:inbox`;
