@@ -18,9 +18,10 @@ function adminCreateTemplateSheet() {
   var ss = SpreadsheetApp.openById(copy.getId());
 
   // Clear data rows from every tab, keeping the header (row 1) intact.
+  // Delete tabs that are admin-only or shared (not per-tenant).
+  var SHARED_TABS = [TENANTS_TAB, RESOLUTION_TAB, OVERRIDES_TAB];
   ss.getSheets().forEach(function (sheet) {
-    // Skip the Tenants tab entirely — the template should not contain registry data.
-    if (sheet.getName() === TENANTS_TAB) {
+    if (SHARED_TABS.indexOf(sheet.getName()) !== -1) {
       ss.deleteSheet(sheet);
       return;
     }
