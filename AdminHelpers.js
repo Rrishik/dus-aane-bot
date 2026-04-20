@@ -46,12 +46,20 @@ function adminCreateTemplateSheet() {
  *
  * Used by Phase 4's onboarding flow; exposed as admin helper for dry runs.
  */
-function adminProvisionTenantSheet(displayName) {
+function adminProvisionTenantSheet(displayName, shareWithEmail) {
   if (typeof TEMPLATE_SHEET_ID !== "string" || !TEMPLATE_SHEET_ID) {
     throw new Error("TEMPLATE_SHEET_ID not set. Run adminCreateTemplateSheet() first.");
   }
   var name = "Dus Aane — " + (displayName || "Tenant");
   var copy = DriveApp.getFileById(TEMPLATE_SHEET_ID).makeCopy(name);
+  if (shareWithEmail) {
+    try {
+      copy.addEditor(shareWithEmail);
+      console.log("Shared sheet " + copy.getId() + " with " + shareWithEmail);
+    } catch (e) {
+      console.error("[adminProvisionTenantSheet] addEditor failed for " + shareWithEmail + ": " + e.message);
+    }
+  }
   console.log("Provisioned sheet: " + copy.getId() + " (" + name + ")");
   return copy.getId();
 }
