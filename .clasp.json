@@ -16,6 +16,8 @@
     "Constants.js",
     "TelegramUtils.js",
     "GoogleSheetUtils.js",
+    "TenantRegistry.js",
+    "AdminHelpers.js",
     "TransactionProcessor.js",
     "BotHandlers.js"
   ],

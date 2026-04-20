@@ -242,5 +242,5 @@ function sendTransactionMessage(transaction_details, messageId, user, isNewMerch
     options.reply_markup = buildReplyMarkup(rows);
   }
 
-  sendTelegramMessage(CHAT_ID, message, options);
+  sendTelegramMessage(getTenantChatId(), message, options);
 }

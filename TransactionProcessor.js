@@ -293,7 +293,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
             "[View email](" +
             emailLink +
             ")";
-          sendTelegramMessage(CHAT_ID, skipMsg, { parse_mode: "Markdown" });
+          sendTelegramMessage(getTenantChatId(), skipMsg, { parse_mode: "Markdown" });
         }
         return { saved: false, duplicate: false, data: null };
       }
