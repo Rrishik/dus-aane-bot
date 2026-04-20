@@ -15,22 +15,17 @@ function handleStartCommand(chatId, username) {
     return;
   }
 
-  var greeting = username ? "👋 Hey " + username + "! " : "";
+  var greeting = username ? "Hey " + username + "! " : "";
   var msg =
+    "👋 " +
     greeting +
-    "Welcome to Dus Aane Bot — your expenses, under your control.\n\n" +
-    "Most finance apps (Cred, etc.) ask for full access to your email, including OTPs, statements, and personal mail. " +
-    "This bot flips that: *you* forward only the bank alerts you're comfortable with. Nothing else.\n\n" +
-    "*What you get:* instant insights, one message away.\n" +
-    "• `/ask how much did I spend on groceries last month?`\n" +
-    "• `/stats` — monthly spend, trends, category breakdown\n" +
-    "• `/recent` — your latest transactions\n\n" +
-    "Open source — audit before you trust: https://github.com/Rrishik/dus-aane-bot\n\n" +
-    "*Get started (2 steps):*\n" +
-    "1. Forward any bank transaction email to `" +
+    "Track your spends by forwarding bank emails — no full-inbox access, no account linking.\n\n" +
+    "Worried about apps like Cred reading your OTPs, statements, and personal mail? This [open-source bot](https://github.com/Rrishik/dus-aane-bot) solves that.\n\n" +
+    "*2 steps to activate:*\n" +
+    "1. From your Gmail, send a quick `hi` to `" +
     BOT_INBOX_EMAIL +
     "`\n" +
-    "2. Send `/register your.name@gmail.com`";
+    "2. Back here, send `/register your.name@gmail.com`";
   sendTelegramMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
@@ -44,9 +39,9 @@ function handleRegisterCommand(chatId, username, messageText) {
   if (parts.length < 2) {
     sendTelegramMessage(
       chatId,
-      "Usage: `/register your.name@gmail.com`\n\nFirst forward a bank email to `" +
+      "Usage: `/register your.name@gmail.com`\n\nFirst send a quick `hi` to `" +
         BOT_INBOX_EMAIL +
-        "`, then run this command.",
+        "` from that Gmail, then run this command.",
       { parse_mode: "Markdown" }
     );
     return;
@@ -95,10 +90,10 @@ function handleRegisterCommand(chatId, username, messageText) {
   if (!found) {
     sendTelegramMessage(
       chatId,
-      "⚠️ I haven't seen any forward from `" +
+      "⚠️ I haven't seen any mail from `" +
         email +
         "` in the last 2 days.\n\n" +
-        "From that Gmail account, forward any recent bank transaction email to `" +
+        "Send a quick `hi` from that Gmail to `" +
         BOT_INBOX_EMAIL +
         "`, then run `/register " +
         email +
@@ -172,11 +167,10 @@ function sendFilterInstructions(chatId) {
   }).join(" OR ");
   var query = senders + " -(" + excludes + ")";
   var intro =
-    "📋 *Automate future forwards (optional)*\n\n" +
-    "So you don't forward every email by hand, set up a Gmail filter with the query below. " +
-    "It only matches verified bank transaction alerts — no OTPs, statements, or marketing.\n\n" +
+    "📋 *Auto-forward bank alerts (optional, ~1 min)*\n\n" +
+    "Skip manual forwarding with one Gmail filter. It only matches verified bank transaction alerts — no OTPs, statements, or marketing.\n\n" +
     "Gmail → Settings → *Filters and Blocked Addresses* → *Create a new filter* → " +
-    "paste the query into *Has the words* → *Forward it to* `" +
+    "paste the query below into *Has the words* → *Forward it to* `" +
     BOT_INBOX_EMAIL +
     "`.";
   sendTelegramMessage(chatId, intro, { parse_mode: "Markdown" });
@@ -241,10 +235,12 @@ function activatePendingTenantForEmail(email) {
     sendTelegramMessage(
       pending.chat_id,
       "🎉 *You're all set!*\n\n" +
-        "I've created a Google Sheet for you and shared it with `" +
+        "I've created a Google Sheet and shared it with `" +
         email +
-        "` as editor. *This sheet is yours* — it records every transaction I process, and you can open, edit, export or download it anytime.\n\n" +
-        "From now on, every bank email you forward becomes a row here. Tap the button below to open it.",
+        "` as editor. *This sheet is yours* — open, edit or export anytime. It's the *entire* data I use, fully under your control.\n\n" +
+        "*How it works:* forward any bank transaction email to `" +
+        BOT_INBOX_EMAIL +
+        "` and it becomes a row here. I'll follow up with a one-time Gmail filter so this happens automatically.",
       {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: [[{ text: "📋 Open your sheet", url: sheetUrl }]] }

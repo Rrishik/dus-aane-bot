@@ -111,28 +111,15 @@ function handleMessage(update) {
 
 // Method to handle the /help command (also handles /start)
 function handleHelpCommand(chatId, username) {
-  var greeting = username ? `👋 *Hey ${username}!*\n\n` : "";
   var message =
-    greeting +
-    `📚 *Available Commands:*\n\n` +
-    `• /recent - View recent transactions\n` +
-    `  ↳ /recent 10 - Last 10 transactions\n` +
-    `  ↳ /recent rishik - Filter by user\n` +
-    `  ↳ /recent 10 rishik - Both filters\n\n` +
-    `• /stats - Analytics dashboard\n` +
-    `• /ask - Ask anything about your spending\n` +
-    `  ↳ /ask How much did we spend on food?\n` +
-    `• /help - Show this message\n\n` +
-    `*Hidden Commands:*\n` +
-    `• /backfill - Backfill transactions\n` +
-    `  ↳ /backfill 10m  •  /backfill 2h\n` +
-    `  ↳ /backfill 3 days  •  /backfill 2 weeks  •  /backfill 1 month\n` +
-    `  ↳ /backfill 2026-03-01 2026-03-31\n\n` +
-    `*Features:*\n` +
-    `• Automatic email transaction parsing\n` +
-    `• Transaction splitting\n` +
-    `• Multi-currency support\n` +
-    `• Category-wise spending analysis`;
+    `*Commands*\n` +
+    `• /ask — ask anything about your spending\n` +
+    `   _e.g. /ask how much on food last month?_\n` +
+    `• /stats — analytics dashboard\n` +
+    `• /recent — recent transactions _(e.g. /recent 10)_\n` +
+    `• /backfill — import older emails _(e.g. /backfill 7d)_\n` +
+    `• /myinfo — your account\n` +
+    `• /help — this message`;
 
   var sheetUrl = "https://docs.google.com/spreadsheets/d/" + getTenantSheetId();
   sendTelegramMessage(chatId, message, {
