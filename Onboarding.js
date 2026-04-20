@@ -1,4 +1,4 @@
-// Onboarding commands: /start, /email, /myinfo.
+// Onboarding commands: /start, /register, /myinfo.
 // Plus auto-activation: when a pending tenant forwards their first valid bank
 // email, we provision their sheet and flip them to active.
 //
@@ -22,95 +22,158 @@ function handleStartCommand(chatId, username) {
     "I track your bank transactions automatically by reading forwarded emails.\n\n" +
     "*🔒 Your privacy:* I only read emails from verified bank transaction-alert addresses " +
     "(e.g. `alerts@axis.bank.in`, `alerts@hdfcbank.net`). I *never* see OTPs, statements, " +
-    "security codes, or login alerts — the Gmail filter excludes them.\n\n" +
-    "*Setup (3 steps):*\n" +
-    "1. Register your Gmail with `/email your.name@gmail.com`\n" +
-    "2. Run `/filter` — I'll DM you a ready-to-paste Gmail filter query\n" +
-    "3. Create a Gmail filter with that query → forward matches to `" +
+    "security codes, or login alerts.\n\n" +
+    "*Setup (2 steps):*\n" +
+    "1. From your Gmail, *forward any recent bank transaction email* (e.g. a card spend alert) " +
+    "to `" +
     BOT_INBOX_EMAIL +
-    "`\n\n" +
-    "Your first forwarded bank email will finish the setup and create your personal sheet.";
+    "`\n" +
+    "2. Come back here and send `/register your.name@gmail.com`\n\n" +
+    "Once I see your forward, I'll activate your account and send you a Gmail filter query " +
+    "to automate all future forwards.";
   sendTelegramMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
 /**
- * /email <addr> — register a forwarder email for this chat.
+ * /register <addr> — claim an email. We search the bot inbox for a recent
+ * forward from that address; if found, activate the tenant and send the
+ * Gmail filter query to automate future forwards.
  */
-function handleEmailCommand(chatId, username, messageText) {
+function handleRegisterCommand(chatId, username, messageText) {
   var parts = messageText.split(/\s+/);
   if (parts.length < 2) {
     sendTelegramMessage(
       chatId,
-      "Usage: `/email your.name@gmail.com`\n\nSend me the Gmail address you'll forward bank emails from.",
+      "Usage: `/register your.name@gmail.com`\n\nFirst forward a bank email to `" +
+        BOT_INBOX_EMAIL +
+        "`, then run this command.",
       { parse_mode: "Markdown" }
     );
     return;
   }
   var email = parts[1].trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    sendTelegramMessage(chatId, "❌ That doesn't look like a valid email. Try: `/email your.name@gmail.com`", {
+    sendTelegramMessage(chatId, "❌ That doesn't look like a valid email. Try: `/register your.name@gmail.com`", {
       parse_mode: "Markdown"
     });
     return;
   }
 
-  // Prevent stealing another active tenant's email.
+  // Already active? Just add this email to the list (multi-forwarder case).
+  var currentTenant = findTenantByChatId(chatId);
+  if (currentTenant && currentTenant.status === TENANT_STATUS.ACTIVE) {
+    // Don't let someone add another account's verified email.
+    var owner = findTenantByEmail(email);
+    if (owner && String(owner.chat_id) !== String(chatId)) {
+      sendTelegramMessage(chatId, "❌ That email is already registered to another account.");
+      return;
+    }
+    upsertPendingTenant(chatId, email, username || currentTenant.name || "");
+    // upsertPendingTenant keeps status as-is for existing active rows; re-check.
+    var updated = findTenantByChatId(chatId);
+    sendTelegramMessage(
+      chatId,
+      "✅ Added `" +
+        email +
+        "` to your forwarder list.\n\nRegistered emails:\n" +
+        updated.emails.map((e) => "• `" + e + "`").join("\n"),
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  // Someone else already owns this email — reject.
   var existingActive = findTenantByEmail(email);
   if (existingActive && String(existingActive.chat_id) !== String(chatId)) {
     sendTelegramMessage(chatId, "❌ That email is already registered to another account.");
     return;
   }
 
-  upsertPendingTenant(chatId, email, username || "");
-
-  var tenant = findTenantByChatId(chatId);
-  var alreadyActive = tenant && tenant.status === TENANT_STATUS.ACTIVE;
-  var msg;
-  if (alreadyActive) {
-    msg =
-      "✅ Added `" +
-      email +
-      "` to your forwarder list.\n\nRegistered emails:\n" +
-      tenant.emails.map((e) => "• `" + e + "`").join("\n");
-  } else {
-    msg =
-      "✅ Got it — `" +
-      email +
-      "` is registered (pending).\n\n" +
-      "*Next:* send `/filter` to get the Gmail filter query. Paste it into a new Gmail filter " +
-      "in that account and forward matches to `" +
-      BOT_INBOX_EMAIL +
-      "`.\n\n" +
-      "When your first forwarded bank email arrives, I'll create your sheet and finish setup.";
+  // Ownership proof: search bot inbox for a recent forward from this address.
+  sendTelegramMessage(chatId, "🔎 Looking for a forward from `" + email + "`...", { parse_mode: "Markdown" });
+  var found = findRecentForwardFromEmail(email);
+  if (!found) {
+    sendTelegramMessage(
+      chatId,
+      "⚠️ I haven't seen any forward from `" +
+        email +
+        "` in the last 2 days.\n\n" +
+        "From that Gmail account, forward any recent bank transaction email to `" +
+        BOT_INBOX_EMAIL +
+        "`, then run `/register " +
+        email +
+        "` again.",
+      { parse_mode: "Markdown" }
+    );
+    return;
   }
-  sendTelegramMessage(chatId, msg, { parse_mode: "Markdown" });
+
+  // Proof of ownership established. Create pending row, provision sheet, activate.
+  upsertPendingTenant(chatId, email, username || "");
+  var activated = activatePendingTenantForEmail(email);
+  if (!activated) {
+    sendTelegramMessage(chatId, "⚠️ Activation failed — please contact the admin.");
+    return;
+  }
+  // The activation helper sends the welcome DM with sheet link. Follow up with
+  // the Gmail filter query so they can set up auto-forwarding.
+  sendFilterInstructions(chatId);
 }
 
 /**
- * /filter — DM the narrow Gmail search query so users can copy-paste it into
- * a Gmail filter. Also reassures privacy (only transaction alerts forwarded).
+ * Searches the bot inbox for a recent (last 2 days) message where the
+ * forwarder was `email` — either via the From: header (manual Gmail forwards
+ * rewrite From:) or via the X-Forwarded-For header (Gmail filter auto-forward).
+ * Returns true if any match is found.
  */
-function handleFilterCommand(chatId) {
-  var query = "from:(" + TRANSACTION_SENDERS.join(" OR ") + ")";
+function findRecentForwardFromEmail(email) {
+  var lc = email.toLowerCase();
+  try {
+    // Manual forward: From: rewritten to user's Gmail.
+    var threads = GmailApp.search("in:inbox from:" + lc + " newer_than:2d", 0, 20);
+    for (var i = 0; i < threads.length; i++) {
+      var msgs = threads[i].getMessages();
+      for (var j = 0; j < msgs.length; j++) {
+        var fwd = extractForwarderEmail(msgs[j]);
+        if (fwd && fwd.toLowerCase() === lc) return true;
+      }
+    }
+    // Auto-forward: Gmail doesn't expose the X-Forwarded-For header via search
+    // operators, so fall back to scanning recent inbox mail by raw headers.
+    var recent = GmailApp.search("in:inbox newer_than:2d", 0, 50);
+    for (var k = 0; k < recent.length; k++) {
+      var msgs2 = recent[k].getMessages();
+      for (var m = 0; m < msgs2.length; m++) {
+        var f2 = extractForwarderEmail(msgs2[m]);
+        if (f2 && f2.toLowerCase() === lc) return true;
+      }
+    }
+  } catch (e) {
+    console.error("[findRecentForwardFromEmail] search failed:", e.message);
+  }
+  return false;
+}
 
+/**
+ * Sends the Gmail filter query + setup steps. Used after activation.
+ */
+function sendFilterInstructions(chatId) {
+  var query = "from:(" + TRANSACTION_SENDERS.join(" OR ") + ")";
   var intro =
-    "📋 *Your Gmail filter setup*\n\n" +
-    "*🔒 What this forwards:* only verified bank transaction alerts " +
-    "(debits, credits, card spends). OTPs, statements, security codes, " +
-    "promotional emails, and login alerts are *excluded* by construction — " +
-    "the query lists specific sender addresses, nothing else.\n\n" +
+    "📋 *Automate future forwards*\n\n" +
+    "To avoid forwarding every bank email by hand, set up this Gmail filter — " +
+    "only verified transaction-alert addresses are matched. OTPs, statements, " +
+    "security codes, and marketing are *excluded* by construction.\n\n" +
     "*Steps:*\n" +
     "1. Gmail → ⚙️ → See all settings → *Filters and Blocked Addresses*\n" +
     "2. *Create a new filter*\n" +
     "3. Paste the query below into *Has the words*\n" +
     "4. Click *Create filter* → check *Forward it to* `" +
     BOT_INBOX_EMAIL +
-    "` (add and verify this address first if needed)\n" +
-    "5. Also check *Apply filter to matching conversations* to backfill existing mail\n\n" +
+    "` (add + verify this address first if needed)\n" +
+    "5. Optionally tick *Apply filter to matching conversations* to backfill existing mail\n\n" +
     "👇 *Copy the query below:*";
   sendTelegramMessage(chatId, intro, { parse_mode: "Markdown" });
-
-  // Send the query in its own message as a code block for easy copy.
   sendTelegramMessage(chatId, "```\n" + query + "\n```", { parse_mode: "Markdown" });
 }
 

@@ -12,7 +12,7 @@ function handleMessage(update) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();
 
       // Onboarding commands always allowed (they're how tenants are created).
-      var ONBOARDING = ["/start", "/email", "/myinfo", "/filter"];
+      var ONBOARDING = ["/start", "/register", "/myinfo"];
       if (ONBOARDING.indexOf(command) === -1) {
         if (!gateTenantForCommand(chatId)) return;
       }
@@ -21,14 +21,11 @@ function handleMessage(update) {
         case "/start":
           handleStartCommand(chatId, username);
           break;
-        case "/email":
-          handleEmailCommand(chatId, username, messageText);
+        case "/register":
+          handleRegisterCommand(chatId, username, messageText);
           break;
         case "/myinfo":
           handleMyInfoCommand(chatId);
-          break;
-        case "/filter":
-          handleFilterCommand(chatId);
           break;
         case "/help":
           handleHelpCommand(chatId, username);

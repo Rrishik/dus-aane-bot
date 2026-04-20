@@ -85,11 +85,12 @@ function extractTransactions() {
   var skipped = 0;
 
   messagesToProcess.forEach((message) => {
-    // Forwarder's email (original user), extracted from the `From:` header.
-    // Format: `Name <addr@x>` or just `addr@x`.
-    var fromHeader = message.getFrom();
-    var match = fromHeader.match(/<([^>]+)>/);
-    var userEmail = (match ? match[1] : fromHeader.trim()).toLowerCase();
+    var userEmail = extractForwarderEmail(message);
+    if (!userEmail) {
+      skipped++;
+      console.log("[extractTransactions] No forwarder on " + message.getId() + "; skipping");
+      return;
+    }
 
     var tenant = findTenantByEmail(userEmail);
     if (!tenant) {
@@ -176,6 +177,52 @@ function extractForwardedFrom(msg) {
   } catch (e) {
     return null;
   }
+}
+
+/**
+ * Extracts the forwarder's (tenant's) email address from a message.
+ *
+ * Priority:
+ *  1. Gmail filter auto-forward adds `X-Forwarded-For: <forwarder> <destination>`.
+ *     We grab the first address. This is how auto-forwarded bank mail is routed
+ *     to the correct tenant (the bank's From: header stays as the bank, so we
+ *     can't use that).
+ *  2. Manual forwards use Gmail's "---------- Forwarded message ----------" body
+ *     preamble; those keep bank as the `extractForwardedFrom` fallback? No —
+ *     for manual forwards, From: is the human forwarder directly, so we fall
+ *     back to From: next.
+ *  3. From: header as the final fallback (for historical/manually forwarded
+ *     mail where From was rewritten to the human user).
+ *
+ * Returns lowercase email or null if nothing matches.
+ */
+function extractForwarderEmail(msg) {
+  // 1. X-Forwarded-For header (auto-forward)
+  try {
+    var raw = msg.getRawContent() || "";
+    // Only scan the header portion (stop at first blank line between headers and body).
+    var headerEnd = raw.indexOf("\r\n\r\n");
+    if (headerEnd === -1) headerEnd = raw.indexOf("\n\n");
+    var headers = headerEnd !== -1 ? raw.substring(0, headerEnd) : raw;
+    // Unfold continuation lines (RFC 5322 folded headers start with whitespace).
+    headers = headers.replace(/\r?\n[ \t]+/g, " ");
+    var m = headers.match(/^X-Forwarded-For:\s*([^\r\n]+)/im);
+    if (m) {
+      // Value looks like: "alice@gmail.com dusaanebot.inbox@gmail.com" (space-separated)
+      var first = m[1].trim().split(/[\s,]+/)[0];
+      if (first && first.indexOf("@") !== -1) return first.toLowerCase();
+    }
+  } catch (e) {
+    console.error("[extractForwarderEmail] header parse failed:", e.message);
+  }
+
+  // 2. From: header (manual forwards rewrite this to the human user)
+  var fromHeader = msg.getFrom() || "";
+  var fromMatch = fromHeader.match(/<([^>]+)>/);
+  var fromEmail = (fromMatch ? fromMatch[1] : fromHeader.trim()).toLowerCase();
+  if (fromEmail && fromEmail.indexOf("@") !== -1) return fromEmail;
+
+  return null;
 }
 
 /**
@@ -394,10 +441,8 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
   // tenant's registered emails. Prevents cross-tenant contamination.
   if (tenant) {
     messagesToProcess = messagesToProcess.filter(function (m) {
-      var fromHeader = m.getFrom();
-      var match = fromHeader.match(/<([^>]+)>/);
-      var userEmail = (match ? match[1] : fromHeader.trim()).toLowerCase();
-      return tenant.emails.indexOf(userEmail) !== -1;
+      var userEmail = extractForwarderEmail(m);
+      return userEmail && tenant.emails.indexOf(userEmail) !== -1;
     });
   }
 
@@ -420,10 +465,8 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
       }
     }
 
-    // Forwarder's email, extracted per-message from the From: header.
-    var fromHeader = messagesToProcess[i].getFrom();
-    var match = fromHeader.match(/<([^>]+)>/);
-    var userEmail = match ? match[1] : fromHeader.trim();
+    // Forwarder's email, extracted per-message (auto-forward headers first).
+    var userEmail = extractForwarderEmail(messagesToProcess[i]) || "unknown";
 
     var result = processSingleEmail(messagesToProcess[i], userEmail, true, resolutions);
     processed++;
