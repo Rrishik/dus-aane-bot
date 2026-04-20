@@ -16,6 +16,9 @@ function setTelegramWebhook() {
 
 function setTelegramCommands() {
   var commands = [
+    { command: "/start", description: "Onboard / show welcome" },
+    { command: "/email", description: "Register a Gmail forwarder (e.g. /email you@gmail.com)" },
+    { command: "/myinfo", description: "Show your account status" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
     { command: "/ask", description: "Ask AI about your spending (e.g. /ask food spending last month)" },
