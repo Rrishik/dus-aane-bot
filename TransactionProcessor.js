@@ -71,27 +71,47 @@ function executeExtractionTool(toolName, args, resolutions) {
 
 /**
  * Main function to orchestrate the email processing flow.
+ *
+ * Multi-tenant: each message is routed to the tenant whose registered forwarder
+ * email matches the message's From: address. Unmatched messages are skipped
+ * (logged but not processed).
  */
 function extractTransactions() {
-  ensureSheetHeaders();
-
   var cutoffDate = getCutoffDate();
 
   var messagesToProcess = fetchAndFilterMessages(cutoffDate);
 
   var resolutions = getMerchantResolutions();
+  var skipped = 0;
 
   messagesToProcess.forEach((message) => {
     // Forwarder's email (original user), extracted from the `From:` header.
     // Format: `Name <addr@x>` or just `addr@x`.
     var fromHeader = message.getFrom();
     var match = fromHeader.match(/<([^>]+)>/);
-    var userEmail = match ? match[1] : fromHeader.trim();
+    var userEmail = (match ? match[1] : fromHeader.trim()).toLowerCase();
 
-    processSingleEmail(message, userEmail, false, resolutions);
+    var tenant = findTenantByEmail(userEmail);
+    if (!tenant) {
+      skipped++;
+      console.log("[extractTransactions] No tenant for " + userEmail + "; skipping " + message.getId());
+      return;
+    }
+
+    setCurrentTenant(tenant);
+    try {
+      ensureSheetHeaders();
+      processSingleEmail(message, userEmail, false, resolutions);
+    } finally {
+      setCurrentTenant(null);
+    }
 
     Utilities.sleep(500);
   });
+
+  if (skipped > 0) {
+    console.log("[extractTransactions] Skipped " + skipped + " messages with no matching tenant.");
+  }
 }
 
 /**
@@ -359,9 +379,23 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
  * Returns { savedCount, duplicateCount, failedCount, totalEmails, timedOut }
  */
 function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
+  // Scope backfill to the current tenant only. If no tenant is in context,
+  // fall back to whatever getSpreadsheet() resolves to (tenant 0 defaults).
+  var tenant = getCurrentTenant();
   ensureSheetHeaders();
 
   var messagesToProcess = fetchAndFilterMessages(startDate, endDate);
+
+  // If we have a tenant in context, restrict to messages forwarded by that
+  // tenant's registered emails. Prevents cross-tenant contamination.
+  if (tenant) {
+    messagesToProcess = messagesToProcess.filter(function (m) {
+      var fromHeader = m.getFrom();
+      var match = fromHeader.match(/<([^>]+)>/);
+      var userEmail = (match ? match[1] : fromHeader.trim()).toLowerCase();
+      return tenant.emails.indexOf(userEmail) !== -1;
+    });
+  }
 
   var resolutions = getMerchantResolutions();
   var savedCount = 0;
