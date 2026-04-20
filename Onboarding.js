@@ -18,21 +18,19 @@ function handleStartCommand(chatId, username) {
   var greeting = username ? "👋 Hey " + username + "! " : "";
   var msg =
     greeting +
-    "Welcome to Dus Aane Bot.\n\n" +
-    "I track your bank transactions automatically by reading forwarded emails.\n\n" +
-    "*🔒 Your privacy:* I only read emails from verified bank transaction-alert addresses " +
-    "(e.g. `alerts@axis.bank.in`, `alerts@hdfcbank.net`). I *never* see OTPs, statements, " +
-    "security codes, or login alerts.\n\n" +
-    "*🔓 Open source:* the full code is on GitHub — audit it before you trust me: " +
-    "https://github.com/Rrishik/dus-aane-bot\n\n" +
-    "*Setup (2 steps):*\n" +
-    "1. From your Gmail, *forward any recent bank transaction email* (e.g. a card spend alert) " +
-    "to `" +
+    "Welcome to Dus Aane Bot — your expenses, under your control.\n\n" +
+    "Most finance apps (Cred, etc.) ask for full access to your email, including OTPs, statements, and personal mail. " +
+    "This bot flips that: *you* forward only the bank alerts you're comfortable with. Nothing else.\n\n" +
+    "*What you get:* instant insights, one message away.\n" +
+    "• `/ask how much did I spend on groceries last month?`\n" +
+    "• `/stats` — monthly spend, trends, category breakdown\n" +
+    "• `/recent` — your latest transactions\n\n" +
+    "Open source — audit before you trust: https://github.com/Rrishik/dus-aane-bot\n\n" +
+    "*Get started (2 steps):*\n" +
+    "1. Forward any bank transaction email to `" +
     BOT_INBOX_EMAIL +
     "`\n" +
-    "2. Come back here and send `/register your.name@gmail.com`\n\n" +
-    "Once I see your forward, I'll activate your account and send you a Gmail filter query " +
-    "to automate all future forwards.";
+    "2. Send `/register your.name@gmail.com`";
   sendTelegramMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
@@ -158,23 +156,29 @@ function findRecentForwardFromEmail(email) {
 
 /**
  * Sends the Gmail filter query + setup steps. Used after activation.
+ *
+ * Query shape: `from:(<verified senders>) -(subject:OTP OR subject:statement OR ...)`
+ * Two layers of protection:
+ *   1. Sender allowlist — only verified transaction-alert addresses match.
+ *   2. Subject exclusion — extra belt-and-suspenders for anything that ever
+ *      shares a sender address (e.g. a bank switching from alerts to newsletters).
+ * Uses `-subject:` (not bare `-`) so body mentions of "OTP" in real alerts
+ * don't drop the message.
  */
 function sendFilterInstructions(chatId) {
-  var query = "from:(" + TRANSACTION_SENDERS.join(" OR ") + ")";
+  var senders = "from:(" + TRANSACTION_SENDERS.join(" OR ") + ")";
+  var excludes = IGNORE_SUBJECTS.map(function (s) {
+    return "subject:" + s;
+  }).join(" OR ");
+  var query = senders + " -(" + excludes + ")";
   var intro =
-    "📋 *Automate future forwards*\n\n" +
-    "To avoid forwarding every bank email by hand, set up this Gmail filter — " +
-    "only verified transaction-alert addresses are matched. OTPs, statements, " +
-    "security codes, and marketing are *excluded* by construction.\n\n" +
-    "*Steps:*\n" +
-    "1. Gmail → ⚙️ → See all settings → *Filters and Blocked Addresses*\n" +
-    "2. *Create a new filter*\n" +
-    "3. Paste the query below into *Has the words*\n" +
-    "4. Click *Create filter* → check *Forward it to* `" +
+    "📋 *Automate future forwards (optional)*\n\n" +
+    "So you don't forward every email by hand, set up a Gmail filter with the query below. " +
+    "It only matches verified bank transaction alerts — no OTPs, statements, or marketing.\n\n" +
+    "Gmail → Settings → *Filters and Blocked Addresses* → *Create a new filter* → " +
+    "paste the query into *Has the words* → *Forward it to* `" +
     BOT_INBOX_EMAIL +
-    "` (add + verify this address first if needed)\n" +
-    "5. Optionally tick *Apply filter to matching conversations* to backfill existing mail\n\n" +
-    "👇 *Copy the query below:*";
+    "`.";
   sendTelegramMessage(chatId, intro, { parse_mode: "Markdown" });
   sendTelegramMessage(chatId, "```\n" + query + "\n```", { parse_mode: "Markdown" });
 }
@@ -236,12 +240,14 @@ function activatePendingTenantForEmail(email) {
   try {
     sendTelegramMessage(
       pending.chat_id,
-      "🎉 *You're all set!* Your personal sheet is ready and I've shared it with `" +
+      "🎉 *You're all set!*\n\n" +
+        "I've created a Google Sheet for you and shared it with `" +
         email +
-        "` as an editor.\n\nI'm now tracking your forwards — forward any transaction email or set up the Gmail filter below to automate it.",
+        "` as editor. *This sheet is yours* — it records every transaction I process, and you can open, edit, export or download it anytime.\n\n" +
+        "From now on, every bank email you forward becomes a row here. Tap the button below to open it.",
       {
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: [[{ text: "📋 Open Sheet", url: sheetUrl }]] }
+        reply_markup: { inline_keyboard: [[{ text: "📋 Open your sheet", url: sheetUrl }]] }
       }
     );
   } catch (e) {
