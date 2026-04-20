@@ -34,7 +34,8 @@ jobs:
           printf "const WORKER_PROXY_URL = \"${{ secrets.WORKER_PROXY_URL }}\";\n\n" >> Lol.js
           printf "// Google Sheets\n" >> Lol.js
           printf "const PROD_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> Lol.js
-          printf "const SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n\n" >> Lol.js
+          printf "const SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n" >> Lol.js
+          printf "const TEMPLATE_SHEET_ID = \"${{ secrets.TEMPLATE_SHEET_ID }}\";\n\n" >> Lol.js
           printf "// Azure OpenAI\n" >> Lol.js
           printf "const AZURE_OPENAI_ENDPOINT = \"${{ secrets.AZURE_OPENAI_ENDPOINT }}\";\n" >> Lol.js
           printf "const AZURE_OPENAI_API_KEY = \"${{ secrets.AZURE_OPENAI_API_KEY }}\";\n" >> Lol.js
