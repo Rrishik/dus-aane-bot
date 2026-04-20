@@ -23,6 +23,8 @@ function handleStartCommand(chatId, username) {
     "*🔒 Your privacy:* I only read emails from verified bank transaction-alert addresses " +
     "(e.g. `alerts@axis.bank.in`, `alerts@hdfcbank.net`). I *never* see OTPs, statements, " +
     "security codes, or login alerts.\n\n" +
+    "*🔓 Open source:* the full code is on GitHub — audit it before you trust me: " +
+    "https://github.com/Rrishik/dus-aane-bot\n\n" +
     "*Setup (2 steps):*\n" +
     "1. From your Gmail, *forward any recent bank transaction email* (e.g. a card spend alert) " +
     "to `" +
@@ -214,7 +216,7 @@ function activatePendingTenantForEmail(email) {
   var sheetId;
   try {
     var label = pending.name || pending.chat_id;
-    sheetId = adminProvisionTenantSheet(label);
+    sheetId = adminProvisionTenantSheet(label, email);
   } catch (e) {
     console.error("[activatePendingTenantForEmail] provision failed:", e.message);
     try {
@@ -234,7 +236,9 @@ function activatePendingTenantForEmail(email) {
   try {
     sendTelegramMessage(
       pending.chat_id,
-      "🎉 *You're all set!* Your personal sheet is ready and I'm now tracking your forwards.",
+      "🎉 *You're all set!* Your personal sheet is ready and I've shared it with `" +
+        email +
+        "` as an editor.\n\nI'm now tracking your forwards — forward any transaction email or set up the Gmail filter below to automate it.",
       {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: [[{ text: "📋 Open Sheet", url: sheetUrl }]] }
