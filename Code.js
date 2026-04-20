@@ -5,22 +5,43 @@ function doPost(e) {
     var contents = e.postData.contents;
     var update = JSON.parse(contents);
 
-    // Resolve tenant from the incoming chat_id. Unknown chats fall through to
-    // tenant 0 defaults (SHEET_ID / CHAT_ID). Phase 4 will restrict to /start
-    // for unknown chats.
+    // Resolve the incoming chat id (message or callback).
     var incomingChatId = null;
     if (update.message && update.message.chat) incomingChatId = update.message.chat.id;
     else if (update.callback_query && update.callback_query.message && update.callback_query.message.chat) {
       incomingChatId = update.callback_query.message.chat.id;
     }
-    if (incomingChatId != null) {
-      var tenant = findTenantByChatId(incomingChatId);
-      if (tenant && tenant.status === TENANT_STATUS.ACTIVE) setCurrentTenant(tenant);
+
+    // Tenant resolution. Set context only for active tenants — pending/disabled
+    // chats must NOT fall through to admin defaults (would cross-tenant-leak).
+    var incomingTenant = incomingChatId != null ? findTenantByChatId(incomingChatId) : null;
+    var isActive = incomingTenant && incomingTenant.status === TENANT_STATUS.ACTIVE;
+    if (isActive) setCurrentTenant(incomingTenant);
+
+    // Callbacks (inline button taps) require an active tenant — anything else
+    // would hit admin data via the fallback accessors. Silently drop them.
+    if (update.callback_query) {
+      if (!isActive) {
+        try {
+          answerCallbackQuery(update.callback_query.id, "Please /start to set up your account.", true);
+        } catch (_) {}
+        return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+      }
+      handleCallbackQuery(update);
+      return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
     }
 
-    // Check if this is a /backfill or /ask command — defer to async trigger
+    // Text messages: onboarding commands are allowed for unknown/pending chats;
+    // all other commands are gated inside handleMessage via gateTenantForCommand.
     var commandText = update.message && update.message.text ? update.message.text.split("@")[0].toLowerCase() : "";
     var isDeferred = commandText.startsWith("/backfill") || commandText.startsWith("/ask");
+
+    // Deferred commands touch tenant data — only active tenants can use them.
+    if (isDeferred && !isActive) {
+      // Let handleMessage render the normal gate message.
+      handleMessage(update);
+      return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+    }
 
     if (isDeferred) {
       var chatId = update.message.chat.id;
@@ -53,12 +74,8 @@ function doPost(e) {
       var props = PropertiesService.getScriptProperties();
       props.setProperty("pending_update", contents);
       ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
-    } else {
-      if (update.callback_query) {
-        handleCallbackQuery(update);
-      } else if (update.message) {
-        handleMessage(update);
-      }
+    } else if (update.message) {
+      handleMessage(update);
     }
   } catch (error) {
     console.error("Error in doPost:", error.message);
@@ -86,10 +103,13 @@ function processWebhookUpdate() {
   try {
     var update = JSON.parse(contents);
     // Re-resolve tenant context for this async execution.
-    if (update.message && update.message.chat) {
-      var t = findTenantByChatId(update.message.chat.id);
-      if (t && t.status === TENANT_STATUS.ACTIVE) setCurrentTenant(t);
+    var chatId = update.message && update.message.chat ? update.message.chat.id : null;
+    var t = chatId != null ? findTenantByChatId(chatId) : null;
+    if (!t || t.status !== TENANT_STATUS.ACTIVE) {
+      console.warn("[processWebhookUpdate] skipping — no active tenant for chat " + chatId);
+      return;
     }
+    setCurrentTenant(t);
     if (update.message) {
       handleMessage(update);
     }
@@ -170,7 +190,20 @@ function continueBackfill() {
   var savedChatId = props.getProperty("backfill_tenant_chat_id");
   if (savedChatId) {
     var t = findTenantByChatId(savedChatId);
-    if (t && t.status === TENANT_STATUS.ACTIVE) setCurrentTenant(t);
+    if (!t || t.status !== TENANT_STATUS.ACTIVE) {
+      console.warn("[continueBackfill] tenant gone or inactive for chat " + savedChatId + "; aborting backfill");
+      // Clean up so a stale backfill doesn't linger.
+      props.deleteProperty("backfill_start");
+      props.deleteProperty("backfill_end");
+      props.deleteProperty("backfill_total_saved");
+      props.deleteProperty("backfill_total_dupes");
+      props.deleteProperty("backfill_total_failed");
+      props.deleteProperty("backfill_total_processed");
+      props.deleteProperty("backfill_chunk");
+      props.deleteProperty("backfill_tenant_chat_id");
+      return;
+    }
+    setCurrentTenant(t);
   }
   var startStr = props.getProperty("backfill_start");
   var endStr = props.getProperty("backfill_end");

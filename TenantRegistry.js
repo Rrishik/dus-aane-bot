@@ -32,9 +32,9 @@ var TENANT_STATUS = { PENDING: "pending", ACTIVE: "active", DISABLED: "disabled"
 var _tenantCache = null;
 
 function _adminSpreadsheet() {
-  // Registry lives on the prod sheet. Use a direct openById (not getSpreadsheet())
+  // Registry lives on the admin sheet. Use a direct openById (not getSpreadsheet())
   // to avoid tangling with the tenant-context accessor.
-  return SpreadsheetApp.openById(SHEET_ID);
+  return SpreadsheetApp.openById(ADMIN_SHEET_ID);
 }
 
 function _getOrCreateTenantsTab() {
@@ -170,20 +170,29 @@ function activateTenant(chatId, sheetId) {
  * Seed tenant 0 (the current group: you + partner) into the Tenants tab.
  * Idempotent — safe to run multiple times.
  *
- * Reads CHAT_ID and SHEET_ID from Lol.js and creates a Tenants row so the
- * current pipeline can flip to tenant-aware routing without any behavior change.
+ * Reads ADMIN_CHAT_ID and ADMIN_SHEET_ID from Constants/Lol.js and creates a
+ * Tenants row so the current pipeline can flip to tenant-aware routing without
+ * any behavior change.
  */
 function adminSeedTenantZero() {
   var tab = _getOrCreateTenantsTab();
-  var existing = _findRowIndexByChatId(CHAT_ID);
+  var existing = _findRowIndexByChatId(ADMIN_CHAT_ID);
   if (existing !== -1) {
     console.log("Tenant 0 already seeded at row " + existing);
     return;
   }
   var now = new Date().toISOString();
   // Emails list: populated by admin, or discovered dynamically from sheet's User column.
-  // For now, seed empty — Phase 4 /email command will populate.
-  tab.appendRow([String(CHAT_ID), "Tenant 0 (founder group)", "", SHEET_ID, TENANT_STATUS.ACTIVE, now, "Pre-seeded"]);
+  // For now, seed empty — admin adds forwarders via adminAddEmailToTenantZero().
+  tab.appendRow([
+    String(ADMIN_CHAT_ID),
+    "Tenant 0 (founder group)",
+    "",
+    ADMIN_SHEET_ID,
+    TENANT_STATUS.ACTIVE,
+    now,
+    "Pre-seeded"
+  ]);
   invalidateTenantCache();
   console.log("Tenant 0 seeded.");
 }
@@ -193,15 +202,15 @@ function adminSeedTenantZero() {
  * known forwarder (e.g., adminAddEmailToTenantZero("ramenarishik@gmail.com")).
  */
 function adminAddEmailToTenantZero(email) {
-  upsertPendingTenant(CHAT_ID, email);
+  upsertPendingTenant(ADMIN_CHAT_ID, email);
   // upsertPendingTenant sets status=pending on insert; if tenant 0 already
   // exists it just merges emails. If we just inserted, flip back to active.
-  var rowNum = _findRowIndexByChatId(CHAT_ID);
+  var rowNum = _findRowIndexByChatId(ADMIN_CHAT_ID);
   if (rowNum !== -1) {
     var tab = _getOrCreateTenantsTab();
     tab.getRange(rowNum, TENANT_COLS.STATUS).setValue(TENANT_STATUS.ACTIVE);
     if (!tab.getRange(rowNum, TENANT_COLS.SHEET_ID).getValue()) {
-      tab.getRange(rowNum, TENANT_COLS.SHEET_ID).setValue(SHEET_ID);
+      tab.getRange(rowNum, TENANT_COLS.SHEET_ID).setValue(ADMIN_SHEET_ID);
     }
     invalidateTenantCache();
   }
@@ -214,7 +223,7 @@ function adminAddEmailToTenantZero(email) {
  * Review/edit the Tenants tab manually after running to correct any mis-guesses.
  */
 function adminBackfillTenantZeroEmails() {
-  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
   var sheet = ss.getSheets()[0];
   var last = sheet.getLastRow();
   if (last < 2) return;
