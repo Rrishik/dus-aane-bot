@@ -7,6 +7,10 @@ const BOT_SET_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setMyComm
 const BOT_DELETE_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`;
 const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
 
+// Public email address that tenants forward their bank emails to.
+// Displayed in /start and /email onboarding copy.
+const BOT_INBOX_EMAIL = "dus-aane-bot@healthvault.online";
+
 // Google Sheets
 const SHEET_ID = PROD_SHEET_ID;
 const CATEGORY_COLUMN = 5; // Column E

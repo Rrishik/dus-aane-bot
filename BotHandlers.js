@@ -11,8 +11,22 @@ function handleMessage(update) {
     if (messageText.startsWith("/")) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();
 
+      // Onboarding commands always allowed (they're how tenants are created).
+      var ONBOARDING = ["/start", "/email", "/myinfo"];
+      if (ONBOARDING.indexOf(command) === -1) {
+        if (!gateTenantForCommand(chatId)) return;
+      }
+
       switch (command) {
         case "/start":
+          handleStartCommand(chatId, username);
+          break;
+        case "/email":
+          handleEmailCommand(chatId, username, messageText);
+          break;
+        case "/myinfo":
+          handleMyInfoCommand(chatId);
+          break;
         case "/help":
           handleHelpCommand(chatId, username);
           break;

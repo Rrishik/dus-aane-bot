@@ -93,6 +93,10 @@ function extractTransactions() {
 
     var tenant = findTenantByEmail(userEmail);
     if (!tenant) {
+      // Maybe this is a pending tenant's first forward — provision + activate.
+      tenant = activatePendingTenantForEmail(userEmail);
+    }
+    if (!tenant) {
       skipped++;
       console.log("[extractTransactions] No tenant for " + userEmail + "; skipping " + message.getId());
       return;
