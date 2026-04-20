@@ -90,7 +90,42 @@ const BANK_FROM_DOMAINS = [
   "indusind.com",
   "americanexpress.com",
   "goniyo.com",
-  "sbicard.com"
+  "sbicard.com",
+  "aubank.in"
+];
+
+// Verified transaction-alert senders — exact addresses we expect bank debit/credit
+// alerts from. This is the allowlist users should paste into their Gmail filter
+// so that only transactional mail (not OTPs, statements, marketing) leaves their
+// inbox. Keep narrow; add addresses as users discover them.
+const TRANSACTION_SENDERS = [
+  "alerts@axis.bank.in",
+  "alerts@hdfcbank.net",
+  "alert@hdfcbank.net",
+  "alerts@hdfcbank.bank.in",
+  "alerts@icicibank.com",
+  "credit_cards@icicibank.com",
+  "credit_cards@icici.bank.in",
+  "customernotification@icici.bank.in",
+  "credit_cards@axisbank.com",
+  "transactionalerts@citibank.com",
+  "AlertsfromAmericanExpress@americanexpress.com",
+  "AmericanExpress@welcome.americanexpress.com",
+  "transaction-alerts@idfcfirstbank.com",
+  "noreply@idfcfirstbank.com",
+  "alerts@kotak.com",
+  "donotreply@kotak.com",
+  "alerts@indusind.com",
+  "transactionalert@indusind.com",
+  "alerts@sbicard.com",
+  "onlinesbicard@sbicard.com",
+  "noreply@sbi.co.in",
+  "onlinesbi@alerts.sbi.co.in",
+  "hsbc@mail.hsbc.co.in",
+  "alerts@yes.bank.in",
+  "esfb-alerts@equitas.bank.in",
+  "donotreply@bobcard.in",
+  "aucreditcards.alerts@aubank.in"
 ];
 
 // Specific senders / marketing subdomains to ignore even though they match BANK_FROM_DOMAINS.
@@ -105,7 +140,6 @@ const IGNORE_SENDERS = [
   "information@yes.bank.in",
   "customer.communication@custcom.yes.bank.in",
   "information@hdfcbank.bank.in",
-  "welcome.americanexpress.com",
   "information@mailers.hdfcbank.bank.in",
   "communications.sbi.co.in",
   "no-reply@alerts.sbi.co.in",
@@ -132,6 +166,7 @@ const IGNORE_SENDERS = [
   "cmdnoreply@indusind.com",
   "customerinfo@hdfcbank.bank.in",
   "advices@idfcfirst.bank.in",
+  "alwaysyoufirst@emailer.idfcfirstbank.com",
   "Creditcard.closure@indusind.com"
 ];
 
