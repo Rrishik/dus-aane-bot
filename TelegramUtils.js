@@ -15,13 +15,14 @@ function setTelegramWebhook() {
 }
 
 function setTelegramCommands() {
+  // Only list commands that work without arguments. Commands like /register
+  // and /ask need args; Telegram's menu auto-sends on tap with no chance to
+  // add an argument, so listing them here just produces usage errors.
   var commands = [
     { command: "/start", description: "Onboard / show welcome" },
-    { command: "/register", description: "Register your Gmail (e.g. /register you@gmail.com)" },
     { command: "/myinfo", description: "Show your account status" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
-    { command: "/ask", description: "Ask AI about your spending (e.g. /ask food spending last month)" },
     { command: "/help", description: "Show available commands" }
   ];
   var payload = {
