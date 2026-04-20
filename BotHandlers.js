@@ -120,7 +120,7 @@ function handleHelpCommand(chatId, username) {
     `• Multi-currency support\n` +
     `• Category-wise spending analysis`;
 
-  var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID;
+  var sheetUrl = "https://docs.google.com/spreadsheets/d/" + getTenantSheetId();
   sendTelegramMessage(chatId, message, {
     parse_mode: "Markdown",
     reply_markup: {

@@ -1,8 +1,36 @@
+// Per-execution tenant context: when set, getSpreadsheet() opens the tenant's
+// sheet instead of the default SHEET_ID. Entry points (doPost, triggers,
+// extractTransactions per-message) call setCurrentTenant() before touching the
+// sheet or Telegram. Falls back to SHEET_ID + CHAT_ID when unset (tenant 0).
+var _currentTenant = null;
+
+function setCurrentTenant(tenant) {
+  // Invalidate the cached spreadsheet if the tenant's sheet changes.
+  if (tenant && _currentTenant && tenant.sheet_id !== _currentTenant.sheet_id) {
+    _cachedSpreadsheet = null;
+  } else if (!tenant && _currentTenant) {
+    _cachedSpreadsheet = null;
+  }
+  _currentTenant = tenant;
+}
+
+function getCurrentTenant() {
+  return _currentTenant;
+}
+
+function getTenantSheetId() {
+  return (_currentTenant && _currentTenant.sheet_id) || SHEET_ID;
+}
+
+function getTenantChatId() {
+  return (_currentTenant && _currentTenant.chat_id) || CHAT_ID;
+}
+
 // Lazy-cached spreadsheet accessor — avoids redundant openById calls within a single execution
 var _cachedSpreadsheet = null;
 function getSpreadsheet() {
   if (!_cachedSpreadsheet) {
-    _cachedSpreadsheet = SpreadsheetApp.openById(SHEET_ID);
+    _cachedSpreadsheet = SpreadsheetApp.openById(getTenantSheetId());
   }
   return _cachedSpreadsheet;
 }

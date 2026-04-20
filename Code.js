@@ -5,6 +5,19 @@ function doPost(e) {
     var contents = e.postData.contents;
     var update = JSON.parse(contents);
 
+    // Resolve tenant from the incoming chat_id. Unknown chats fall through to
+    // tenant 0 defaults (SHEET_ID / CHAT_ID). Phase 4 will restrict to /start
+    // for unknown chats.
+    var incomingChatId = null;
+    if (update.message && update.message.chat) incomingChatId = update.message.chat.id;
+    else if (update.callback_query && update.callback_query.message && update.callback_query.message.chat) {
+      incomingChatId = update.callback_query.message.chat.id;
+    }
+    if (incomingChatId != null) {
+      var tenant = findTenantByChatId(incomingChatId);
+      if (tenant && tenant.status === TENANT_STATUS.ACTIVE) setCurrentTenant(tenant);
+    }
+
     // Check if this is a /backfill or /ask command — defer to async trigger
     var commandText = update.message && update.message.text ? update.message.text.split("@")[0].toLowerCase() : "";
     var isDeferred = commandText.startsWith("/backfill") || commandText.startsWith("/ask");
@@ -72,6 +85,11 @@ function processWebhookUpdate() {
 
   try {
     var update = JSON.parse(contents);
+    // Re-resolve tenant context for this async execution.
+    if (update.message && update.message.chat) {
+      var t = findTenantByChatId(update.message.chat.id);
+      if (t && t.status === TENANT_STATUS.ACTIVE) setCurrentTenant(t);
+    }
     if (update.message) {
       handleMessage(update);
     }
@@ -106,6 +124,8 @@ function startChunkedBackfill(startDate, endDate) {
   props.setProperty("backfill_total_failed", "0");
   props.setProperty("backfill_total_processed", "0");
   props.setProperty("backfill_chunk", "1");
+  // Persist tenant chat_id so the async continueBackfill can restore context.
+  props.setProperty("backfill_tenant_chat_id", String(getTenantChatId()));
 
   // Pick format based on whether the range is sub-day (minute/hour) or multi-day.
   var spanMs = endDate.getTime() - startDate.getTime();
@@ -113,7 +133,7 @@ function startChunkedBackfill(startDate, endDate) {
   var humanSpan = formatDurationMs(spanMs);
 
   sendTelegramMessage(
-    CHAT_ID,
+    getTenantChatId(),
     "⏳ *Backfill started* _(" +
       humanSpan +
       ")_\n" +
@@ -146,6 +166,12 @@ function continueBackfill() {
   });
 
   var props = PropertiesService.getScriptProperties();
+  // Restore tenant context stashed by startChunkedBackfill.
+  var savedChatId = props.getProperty("backfill_tenant_chat_id");
+  if (savedChatId) {
+    var t = findTenantByChatId(savedChatId);
+    if (t && t.status === TENANT_STATUS.ACTIVE) setCurrentTenant(t);
+  }
   var startStr = props.getProperty("backfill_start");
   var endStr = props.getProperty("backfill_end");
 
@@ -183,7 +209,7 @@ function continueBackfill() {
     // Send progress update
     props.setProperty("backfill_chunk", (chunk + 1).toString());
     sendTelegramMessage(
-      CHAT_ID,
+      getTenantChatId(),
       "⏳ *Backfill chunk " +
         chunk +
         " done*\n" +
@@ -203,8 +229,8 @@ function continueBackfill() {
     if (totalFailed > 0) summary += "❌ *Failed:* " + totalFailed + "\n";
     if (chunk > 1) summary += "📦 *Chunks:* " + chunk + "\n";
 
-    var sheetUrl = "https://docs.google.com/spreadsheets/d/" + SHEET_ID;
-    sendTelegramMessage(CHAT_ID, summary, {
+    var sheetUrl = "https://docs.google.com/spreadsheets/d/" + getTenantSheetId();
+    sendTelegramMessage(getTenantChatId(), summary, {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [[{ text: "📋 Open Sheet", url: sheetUrl }]]
@@ -219,6 +245,7 @@ function continueBackfill() {
     props.deleteProperty("backfill_total_failed");
     props.deleteProperty("backfill_total_processed");
     props.deleteProperty("backfill_chunk");
+    props.deleteProperty("backfill_tenant_chat_id");
   }
 }
 
