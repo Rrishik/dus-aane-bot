@@ -1,4 +1,3 @@
-const CHAT_ID = GROUP_CHAT_ID;
 const BOT_EDIT_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`;
 const BOT_SEND_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
 const BOT_DELETE_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`;
@@ -11,15 +10,10 @@ const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook
 // Displayed in /start and /register onboarding copy.
 const BOT_INBOX_EMAIL = "dusaanebot.inbox@gmail.com";
 
-// Admin spreadsheet — hosts the Tenants registry tab AND tenant 0's transaction
-// data. Every other tenant gets their own sheet (provisioned from TEMPLATE_SHEET_ID).
-// ADMIN_SHEET_ID is the canonical name; SHEET_ID remains as a legacy alias.
-const ADMIN_SHEET_ID = PROD_SHEET_ID;
-const SHEET_ID = PROD_SHEET_ID;
+// ADMIN_SHEET_ID and ADMIN_CHAT_ID are defined in AConfig.js (generated from
+// GitHub secrets during deploy). They identify tenant 0's spreadsheet + chat,
+// which also hosts the shared Tenants / MerchantResolution / CategoryOverrides tabs.
 
-// Admin chat id — receives operational alerts (future) and hosts tenant 0.
-// ADMIN_CHAT_ID is the canonical name; CHAT_ID remains as a legacy alias.
-const ADMIN_CHAT_ID = GROUP_CHAT_ID;
 const CATEGORY_COLUMN = 5; // Column E
 const SPLIT_COLUMN = 8; // Column H
 const MESSAGE_ID_COLUMN = 9; // Column I

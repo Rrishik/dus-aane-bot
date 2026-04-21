@@ -25,25 +25,25 @@ jobs:
       - name: Check formatting
         run: npm run format:check
 
-      - name: Create Lol.js from secrets
+      - name: Create AConfig.js from secrets
         run: |
-          printf "// Telegram\n" > Lol.js
-          printf "const BOT_TOKEN = \"${{ secrets.BOT_TOKEN }}\";\n" >> Lol.js
-          printf "const GROUP_CHAT_ID = \"${{ secrets.GROUP_CHAT_ID }}\";\n\n" >> Lol.js
-          printf "const SCRIPT_APP_URL = \"${{ secrets.SCRIPT_APP_URL }}\";\n\n" >> Lol.js
-          printf "const WORKER_PROXY_URL = \"${{ secrets.WORKER_PROXY_URL }}\";\n\n" >> Lol.js
-          printf "// Google Sheets\n" >> Lol.js
-          printf "const PROD_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> Lol.js
-          printf "const SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n" >> Lol.js
-          printf "const TEMPLATE_SHEET_ID = \"${{ secrets.TEMPLATE_SHEET_ID }}\";\n\n" >> Lol.js
-          printf "// Azure OpenAI\n" >> Lol.js
-          printf "const AZURE_OPENAI_ENDPOINT = \"${{ secrets.AZURE_OPENAI_ENDPOINT }}\";\n" >> Lol.js
-          printf "const AZURE_OPENAI_API_KEY = \"${{ secrets.AZURE_OPENAI_API_KEY }}\";\n" >> Lol.js
-          printf "const AZURE_OPENAI_DEPLOYMENT_NAME = \"${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}\";\n" >> Lol.js
-          printf "const AZURE_OPENAI_API_VERSION = \"${{ secrets.AZURE_OPENAI_API_VERSION }}\";\n\n" >> Lol.js
-          printf "// Gemini\n" >> Lol.js
-          printf "const GEMINI_BASE_URL = \"${{ secrets.GEMINI_BASE_URL }}\";\n" >> Lol.js
-          printf "const GEMINI_API_KEY = \"${{ secrets.GEMINI_API_KEY }}\";\n" >> Lol.js
+          printf "// Telegram\n" > AConfig.js
+          printf "const BOT_TOKEN = \"${{ secrets.BOT_TOKEN }}\";\n" >> AConfig.js
+          printf "const ADMIN_CHAT_ID = \"${{ secrets.GROUP_CHAT_ID }}\";\n\n" >> AConfig.js
+          printf "const SCRIPT_APP_URL = \"${{ secrets.SCRIPT_APP_URL }}\";\n\n" >> AConfig.js
+          printf "const WORKER_PROXY_URL = \"${{ secrets.WORKER_PROXY_URL }}\";\n\n" >> AConfig.js
+          printf "// Google Sheets\n" >> AConfig.js
+          printf "const ADMIN_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> AConfig.js
+          printf "const SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n" >> AConfig.js
+          printf "const TEMPLATE_SHEET_ID = \"${{ secrets.TEMPLATE_SHEET_ID }}\";\n\n" >> AConfig.js
+          printf "// Azure OpenAI\n" >> AConfig.js
+          printf "const AZURE_OPENAI_ENDPOINT = \"${{ secrets.AZURE_OPENAI_ENDPOINT }}\";\n" >> AConfig.js
+          printf "const AZURE_OPENAI_API_KEY = \"${{ secrets.AZURE_OPENAI_API_KEY }}\";\n" >> AConfig.js
+          printf "const AZURE_OPENAI_DEPLOYMENT_NAME = \"${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}\";\n" >> AConfig.js
+          printf "const AZURE_OPENAI_API_VERSION = \"${{ secrets.AZURE_OPENAI_API_VERSION }}\";\n\n" >> AConfig.js
+          printf "// Gemini\n" >> AConfig.js
+          printf "const GEMINI_BASE_URL = \"${{ secrets.GEMINI_BASE_URL }}\";\n" >> AConfig.js
+          printf "const GEMINI_API_KEY = \"${{ secrets.GEMINI_API_KEY }}\";\n" >> AConfig.js
 
       - name: Set up authentication
         env:

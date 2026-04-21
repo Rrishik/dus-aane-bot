@@ -6,7 +6,7 @@
  * structure (tabs + headers) and deleting the data. The new file is owned
  * by the bot's Google account (whoever is running this).
  *
- * Returns the new sheet ID. Save it as TEMPLATE_SHEET_ID in Lol.js / CI secret.
+ * Returns the new sheet ID. Save it as TEMPLATE_SHEET_ID in AConfig.js / CI secret.
  *
  * Idempotent-ish: creates a new copy each run; delete old ones via Drive UI.
  */
@@ -36,7 +36,7 @@ function adminCreateTemplateSheet() {
   console.log("URL:  " + copy.getUrl());
   console.log("");
   console.log("Next steps:");
-  console.log("1. Save this ID as TEMPLATE_SHEET_ID in Lol.js and GitHub secret");
+  console.log("1. Save this ID as TEMPLATE_SHEET_ID in AConfig.js and GitHub secret");
   console.log("2. Review the copy in Drive to ensure it's clean");
   return copy.getId();
 }

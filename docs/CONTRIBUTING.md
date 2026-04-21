@@ -38,7 +38,7 @@ npx clasp login
 # Pull the current project or create one — see README admin steps
 ```
 
-You'll also need a local `Lol.js` (gitignored) with all the constants listed in the README. CI generates this from GitHub secrets; for local dev, just create it.
+You'll also need a local `AConfig.js` (gitignored) with all the constants listed in the README. CI generates this from GitHub secrets; for local dev, just create it.
 
 ## Running & deploying locally
 
@@ -104,7 +104,7 @@ Never call `getSpreadsheet()` or `sendTelegramMessage(CHAT_ID, ...)` in a code p
 
 ## Security checklist for PRs
 
-- Don't commit `Lol.js` or any `.env`. Double-check with `git diff` before pushing.
+- Don't commit `AConfig.js` or any `.env`. Double-check with `git diff` before pushing.
 - Don't log full email bodies or Azure keys. It's fine to log message ids, chat ids, tenant names.
 - Don't bypass `shouldIgnoreMessage` / `isFromAllowedBank` in the happy path — these are the defense-in-depth layer when users misconfigure their Gmail filter.
 - Validate `chat_id` ownership before mutating any tenant data — don't trust `chat_id` parameters from callback payloads; re-look up the tenant from the incoming update.

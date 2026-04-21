@@ -5,7 +5,7 @@
   "htmlExtensions": [".html"],
   "jsonExtensions": [".json"],
   "filePushOrder": [
-    "Lol.js",
+    "AConfig.js",
     "Constants.js",
     "TelegramUtils.js",
     "GoogleSheetUtils.js",
