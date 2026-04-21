@@ -8,10 +8,28 @@ Built on Google Apps Script + a Cloudflare Worker proxy. Self-host your own inst
 - 🔓 **Auditable** — the full code lives in this repo. See [docs/PRIVACY.md](docs/PRIVACY.md) for what the bot reads, stores and shares.
 - 🏠 **Multi-tenant** — one deploy serves many users. Each tenant is onboarded with a single `/register` command after proving inbox ownership.
 
+## How is this different from Cred / Walnut / CashKaro?
+
+Closed-source finance apps typically ask for **full Gmail read access** via OAuth — which means they can (and do) scan everything: OTPs, statements, personal mail, receipts, newsletters. You trust them to look only at what they claim.
+
+Dus Aane Bot inverts that:
+
+|                                       | Cred / Walnut / etc.                          | Dus Aane Bot                                                                  |
+| ------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Access scope**                      | Full Gmail read (all mail, all labels)        | Only emails you forward to the bot inbox                                      |
+| **OTPs / statements / personal mail** | Readable by the app                           | Never leaves your Gmail                                                       |
+| **Data location**                     | Their servers, their schema                   | Your Google Sheet, your account                                               |
+| **Export / delete**                   | Via their UI, if offered                      | Native Google Sheets — yours forever                                          |
+| **Source code**                       | Closed                                        | [This repo](https://github.com/Rrishik/dus-aane-bot) — audit before you trust |
+| **Revoke access**                     | OAuth revoke (still had full read until then) | Delete the Gmail filter                                                       |
+
+The trust model is: you set up a one-time Gmail filter that matches a **fixed allowlist of ~30 verified bank sender addresses** (see [`TRANSACTION_SENDERS`](Constants.js)). Nothing else is ever forwarded. If you don't trust the allowlist, read it — it's in this repo.
+
 ## Table of contents
 
 - [Features](#features)
 - [How it works](#how-it-works)
+- [How is this different from Cred / Walnut / CashKaro?](#how-is-this-different-from-cred--walnut--cashkaro)
 - [User onboarding (`/start` → `/register`)](#user-onboarding)
 - [Commands](#commands)
 - [Admin setup (one-time, per deployment)](#admin-setup)
@@ -113,13 +131,13 @@ Admin = the person deploying and operating the bot. Users don't need any of this
 
 1. **Bot Gmail account** — create `dusaanebot.inbox@gmail.com` (or your own address — update `BOT_INBOX_EMAIL` in [Constants.js](Constants.js) if different).
 2. **Apps Script project** — `clasp login` as the bot Gmail → `clasp create --type standalone --title "dus-aane-bot" --rootDir .`.
-3. **Secrets (`Lol.js`, gitignored)** — create it locally with these constants:
+3. **Secrets (`AConfig.js`, gitignored)** — create it locally with these constants:
    ```js
    const BOT_TOKEN = "...";
-   const GROUP_CHAT_ID = "..."; // admin / founder chat id (tenant 0)
+   const ADMIN_CHAT_ID = "..."; // admin / founder chat id (tenant 0)
    const SCRIPT_APP_URL = "https://script.google.com/macros/s/.../exec";
    const WORKER_PROXY_URL = "https://your-worker.workers.dev";
-   const PROD_SHEET_ID = "..."; // admin sheet — hosts the Tenants registry + tenant 0's data
+   const ADMIN_SHEET_ID = "..."; // admin sheet — hosts the Tenants registry + tenant 0's data
    const SHEET_NAME = "Transactions";
    const TEMPLATE_SHEET_ID = ""; // filled in step 6 below
    const AZURE_OPENAI_ENDPOINT = "...";
@@ -129,7 +147,7 @@ Admin = the person deploying and operating the bot. Users don't need any of this
    ```
 4. `clasp push` → open the project in the script editor → authorize all OAuth scopes (Gmail, Sheets, Drive, URL fetch).
 5. Deploy as Web App (execute as bot account, access: Anyone) → note the `/exec` URL + deployment ID.
-6. **Create the template sheet** — in the script editor, run `adminCreateTemplateSheet()`. It copies your admin sheet structure, clears the data, and logs the new sheet ID. Put that ID in `Lol.js` as `TEMPLATE_SHEET_ID` and in the GitHub secret.
+6. **Create the template sheet** — in the script editor, run `adminCreateTemplateSheet()`. It copies your admin sheet structure, clears the data, and logs the new sheet ID. Put that ID in `AConfig.js` as `TEMPLATE_SHEET_ID` and in the GitHub secret.
 7. **Cloudflare Worker** — set `APPS_SCRIPT_URL` secret, `wrangler deploy` (or use the GitHub Actions workflow).
 8. **Bot wiring** — from the script editor, run `setTelegramWebhook()` (points Telegram at the worker) and `setTelegramCommands()` (registers the slash-menu).
 9. **Trigger** — add an hourly trigger for `triggerEmailProcessing` (Triggers panel in the script editor).
@@ -220,12 +238,12 @@ The LLM chains up to 3 tool calls per query.
 GitHub Actions on push to `main`:
 
 1. Prettier format check
-2. Generate `Lol.js` from GitHub secrets
+2. Generate `AConfig.js` from GitHub secrets
 3. `clasp push --force` to Apps Script
 4. `clasp deploy` with deployment ID
 5. Deploy Cloudflare Worker via wrangler
 
-**Required GitHub Secrets**: `CLASP_TOKEN`, `DEPLOYMENT_ID`, `APPS_SCRIPT_URL`, plus every variable in `Lol.js` (see step 3 above) — in particular `PROD_SHEET_ID` and `TEMPLATE_SHEET_ID`.
+**Required GitHub Secrets**: `CLASP_TOKEN`, `DEPLOYMENT_ID`, `APPS_SCRIPT_URL`, plus every variable in `AConfig.js` (see step 3 above) — in particular `PROD_SHEET_ID` and `TEMPLATE_SHEET_ID`. Secret names remain `GROUP_CHAT_ID` and `PROD_SHEET_ID`; the deploy step maps them to `ADMIN_CHAT_ID` and `ADMIN_SHEET_ID` in the generated file.
 
 ## Troubleshooting
 
@@ -250,7 +268,7 @@ GitHub Actions on push to `main`:
 
 ### "I couldn't create your sheet" (Dutch / localized Drive error)
 
-- `TEMPLATE_SHEET_ID` in `Lol.js` / CI secret is wrong or the script account can't access it.
+- `TEMPLATE_SHEET_ID` in `AConfig.js` / CI secret is wrong or the script account can't access it.
 - Run `adminCreateTemplateSheet()` from the script editor, copy the logged ID, update `TEMPLATE_SHEET_ID` secret, redeploy.
 
 ### Wrong category on a transaction

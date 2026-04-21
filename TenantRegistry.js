@@ -1,6 +1,6 @@
 // --- Tenant Registry ---
-// Tenants live in a `Tenants` tab on the admin spreadsheet (currently reuses
-// PROD_SHEET_ID — i.e., tenant 0's sheet). One row per tenant.
+// Tenants live in a `Tenants` tab on the admin spreadsheet (ADMIN_SHEET_ID —
+// i.e., tenant 0's sheet). One row per tenant.
 //
 // Schema (stable column order):
 //   1: chat_id        (primary key; Telegram chat/group id as string)
@@ -13,7 +13,7 @@
 //
 // A row with status=pending has no sheet_id yet; it's created on first forward.
 //
-// Why PROD_SHEET_ID hosts the registry: keeps everything in one admin place,
+// Why the admin sheet hosts the registry: keeps everything in one admin place,
 // and we already have access there. The Tenants tab is separate from data.
 
 var TENANTS_TAB = "Tenants";
@@ -170,7 +170,7 @@ function activateTenant(chatId, sheetId) {
  * Seed tenant 0 (the current group: you + partner) into the Tenants tab.
  * Idempotent — safe to run multiple times.
  *
- * Reads ADMIN_CHAT_ID and ADMIN_SHEET_ID from Constants/Lol.js and creates a
+ * Reads ADMIN_CHAT_ID and ADMIN_SHEET_ID from AConfig.js and creates a
  * Tenants row so the current pipeline can flip to tenant-aware routing without
  * any behavior change.
  */
