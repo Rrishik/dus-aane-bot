@@ -1,0 +1,22 @@
+feat: prefill Gmail search with filter query (zero copy/paste)
+
+UX problem: clicking the 'Open filter settings' link navigated the user
+away from the email, so they hadn't yet copied the query string and ended
+up bouncing between tabs.
+
+Fix: use Gmail's search-hash deep link
+(https://mail.google.com/mail/#search/<encoded-query>). Gmail loads with
+the query already in the search box; the user clicks 'Create filter' from
+the search dropdown and Gmail auto-populates the 'Has the words' field.
+Zero copy/paste in the happy path.
+
+Email layout reworked accordingly:
+  - Primary CTA is now the prefill button (above the fold).
+  - 'Or paste manually' fallback section retains the <pre> block + manual
+    settings link for cases where the prefill URL fails (e.g. URL too long,
+    multi-account confusion). user-select:all on the <pre> makes the whole
+    block select on a single click.
+  - All external links now have target='_blank' rel='noopener' so the email
+    tab survives the click.
+
+Tests: 2 new + 1 amended (141 total).
