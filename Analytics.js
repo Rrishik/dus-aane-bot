@@ -250,18 +250,12 @@ function formatMonthlyMessage(year, month, data, numMonths) {
 
 // ─── Weekly Analytics ────────────────────────────────────────────────
 
-// Last completed Mon-Sun week relative to `today`. If today is Sunday, returns
-// the week ending today; on any other day returns the most recent fully past
-// week (so a Monday-morning trigger summarizes the week that just ended).
+// Rolling 7-day window ending yesterday (relative to `today`). Day-of-week
+// independent so the digest is always fresh regardless of which weekday the
+// trigger fires on. Friday-morning trigger → covers prior Fri 00:00 - Thu 23:59.
 function weekRangeFor(today) {
-  var ref = new Date(today);
-  ref.setHours(0, 0, 0, 0);
-  // Sun=0, Mon=1, ..., Sat=6. Days back to most recent Sunday.
-  // On Sunday itself we treat the day as the closing day of "this week".
-  var dow = ref.getDay();
-  var daysBackToSun = dow === 0 ? 0 : dow;
-  var end = new Date(ref);
-  end.setDate(ref.getDate() - daysBackToSun);
+  var end = new Date(today);
+  end.setDate(end.getDate() - 1);
   end.setHours(23, 59, 59, 999);
   var start = new Date(end);
   start.setDate(end.getDate() - 6);

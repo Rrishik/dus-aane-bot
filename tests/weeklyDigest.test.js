@@ -27,36 +27,30 @@ beforeAll(() => {
 });
 
 describe("weekRangeFor", () => {
-  it("on Monday returns the previous Mon-Sun window", () => {
-    // Mon Apr 27 2026
-    var r = weekRangeFor(new Date(2026, 3, 27));
-    expect(r.start.getDate()).toBe(20); // Mon Apr 20
+  it("returns the rolling 7 days ending yesterday", () => {
+    // Fri May 1 2026 → covers Fri Apr 24 - Thu Apr 30
+    var r = weekRangeFor(new Date(2026, 4, 1));
     expect(r.start.getMonth()).toBe(3);
-    expect(r.end.getDate()).toBe(26); // Sun Apr 26
+    expect(r.start.getDate()).toBe(24);
+    expect(r.end.getMonth()).toBe(3);
+    expect(r.end.getDate()).toBe(30);
     expect(r.end.getHours()).toBe(23);
   });
 
-  it("on Sunday returns the week ending that same Sunday", () => {
-    // Sun Apr 26 2026
-    var r = weekRangeFor(new Date(2026, 3, 26));
-    expect(r.start.getDate()).toBe(20);
-    expect(r.end.getDate()).toBe(26);
-  });
-
-  it("on Wednesday returns the most recent completed Mon-Sun", () => {
-    // Wed Apr 29 2026
-    var r = weekRangeFor(new Date(2026, 3, 29));
+  it("is day-of-week independent (Mon trigger)", () => {
+    // Mon Apr 27 2026 → covers Mon Apr 20 - Sun Apr 26
+    var r = weekRangeFor(new Date(2026, 3, 27));
     expect(r.start.getDate()).toBe(20);
     expect(r.end.getDate()).toBe(26);
   });
 
   it("crosses a month boundary cleanly", () => {
-    // Mon May 4 2026 → previous week is Apr 27 - May 3
-    var r = weekRangeFor(new Date(2026, 4, 4));
+    // Sat May 2 2026 → covers Sat Apr 25 - Fri May 1
+    var r = weekRangeFor(new Date(2026, 4, 2));
     expect(r.start.getMonth()).toBe(3);
-    expect(r.start.getDate()).toBe(27);
+    expect(r.start.getDate()).toBe(25);
     expect(r.end.getMonth()).toBe(4);
-    expect(r.end.getDate()).toBe(3);
+    expect(r.end.getDate()).toBe(1);
   });
 
   it("start is local midnight, end is local 23:59:59.999", () => {
