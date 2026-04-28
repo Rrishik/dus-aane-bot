@@ -200,14 +200,30 @@ function activateTenant(chatId, sheetId) {
 
 // Stamp last_forward_at on a tenant. Called from extractTransactions after a
 // successful live forward (not from backfill — backfill is operator action on
-// historical mail, not fresh activity). Idempotent: safe to call multiple
-// times in the same run; each call advances the timestamp to `now`.
+// historical mail, not fresh activity).
+//
+// Optimization: skip the write when an existing stamp is still within
+// STAMP_FRESHNESS_DAYS. The dormancy threshold (NUDGE_CONFIG.inactiveDays) is
+// strictly larger, so a slightly stale stamp can't cause a missed nudge — but
+// it does save ~28x writes for tenants who forward daily. Must remain
+// strictly less than NUDGE_CONFIG.inactiveDays.
+var STAMP_FRESHNESS_DAYS = 4;
+
 function stampLastForward(chatId, now) {
   var rowNum = _findRowIndexByChatId(chatId);
   if (rowNum === -1) return false;
   var tab = _getOrCreateTenantsTab();
-  var iso = (now || new Date()).toISOString();
-  tab.getRange(rowNum, TENANT_COLS.LAST_FORWARD_AT).setValue(iso);
+  var nowDate = now || new Date();
+
+  var existing = tab.getRange(rowNum, TENANT_COLS.LAST_FORWARD_AT).getValue();
+  if (existing) {
+    var existingMs = new Date(existing).getTime();
+    if (!isNaN(existingMs) && nowDate.getTime() - existingMs < STAMP_FRESHNESS_DAYS * 24 * 60 * 60 * 1000) {
+      return false; // still fresh; skip the write
+    }
+  }
+
+  tab.getRange(rowNum, TENANT_COLS.LAST_FORWARD_AT).setValue(nowDate.toISOString());
   invalidateTenantCache();
   return true;
 }
