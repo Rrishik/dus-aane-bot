@@ -248,6 +248,156 @@ function formatMonthlyMessage(year, month, data, numMonths) {
   return msg;
 }
 
+// ─── Weekly Analytics ────────────────────────────────────────────────
+
+// Last completed Mon-Sun week relative to `today`. If today is Sunday, returns
+// the week ending today; on any other day returns the most recent fully past
+// week (so a Monday-morning trigger summarizes the week that just ended).
+function weekRangeFor(today) {
+  var ref = new Date(today);
+  ref.setHours(0, 0, 0, 0);
+  // Sun=0, Mon=1, ..., Sat=6. Days back to most recent Sunday.
+  // On Sunday itself we treat the day as the closing day of "this week".
+  var dow = ref.getDay();
+  var daysBackToSun = dow === 0 ? 0 : dow;
+  var end = new Date(ref);
+  end.setDate(ref.getDate() - daysBackToSun);
+  end.setHours(23, 59, 59, 999);
+  var start = new Date(end);
+  start.setDate(end.getDate() - 6);
+  start.setHours(0, 0, 0, 0);
+  return { start: start, end: end };
+}
+
+function getWeeklyAnalytics(startDate, endDate) {
+  var all = getAllTransactions();
+  var txns = filterByDateRange(all, startDate, endDate);
+  if (txns.length === 0) return null;
+
+  var debits = txns.filter(function (t) {
+    return t.type === "Debit";
+  });
+
+  var spentByCurrency = sumByCurrency(debits);
+
+  var categorySpend = {};
+  debits.forEach(function (t) {
+    var key = t.category + "|||" + t.currency;
+    categorySpend[key] = (categorySpend[key] || 0) + t.amount;
+  });
+
+  // Previous week for delta
+  var prevEnd = new Date(startDate);
+  prevEnd.setMilliseconds(prevEnd.getMilliseconds() - 1);
+  var prevStart = new Date(prevEnd);
+  prevStart.setDate(prevStart.getDate() - 6);
+  prevStart.setHours(0, 0, 0, 0);
+  var prevTxns = filterByDateRange(all, prevStart, prevEnd);
+  var prevDebits = prevTxns.filter(function (t) {
+    return t.type === "Debit";
+  });
+  var prevSpentByCurrency = sumByCurrency(prevDebits);
+
+  var topTransactions = debits
+    .slice()
+    .sort(function (a, b) {
+      return b.amount - a.amount;
+    })
+    .slice(0, 5)
+    .map(function (t) {
+      return { merchant: t.merchant, amount: t.amount, currency: t.currency, date: t.date };
+    });
+
+  return {
+    totalTransactions: txns.length,
+    debitCount: debits.length,
+    spentByCurrency: spentByCurrency,
+    prevSpentByCurrency: prevSpentByCurrency,
+    categorySpend: categorySpend,
+    topTransactions: topTransactions
+  };
+}
+
+function formatWeeklyMessage(range, data) {
+  var tz = Session.getScriptTimeZone();
+  var label = Utilities.formatDate(range.start, tz, "MMM d") + "–" + Utilities.formatDate(range.end, tz, "MMM d");
+
+  var inrTotal = data.spentByCurrency["INR"] || 0;
+  var prevInr = (data.prevSpentByCurrency && data.prevSpentByCurrency["INR"]) || 0;
+  var msg = "📅 *Last Week* — " + label + "\n";
+  msg += "💸 ₹" + formatAmount(inrTotal);
+  if (prevInr > 0) {
+    var diff = inrTotal - prevInr;
+    var pct = Math.round((diff / prevInr) * 100);
+    var arrow = diff >= 0 ? "↑" : "↓";
+    msg += "  _(vs ₹" + formatAmount(prevInr) + ", " + arrow + Math.abs(pct) + "%)_";
+  }
+  msg += "\n";
+
+  var otherCurs = Object.keys(data.spentByCurrency).filter(function (c) {
+    return c !== "INR" && data.spentByCurrency[c] > 0;
+  });
+  if (otherCurs.length > 0) {
+    var otherParts = otherCurs.map(function (c) {
+      return c + " " + formatAmount(data.spentByCurrency[c]);
+    });
+    msg += "🌍 " + otherParts.join(" · ") + "\n";
+  }
+  msg += "\n";
+
+  // Top 5 categories with collapsed remainder
+  var sortedCats = Object.keys(data.categorySpend).sort(function (a, b) {
+    return data.categorySpend[b] - data.categorySpend[a];
+  });
+  var topCats = sortedCats.slice(0, 5);
+  var maxCatNameLen = 0;
+  topCats.forEach(function (catKey) {
+    var name = catKey.split("|||")[0];
+    if (name.length > maxCatNameLen) maxCatNameLen = name.length;
+  });
+  topCats.forEach(function (catKey) {
+    var parts = catKey.split("|||");
+    var cat = parts[0];
+    var amount = data.categorySpend[catKey];
+    var emoji = CATEGORY_EMOJIS[cat] || "•";
+    var padded = cat + " ".repeat(Math.max(0, maxCatNameLen - cat.length));
+    msg += emoji + " `" + padded + "  ₹" + formatAmount(amount) + "`\n";
+  });
+  if (sortedCats.length > 5) {
+    var restAmount = 0;
+    sortedCats.slice(5).forEach(function (catKey) {
+      restAmount += data.categorySpend[catKey];
+    });
+    msg +=
+      "   `\\+" +
+      (sortedCats.length - 5) +
+      " more" +
+      " ".repeat(Math.max(0, maxCatNameLen - 6)) +
+      "  ₹" +
+      formatAmount(restAmount) +
+      "`\n";
+  }
+
+  if (data.topTransactions && data.topTransactions.length > 0) {
+    msg += "\n💳 *Top:*\n";
+    data.topTransactions.forEach(function (t, i) {
+      var dateStr = t.date instanceof Date ? Utilities.formatDate(t.date, tz, "MMM dd") : t.date;
+      msg +=
+        i +
+        1 +
+        "\\. " +
+        escapeMarkdown(t.merchant || "Unknown") +
+        "  ₹" +
+        formatAmount(t.amount) +
+        "  " +
+        dateStr +
+        "\n";
+    });
+  }
+
+  return msg;
+}
+
 // ─── Trends Analytics ────────────────────────────────────────────────
 
 function getTrendsAnalytics(numMonths) {
