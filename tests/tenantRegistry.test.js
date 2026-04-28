@@ -62,6 +62,35 @@ describe("stampLastForward", () => {
     expect(stamped).toBeGreaterThanOrEqual(before);
     expect(stamped).toBeLessThanOrEqual(Date.now());
   });
+
+  it("skips the write when existing stamp is within the freshness window", () => {
+    var now = new Date("2026-04-28T12:00:00.000Z");
+    var twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    var s = setup([["111", "Alice", "", "sheet-a", "active", "", "", twoDaysAgo, "", 0]]);
+
+    expect(s.stampLastForward("111", now)).toBe(false);
+    s.invalidateTenantCache();
+    expect(s.loadTenants()[0].last_forward_at).toBe(twoDaysAgo); // unchanged
+  });
+
+  it("writes when existing stamp is older than the freshness window", () => {
+    var now = new Date("2026-04-28T12:00:00.000Z");
+    var fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    var s = setup([["111", "Alice", "", "sheet-a", "active", "", "", fiveDaysAgo, "", 0]]);
+
+    expect(s.stampLastForward("111", now)).toBe(true);
+    s.invalidateTenantCache();
+    expect(s.loadTenants()[0].last_forward_at).toBe(now.toISOString());
+  });
+
+  it("writes when existing stamp is empty regardless of freshness rule", () => {
+    var now = new Date("2026-04-28T12:00:00.000Z");
+    var s = setup([["111", "Alice", "", "sheet-a", "active", "", "", "", "", 0]]);
+
+    expect(s.stampLastForward("111", now)).toBe(true);
+    s.invalidateTenantCache();
+    expect(s.loadTenants()[0].last_forward_at).toBe(now.toISOString());
+  });
 });
 
 describe("reactivateIfDormant", () => {
