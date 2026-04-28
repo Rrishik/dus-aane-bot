@@ -28,6 +28,12 @@ var TENANT_COLS = {
 };
 var TENANT_STATUS = { PENDING: "pending", ACTIVE: "active", DISABLED: "disabled" };
 
+// chat_id values can arrive as number or string depending on source (Telegram
+// payloads, sheet cells, code constants). Always compare via this helper.
+function sameChatId(a, b) {
+  return String(a) === String(b);
+}
+
 // One-execution cache (rehydrated each script run).
 var _tenantCache = null;
 
