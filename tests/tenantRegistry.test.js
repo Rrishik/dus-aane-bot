@@ -27,14 +27,7 @@ function setup(rows) {
   });
   return loadAppsScript(
     ["TenantRegistry.js"],
-    [
-      "stampLastForward",
-      "reactivateIfDormant",
-      "loadTenants",
-      "invalidateTenantCache",
-      "TENANT_STATUS",
-      "TENANT_COLS"
-    ],
+    ["stampLastForward", "reactivateIfDormant", "loadTenants", "invalidateTenantCache", "TENANT_STATUS", "TENANT_COLS"],
     { SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }
   );
 }
