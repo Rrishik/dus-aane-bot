@@ -8,6 +8,7 @@ const CREDIT_CATEGORIES = ["Salary", "Refund"];
 
 const SYMBOLS = [
   "getCategoryListForType",
+  "getRowData",
   "findRowByColumnValue",
   "updateGoogleSheetCellWithFeedback",
   "ensureSheetHeaders",
@@ -42,6 +43,7 @@ beforeEach(() => {
     ADMIN_CHAT_ID: "CHAT",
     CATEGORIES,
     CREDIT_CATEGORIES,
+    EMAIL_LINK_COLUMN: 11,
     Logger: { log: () => {} }
   });
 });
@@ -58,6 +60,28 @@ describe("getCategoryListForType", () => {
     expect(api.getCategoryListForType("")).toBe(CATEGORIES);
     expect(api.getCategoryListForType(null)).toBe(CATEGORIES);
     expect(api.getCategoryListForType(undefined)).toBe(CATEGORIES);
+  });
+});
+
+describe("getRowData", () => {
+  it("returns the row as a 0-indexed array", () => {
+    seed(mainSheet(), [
+      Array(11).fill("h"),
+      ["e1", "t1", "Amazon", 100, "Shopping", "Debit", "me", "", "msg-1", "INR", "link-1"]
+    ]);
+    var row = api.getRowData(2);
+    expect(row[2]).toBe("Amazon");
+    expect(row[8]).toBe("msg-1");
+  });
+
+  it("covers all columns up to EMAIL_LINK_COLUMN (was hardcoded to 10, truncating col K)", () => {
+    seed(mainSheet(), [
+      Array(11).fill("h"),
+      ["e1", "t1", "Amazon", 100, "Shopping", "Debit", "me", "", "msg-1", "INR", "link-1"]
+    ]);
+    var row = api.getRowData(2);
+    expect(row.length).toBe(11);
+    expect(row[10]).toBe("link-1"); // would be undefined under old width=10
   });
 });
 
