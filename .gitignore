@@ -4,3 +4,4 @@ worker/node_modules/
 scripts/
 .clasp.json.*.bak
 docs/FUTURE_PLAN.md
+.commit-msg.tmp
