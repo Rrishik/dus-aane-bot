@@ -142,7 +142,6 @@ function handleHelpCommand(chatId, username) {
     `   _e.g. /ask how much on food last month?_\n` +
     `• /stats — analytics dashboard\n` +
     `• /recent — recent transactions _(e.g. /recent 10)_\n` +
-    `• /backfill — import older emails _(e.g. /backfill 7d)_\n` +
     `• /myinfo — your account\n` +
     `• /help — this message`;
 
