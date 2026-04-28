@@ -1,9 +1,0 @@
-feat: email filter setup instructions instead of Telegram
-
-Pasting a Gmail filter query is a desktop task; sending it over Telegram forced users to copy from a code block on mobile to their desktop browser. Now sendFilterInstructions emails the tenant at all registered addresses with a styled HTML body (filter query in a copyable pre, numbered steps, and CTAs for the demo video + setup guide), then sends a short Telegram confirmation pointing them at their inbox.
-
-New /setup command re-sends the email - handy if it lands in spam or gets deleted. Wired into the slash menu and /help.
-
-Pure helpers extracted: buildGmailFilterQuery() and buildFilterEmailHtml(), the latter HTML-escapes the query against injection. 6 new tests cover both. 139 tests pass.
-
-DEMO_VIDEO_URL and SETUP_GUIDE_URL added to Constants.js as Drive placeholders - fill in after recording / authoring.
