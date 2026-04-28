@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { loadAppsScript } from "./_loader.js";
 
-let buildGmailFilterQuery, buildFilterEmailHtml;
+let buildGmailFilterQuery, buildFilterEmailHtml, buildGmailFilterPrefillUrl;
 
 beforeAll(() => {
-  ({ buildGmailFilterQuery, buildFilterEmailHtml } = loadAppsScript(
+  ({ buildGmailFilterQuery, buildFilterEmailHtml, buildGmailFilterPrefillUrl } = loadAppsScript(
     ["Onboarding.js"],
-    ["buildGmailFilterQuery", "buildFilterEmailHtml"],
+    ["buildGmailFilterQuery", "buildFilterEmailHtml", "buildGmailFilterPrefillUrl"],
     {
       TRANSACTION_SENDERS: ["alerts@hdfcbank.net", "alerts@axisbank.com"],
       FILTER_OTP_SUBJECTS: ["OTP", "MPIN", '"one-time password"']
@@ -51,5 +51,21 @@ describe("buildFilterEmailHtml", () => {
     expect(html.startsWith("<div")).toBe(true);
     expect(html.endsWith("</div>")).toBe(true);
     expect(html).toContain("Set up auto-forwarding");
+  });
+
+  it("includes the prefill URL as the primary CTA and target=_blank on links", () => {
+    var html = buildFilterEmailHtml("from:(a@b.com)", "bot@gmail.com", "https://demo", "https://guide");
+    expect(html).toContain('href="https://mail.google.com/mail/#search/from%3A(a%40b.com)"');
+    // Every external link should open in a new tab so the email tab survives.
+    var anchorCount = (html.match(/<a /g) || []).length;
+    var blankCount = (html.match(/target="_blank"/g) || []).length;
+    expect(blankCount).toBe(anchorCount);
+  });
+});
+
+describe("buildGmailFilterPrefillUrl", () => {
+  it("URL-encodes the query into the Gmail search hash", () => {
+    var url = buildGmailFilterPrefillUrl('from:(a@b.com) -(subject:"x y")');
+    expect(url).toBe("https://mail.google.com/mail/#search/from%3A(a%40b.com)%20-(subject%3A%22x%20y%22)");
   });
 });

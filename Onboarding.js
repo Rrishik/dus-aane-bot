@@ -178,40 +178,62 @@ function _escHtml(s) {
 }
 
 /**
+ * Build a Gmail search URL that pre-loads the filter query. Clicking opens
+ * Gmail with the query already typed into the search box; the user then hits
+ * the search-dropdown's "Create filter" link and Gmail auto-populates the
+ * "Has the words" field — zero copy/paste required.
+ *
+ * Falls back gracefully: if the URL ends up too long for the browser address
+ * bar (~2000 char practical limit), the email still ships the manual paste
+ * block as a backup CTA.
+ */
+function buildGmailFilterPrefillUrl(query) {
+  return "https://mail.google.com/mail/#search/" + encodeURIComponent(query);
+}
+
+/**
  * Build the HTML body for the filter-setup email. Pure — accepts the query
  * and the bot inbox address, returns a self-contained HTML string. Pulled
  * out for unit-testability (raw HTML string assertions on escaping etc.).
+ *
+ * UX layout choice: query block comes BEFORE the CTA so the user reads the
+ * artifact they need to copy first; the link is the last action in the visual
+ * flow. All external links open in a new tab so the email tab survives.
  */
 function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl) {
   var q = _escHtml(query);
   var bot = _escHtml(botInboxEmail);
   var demo = _escHtml(demoUrl);
   var guide = _escHtml(guideUrl);
+  var prefillUrl = _escHtml(buildGmailFilterPrefillUrl(query));
   return (
     '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.5;color:#222;max-width:640px">' +
     '<h2 style="margin:0 0 8px">Set up auto-forwarding (~1 min)</h2>' +
     "<p>Skip manual forwarding with one Gmail filter. It only matches verified bank transaction alerts &mdash; no OTPs, statements, or marketing.</p>" +
-    '<h3 style="margin:20px 0 8px">Step-by-step</h3>' +
-    '<p style="margin:0 0 12px"><a href="https://mail.google.com/mail/#settings/filters" style="color:#1a73e8">Open Gmail filter settings &rarr;</a></p>' +
-    "<ol>" +
-    "<li>Click <b>Create a new filter</b>.</li>" +
-    "<li>Paste the query below into the <b>Has the words</b> field, then click <b>Create filter</b>.</li>" +
-    "<li>Tick <b>Forward it to</b> and select (or add) <code>" +
+    '<h3 style="margin:24px 0 8px">Quick path (recommended)</h3>' +
+    '<p style="margin:0 0 12px">Click below &mdash; Gmail opens with the query pre-loaded. From the search dropdown, click <b>Create filter</b>, then tick <b>Forward it to</b> &rarr; <code>' +
     bot +
-    "</code> as the destination.</li>" +
-    "<li>Click <b>Create filter</b>. Done.</li>" +
-    "</ol>" +
-    '<h3 style="margin:20px 0 8px">The filter query</h3>' +
-    '<pre style="background:#f4f4f4;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:13px">' +
+    "</code> &rarr; <b>Create filter</b>. Done.</p>" +
+    '<p style="margin:0 0 20px">' +
+    '<a href="' +
+    prefillUrl +
+    '" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">\uD83E\uDE84 Open Gmail with filter pre-filled</a>' +
+    "</p>" +
+    '<h3 style="margin:28px 0 8px;color:#666;font-size:15px">Or paste manually</h3>' +
+    '<p style="margin:0 0 8px;color:#555;font-size:14px">If the button above doesn\'t work, copy this query first:</p>' +
+    '<pre style="background:#f4f4f4;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:13px;user-select:all">' +
     q +
     "</pre>" +
-    '<p style="margin-top:20px">' +
+    '<p style="margin:8px 0 0;color:#555;font-size:14px">Then <a href="https://mail.google.com/mail/#settings/filters" target="_blank" rel="noopener" style="color:#1a73e8">open filter settings</a> &rarr; <b>Create a new filter</b> &rarr; paste into <b>Has the words</b> &rarr; <b>Create filter</b> &rarr; tick <b>Forward it to</b> <code>' +
+    bot +
+    "</code> &rarr; <b>Create filter</b>.</p>" +
+    '<p style="margin-top:28px">' +
     '<a href="' +
     demo +
-    '" style="display:inline-block;padding:10px 16px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;margin-right:8px">Watch 60-sec demo</a>' +
+    '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px;margin-right:8px">Watch 60-sec demo</a>' +
     '<a href="' +
     guide +
-    '" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px">Setup guide (with screenshots)</a>' +
+    '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px">Setup guide (with screenshots)</a>' +
     "</p>" +
     '<hr style="margin:28px 0;border:0;border-top:1px solid #eee">' +
     '<p style="font-size:13px;color:#666">If a forwarding-confirmation prompt appears in your inbox afterwards, click the link inside &mdash; Gmail requires this once per destination address.</p>' +
