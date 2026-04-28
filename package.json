@@ -3,9 +3,11 @@
   "private": true,
   "scripts": {
     "format": "prettier --write \"**/*.js\"",
-    "format:check": "prettier --check \"**/*.js\""
+    "format:check": "prettier --check \"**/*.js\"",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "prettier": "^3.2.0"
+    "prettier": "^3.2.0",
+    "vitest": "^1.6.0"
   }
 }
