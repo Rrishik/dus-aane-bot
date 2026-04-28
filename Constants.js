@@ -226,6 +226,24 @@ const IGNORE_SUBJECTS = [
   "offers"
 ];
 
+// Narrow subset of IGNORE_SUBJECTS used in the user-facing Gmail filter
+// (the one /setup emails out). Server-side IGNORE_SUBJECTS already drops
+// everything non-transactional, so the Gmail filter only needs to prevent
+// OTP / auth-code mail from being auto-forwarded — security-sensitive, must
+// stay in the user's inbox. Keeping this list short makes the pasted query
+// readable and predictable for the user.
+const FILTER_OTP_SUBJECTS = [
+  "OTP",
+  "MPIN",
+  '"one time password"',
+  '"one-time password"',
+  '"temporary security code"',
+  '"security code"',
+  "verification",
+  '"verification code"',
+  '"login code"'
+];
+
 // Gmail categories to exclude (marketing, notifications, groups).
 // Currently empty — bank transaction mail has historically been mis-categorized
 // as Promotions, so we rely on sender/subject filters instead.

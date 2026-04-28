@@ -1,0 +1,15 @@
+feat: simpler setup email steps and narrower filter query
+
+The setup email now assumes the user is reading it in Gmail desktop and
+opens with a one-click link straight to the filter settings page, dropping
+the redundant 'Open Gmail / Settings / See all settings' preamble. Steps
+shrink from 6 to 4.
+
+The Gmail filter query now uses a narrow OTP-only subject exclusion list
+(FILTER_OTP_SUBJECTS, 9 entries) instead of the full IGNORE_SUBJECTS (30+).
+The bot already drops non-transaction noise server-side; the user-facing
+filter only needs to keep OTPs / auth codes from being auto-forwarded
+(security-sensitive). Side effect: the pasted query is short enough to
+visually scan.
+
+Test for buildGmailFilterQuery updated to match.

@@ -9,16 +9,16 @@ beforeAll(() => {
     ["buildGmailFilterQuery", "buildFilterEmailHtml"],
     {
       TRANSACTION_SENDERS: ["alerts@hdfcbank.net", "alerts@axisbank.com"],
-      IGNORE_SUBJECTS: ["OTP", "statement", '"credit card statement"']
+      FILTER_OTP_SUBJECTS: ["OTP", "MPIN", '"one-time password"']
     }
   ));
 });
 
 describe("buildGmailFilterQuery", () => {
-  it("combines senders with from:() and excludes subjects with -()", () => {
+  it("combines senders with from:() and excludes only OTP-subject keywords", () => {
     var q = buildGmailFilterQuery();
     expect(q).toBe(
-      'from:(alerts@hdfcbank.net OR alerts@axisbank.com) -(subject:OTP OR subject:statement OR subject:"credit card statement")'
+      'from:(alerts@hdfcbank.net OR alerts@axisbank.com) -(subject:OTP OR subject:MPIN OR subject:"one-time password")'
     );
   });
 });

@@ -154,17 +154,18 @@ function findRecentForwardFromEmail(email) {
  * bot inbox. Pure function — extracted so it can be reused by the email and
  * the /setup command without re-deriving.
  *
- * Query shape: `from:(<verified senders>) -(subject:OTP OR subject:statement OR ...)`
- * Two layers of protection:
- *   1. Sender allowlist — only verified transaction-alert addresses match.
- *   2. Subject exclusion — extra belt-and-suspenders for anything that ever
- *      shares a sender address (e.g. a bank switching from alerts to newsletters).
- * Uses `-subject:` (not bare `-`) so body mentions of "OTP" in real alerts
- * don't drop the message.
+ * Query shape: `from:(<verified senders>) -(subject:OTP OR subject:MPIN OR ...)`
+ * The sender allowlist is the primary filter — only verified transaction-alert
+ * addresses match. The subject exclusion (FILTER_OTP_SUBJECTS) is narrower than
+ * the server-side IGNORE_SUBJECTS: it only blocks OTP / auth-code mail from
+ * being auto-forwarded (those must stay in the user's inbox for security).
+ * Other non-transaction noise (statements, marketing, login alerts) is dropped
+ * server-side after the bot receives the mail — keeping the user-pasted query
+ * short and readable.
  */
 function buildGmailFilterQuery() {
   var senders = "from:(" + TRANSACTION_SENDERS.join(" OR ") + ")";
-  var excludes = IGNORE_SUBJECTS.map(function (s) {
+  var excludes = FILTER_OTP_SUBJECTS.map(function (s) {
     return "subject:" + s;
   }).join(" OR ");
   return senders + " -(" + excludes + ")";
@@ -191,9 +192,8 @@ function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl) {
     '<h2 style="margin:0 0 8px">Set up auto-forwarding (~1 min)</h2>' +
     "<p>Skip manual forwarding with one Gmail filter. It only matches verified bank transaction alerts &mdash; no OTPs, statements, or marketing.</p>" +
     '<h3 style="margin:20px 0 8px">Step-by-step</h3>' +
+    '<p style="margin:0 0 12px"><a href="https://mail.google.com/mail/#settings/filters" style="color:#1a73e8">Open Gmail filter settings &rarr;</a></p>' +
     "<ol>" +
-    "<li>Open Gmail on desktop &rarr; <b>Settings (gear)</b> &rarr; <b>See all settings</b>.</li>" +
-    "<li>Go to the <b>Filters and Blocked Addresses</b> tab.</li>" +
     "<li>Click <b>Create a new filter</b>.</li>" +
     "<li>Paste the query below into the <b>Has the words</b> field, then click <b>Create filter</b>.</li>" +
     "<li>Tick <b>Forward it to</b> and select (or add) <code>" +
