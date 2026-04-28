@@ -104,6 +104,9 @@ function handleMessage(update) {
         case "/myinfo":
           handleMyInfoCommand(chatId);
           break;
+        case "/setup":
+          handleSetupCommand(chatId);
+          break;
         case "/help":
           handleHelpCommand(chatId, username);
           break;
@@ -142,6 +145,7 @@ function handleHelpCommand(chatId, username) {
     `   _e.g. /ask how much on food last month?_\n` +
     `• /stats — analytics dashboard\n` +
     `• /recent — recent transactions _(e.g. /recent 10)_\n` +
+    `• /setup — email auto-forward setup instructions\n` +
     `• /myinfo — your account\n` +
     `• /help — this message`;
 

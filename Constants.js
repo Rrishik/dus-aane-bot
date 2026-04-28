@@ -10,6 +10,12 @@ const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook
 // Displayed in /start and /register onboarding copy.
 const BOT_INBOX_EMAIL = "dusaanebot.inbox@gmail.com";
 
+// Public-facing demo + setup-guide assets (hosted on Google Drive). Linked
+// from the onboarding email and Telegram welcome flow. Replace with the
+// actual share URLs after recording / authoring.
+const DEMO_VIDEO_URL = "https://drive.google.com/file/d/REPLACE_WITH_VIDEO_FILE_ID/view";
+const SETUP_GUIDE_URL = "https://drive.google.com/file/d/REPLACE_WITH_GUIDE_FILE_ID/view";
+
 // ADMIN_SHEET_ID and ADMIN_CHAT_ID are defined in AConfig.js (generated from
 // GitHub secrets during deploy). They identify tenant 0's spreadsheet + chat,
 // which also hosts the shared Tenants / MerchantResolution / CategoryOverrides tabs.
