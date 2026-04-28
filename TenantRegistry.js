@@ -3,15 +3,20 @@
 // i.e., tenant 0's sheet). One row per tenant.
 //
 // Schema (stable column order):
-//   1: chat_id        (primary key; Telegram chat/group id as string)
-//   2: name           (display label, optional)
-//   3: emails         (comma-separated forwarder gmails)
-//   4: sheet_id       (where this tenant's transactions are written)
-//   5: status         ("pending" | "active" | "disabled")
-//   6: created_at     (ISO timestamp)
-//   7: notes          (free-form)
+//   1: chat_id           (primary key; Telegram chat/group id as string)
+//   2: name              (display label, optional)
+//   3: emails            (comma-separated forwarder gmails)
+//   4: sheet_id          (where this tenant's transactions are written)
+//   5: status            ("pending" | "active" | "disabled" | "dormant")
+//   6: created_at        (ISO timestamp)
+//   7: notes             (free-form)
+//   8: last_forward_at   (ISO; updated when a fresh forwarded email is processed)
+//   9: last_nag_at       (ISO; updated when a dormant nudge is sent)
+//  10: nag_count         (integer; count of nudges sent in current dormant run)
 //
 // A row with status=pending has no sheet_id yet; it's created on first forward.
+// dormant = nag-cap reached without a fresh forward; auto-flips back to active
+// on the next forward (see reactivateIfDormant).
 //
 // Why the admin sheet hosts the registry: keeps everything in one admin place,
 // and we already have access there. The Tenants tab is separate from data.
@@ -24,9 +29,18 @@ var TENANT_COLS = {
   SHEET_ID: 4,
   STATUS: 5,
   CREATED_AT: 6,
-  NOTES: 7
+  NOTES: 7,
+  LAST_FORWARD_AT: 8,
+  LAST_NAG_AT: 9,
+  NAG_COUNT: 10
 };
-var TENANT_STATUS = { PENDING: "pending", ACTIVE: "active", DISABLED: "disabled" };
+var TENANT_COL_COUNT = 10;
+var TENANT_STATUS = {
+  PENDING: "pending",
+  ACTIVE: "active",
+  DISABLED: "disabled",
+  DORMANT: "dormant"
+};
 
 // chat_id values can arrive as number or string depending on source (Telegram
 // payloads, sheet cells, code constants). Always compare via this helper.
@@ -48,7 +62,18 @@ function _getOrCreateTenantsTab() {
   var tab = ss.getSheetByName(TENANTS_TAB);
   if (!tab) {
     tab = ss.insertSheet(TENANTS_TAB);
-    tab.appendRow(["chat_id", "name", "emails", "sheet_id", "status", "created_at", "notes"]);
+    tab.appendRow([
+      "chat_id",
+      "name",
+      "emails",
+      "sheet_id",
+      "status",
+      "created_at",
+      "notes",
+      "last_forward_at",
+      "last_nag_at",
+      "nag_count"
+    ]);
   }
   return tab;
 }
@@ -68,7 +93,10 @@ function _rowToTenant(row) {
     sheet_id: String(row[TENANT_COLS.SHEET_ID - 1] || ""),
     status: String(row[TENANT_COLS.STATUS - 1] || ""),
     created_at: row[TENANT_COLS.CREATED_AT - 1] || "",
-    notes: String(row[TENANT_COLS.NOTES - 1] || "")
+    notes: String(row[TENANT_COLS.NOTES - 1] || ""),
+    last_forward_at: row[TENANT_COLS.LAST_FORWARD_AT - 1] || "",
+    last_nag_at: row[TENANT_COLS.LAST_NAG_AT - 1] || "",
+    nag_count: parseInt(row[TENANT_COLS.NAG_COUNT - 1], 10) || 0
   };
 }
 
@@ -80,7 +108,7 @@ function loadTenants() {
     _tenantCache = [];
     return _tenantCache;
   }
-  var data = tab.getRange(2, 1, last - 1, 7).getValues();
+  var data = tab.getRange(2, 1, last - 1, TENANT_COL_COUNT).getValues();
   _tenantCache = data.map(_rowToTenant);
   return _tenantCache;
 }
@@ -166,6 +194,36 @@ function activateTenant(chatId, sheetId) {
   var tab = _getOrCreateTenantsTab();
   tab.getRange(rowNum, TENANT_COLS.SHEET_ID).setValue(sheetId);
   tab.getRange(rowNum, TENANT_COLS.STATUS).setValue(TENANT_STATUS.ACTIVE);
+  invalidateTenantCache();
+  return true;
+}
+
+// Stamp last_forward_at on a tenant. Called from extractTransactions after a
+// successful live forward (not from backfill — backfill is operator action on
+// historical mail, not fresh activity). Idempotent: safe to call multiple
+// times in the same run; each call advances the timestamp to `now`.
+function stampLastForward(chatId, now) {
+  var rowNum = _findRowIndexByChatId(chatId);
+  if (rowNum === -1) return false;
+  var tab = _getOrCreateTenantsTab();
+  var iso = (now || new Date()).toISOString();
+  tab.getRange(rowNum, TENANT_COLS.LAST_FORWARD_AT).setValue(iso);
+  invalidateTenantCache();
+  return true;
+}
+
+// If the tenant is currently DORMANT, flip them back to ACTIVE and clear the
+// nag counters. Called alongside stampLastForward — fresh activity should
+// always undo a prior dormant verdict. Returns true iff a transition happened.
+function reactivateIfDormant(chatId) {
+  var rowNum = _findRowIndexByChatId(chatId);
+  if (rowNum === -1) return false;
+  var tab = _getOrCreateTenantsTab();
+  var status = String(tab.getRange(rowNum, TENANT_COLS.STATUS).getValue() || "");
+  if (status !== TENANT_STATUS.DORMANT) return false;
+  tab.getRange(rowNum, TENANT_COLS.STATUS).setValue(TENANT_STATUS.ACTIVE);
+  tab.getRange(rowNum, TENANT_COLS.LAST_NAG_AT).setValue("");
+  tab.getRange(rowNum, TENANT_COLS.NAG_COUNT).setValue(0);
   invalidateTenantCache();
   return true;
 }
