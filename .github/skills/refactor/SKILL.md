@@ -118,14 +118,14 @@ Remove legacy aliases, unused branches, and `// TODO`s as part of the refactor. 
 - **TypeScript-style type passes.** No build step. JSDoc on hot helpers is fine; full structural typing isn't.
 - **Splitting a file because it's "long".** Aim for ~400-500 line files; only split when there's a clean domain boundary.
 - **Speculative `try/catch`.** Catch only with a real recovery path or a specific known failure to swallow.
-- **Renaming files mid-refactor.** Combines badly with `clasp push`'s no-delete behavior. Do renames in their own commit and follow up with manual editor cleanup.
+- **Renaming files mid-refactor.** If CI uses plain `clasp push` (no `--force`), renames leave orphan files in the editor. Do renames in their own commit so they're easy to revert, and verify the deploy mode before assuming a manual cleanup step is needed.
 - **Dependency injection / service locators.** A flat global namespace is itself the registry; faking modules makes the code harder to read.
 
 ## Runtime constraints (don't break these)
 
 1. **`const`/`let` don't hoist across files.** All `.js`/`.gs` files share one global scope, but they're concatenated in `.clasp.json` → `filePushOrder` order (falling back to alphabetical/manifest order). A `const` defined in file B is in the **TDZ** for top-level code in file A if A loads first. Config/constants files must load before consumers. Don't reshuffle load order during a refactor.
 2. **Single global namespace.** Function/const names must be unique repo-wide. Renaming a helper means grepping the whole project. A new global helper with the same name as a local `var` will shadow it (or trip "redeclaration" at the top level).
-3. **`clasp push` only adds/updates.** Renaming a file in the repo leaves the old copy in the script editor — manually delete the orphan or you'll have two copies and the wrong one may win.
+3. **`clasp push` behavior depends on flags.** Plain `clasp push` only adds/updates files; renames leave the old copy as an orphan in the editor. `clasp push --force` (commonly used in CI) syncs the full file set, so it deletes remote files no longer in the local repo too. Know which mode the project uses before assuming you need a manual cleanup step after a rename.
 4. **Quota-billed APIs.** `SpreadsheetApp.openById`, `DriveApp.getFileById`, `UrlFetchApp.fetch`, `GmailApp.search` cost daily quota. If the codebase has lazy-cached accessors, route through them — don't re-resolve per call.
 5. **Legacy Markdown parse modes.** If the codebase uses `parse_mode: "Markdown"` (not MarkdownV2), don't escape `.`/`-`/`!` and don't switch parse modes during a refactor — escape rules differ.
 6. **Per-execution context globals.** When a global holds current user / tenant / locale for one execution, refactored helpers must keep reading through the existing accessor — never bypass to read raw config from inside a user/tenant request, or you'll cross-leak data.
