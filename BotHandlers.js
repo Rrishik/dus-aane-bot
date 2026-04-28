@@ -10,6 +10,71 @@ function requireRowForCallback(callbackQueryId, emailMessageId) {
   return rowNumber;
 }
 
+// Show the category picker for a transaction row. Uses the right list (debit vs
+// credit) for the row's transaction type. `displayName` is shown in the prompt.
+function promptCategoryPicker(chatId, rowNumber, emailMessageId, displayName) {
+  var sheet = getSpreadsheet().getSheets()[0];
+  var txnType = sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue();
+  sendTelegramMessage(chatId, "📂 *Pick a category for " + escapeMarkdown(displayName) + ":*", {
+    parse_mode: "Markdown",
+    reply_markup: buildCategoryKeyboard(emailMessageId, getCategoryListForType(txnType), "mapcat")
+  });
+}
+
+// Single entry point for the typed-merchant-name reply, used by both the empty-
+// merchant Set Merchant flow and the new-merchant Edit Merchant flow. Returns
+// true if the message was consumed.
+//
+// If the typed name already has a category in the resolution table, auto-apply
+// it (no picker). Otherwise stash the name keyed by emailMessageId and show the
+// picker; the `mapcat` callback completes the mapping when the user picks.
+function handleMerchantInput(chatId, userId, messageText) {
+  var props = PropertiesService.getScriptProperties();
+  var emailMessageId = props.getProperty("pending_merchant_input_" + userId);
+  if (!emailMessageId) return false;
+  props.deleteProperty("pending_merchant_input_" + userId);
+
+  var typedName = (messageText || "").trim();
+  if (!typedName) {
+    sendTelegramMessage(chatId, "❌ Empty name, edit cancelled");
+    return true;
+  }
+  var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
+  if (rowNumber < 0) {
+    sendTelegramMessage(chatId, "❌ Transaction not found");
+    return true;
+  }
+
+  addNewMerchantIfNeeded(typedName);
+  var resolutions = getMerchantResolutions();
+  var resolved = lookupMerchantCategory(typedName, resolutions);
+
+  // Auto-apply shortcut: typed name already maps to a category — skip the picker.
+  if (resolved && resolved.category) {
+    var sheet = getSpreadsheet().getSheets()[0];
+    var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+    var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
+    if (rawMerchant && rawMerchant.toLowerCase() !== typedName.toLowerCase()) {
+      setMerchantResolution(rawMerchant, typedName);
+    }
+    if (rawMerchant !== typedName) {
+      updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, typedName, rawMerchant);
+    }
+    updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, rowData[CATEGORY_COLUMN - 1]);
+    sendTelegramMessage(
+      chatId,
+      "✅ *Merchant:* " + escapeMarkdown(typedName) + " *→* " + escapeMarkdown(resolved.category),
+      { parse_mode: "Markdown" }
+    );
+    return true;
+  }
+
+  // No known category: stash the typed name for `mapcat` to consume, then show picker.
+  props.setProperty("editmerch_newname_" + emailMessageId, typedName);
+  promptCategoryPicker(chatId, rowNumber, emailMessageId, typedName);
+  return true;
+}
+
 // Method to handle messages sent to the Telegram bot.
 function handleMessage(update) {
   if (update.message) {
@@ -62,60 +127,9 @@ function handleMessage(update) {
     else if (messageText === " Recent Transactions") {
       showRecentTransactions(chatId, "/recent");
     } else {
-      // Check for pending merchant input
+      // Pending merchant-name reply (from Set Merchant or Edit Merchant flow).
       var userId = update.message.from.id;
-      var props = PropertiesService.getScriptProperties();
-      var pendingEditMsgId = props.getProperty("pending_editmerch_" + userId);
-      if (pendingEditMsgId) {
-        // User is editing the merchant name as part of the new-merchant flow.
-        // Capture the typed name, then prompt them to pick a category for the mapping.
-        props.deleteProperty("pending_editmerch_" + userId);
-        var newName = messageText.trim();
-        if (!newName) {
-          sendTelegramMessage(chatId, "❌ Empty name, edit cancelled");
-          return;
-        }
-        var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, pendingEditMsgId);
-        if (rowNumber < 0) {
-          sendTelegramMessage(chatId, "❌ Transaction not found");
-          return;
-        }
-        // Stash the new name keyed by the email message id so whoever picks the category completes the mapping.
-        props.setProperty("editmerch_newname_" + pendingEditMsgId, newName);
-
-        var sheet = getSpreadsheet().getSheets()[0];
-        var txnType = sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue();
-        sendTelegramMessage(chatId, "📂 *Pick a category for " + escapeMarkdown(newName) + ":*", {
-          parse_mode: "Markdown",
-          reply_markup: buildCategoryKeyboard(pendingEditMsgId, getCategoryListForType(txnType), "mapcat")
-        });
-        return;
-      }
-
-      var pendingEmailId = props.getProperty("pending_merchant_" + userId);
-      if (pendingEmailId) {
-        // Clear pending state
-        props.deleteProperty("pending_merchant_" + userId);
-        var merchantName = messageText.trim();
-        var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, pendingEmailId);
-        if (rowNumber < 0) {
-          sendTelegramMessage(chatId, "❌ Transaction not found");
-          return;
-        }
-        updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, merchantName, "");
-        // Add to MerchantResolution and auto-populate category if available
-        addNewMerchantIfNeeded(merchantName);
-        var resolutions = getMerchantResolutions();
-        var resolved = lookupMerchantCategory(merchantName, resolutions);
-        var confirmMsg = "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*";
-        if (resolved && resolved.category) {
-          updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, "");
-          confirmMsg += " \\(" + escapeMarkdown(resolved.category) + "\\)";
-        }
-        sendTelegramMessage(chatId, confirmMsg, {
-          parse_mode: "Markdown"
-        });
-      }
+      if (handleMerchantInput(chatId, userId, messageText)) return;
     }
   }
 }
@@ -347,10 +361,11 @@ function handleCallbackQuery(update) {
       // Store pending state per user per user
       var userId = update.callback_query.from.id;
       var props = PropertiesService.getScriptProperties();
-      props.setProperty("pending_merchant_" + userId, emailMessageId);
+      props.setProperty("pending_merchant_input_" + userId, emailMessageId);
       answerCallbackQuery(callbackQueryId, "🏪 Type the merchant name", false);
-      sendTelegramMessage(chatId, "🏪 *Type the merchant name for this transaction:*", {
-        parse_mode: "Markdown"
+      sendTelegramMessage(chatId, "🏪 *Type the merchant name (category picker follows):*", {
+        parse_mode: "Markdown",
+        reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. Flipkart" }
       });
       return;
     }
@@ -415,7 +430,7 @@ function handleCallbackQuery(update) {
       if (rowNumber < 0) return;
       var userIdEdit = update.callback_query.from.id;
       var propsEdit = PropertiesService.getScriptProperties();
-      propsEdit.setProperty("pending_editmerch_" + userIdEdit, emailMessageId);
+      propsEdit.setProperty("pending_merchant_input_" + userIdEdit, emailMessageId);
       answerCallbackQuery(callbackQueryId, "🏪 Type the merchant name", false);
       sendTelegramMessage(chatId, "🏪 *Type the new merchant name (category picker follows):*", {
         parse_mode: "Markdown",
@@ -447,22 +462,25 @@ function handleCallbackQuery(update) {
       }
       var newCategory = catList[categoryIndex];
 
-      // Pick up the typed name from the Edit-Merchant flow (if any); else keep existing.
+      // Pick up the typed name from the merchant-input flow (if any); else keep existing.
       var propsMap = PropertiesService.getScriptProperties();
       var pendingNewName = propsMap.getProperty("editmerch_newname_" + emailMessageId);
       var resolvedName = pendingNewName ? pendingNewName : rawMerchant;
       if (pendingNewName) propsMap.deleteProperty("editmerch_newname_" + emailMessageId);
 
-      if (!rawMerchant) {
-        answerCallbackQuery(callbackQueryId, "❌ No merchant on this row", false);
+      if (!resolvedName) {
+        answerCallbackQuery(callbackQueryId, "❌ No merchant name to save", false);
         return;
       }
 
-      // Save mapping in MerchantResolution (raw pattern → resolved name)
-      var mapResult = setMerchantResolution(rawMerchant, resolvedName);
-      if (!mapResult.success) {
-        answerCallbackQuery(callbackQueryId, "❌ " + mapResult.message, false);
-        return;
+      // Save resolution mapping (raw pattern → resolved name) only when the row
+      // already had a raw merchant that differs from the typed name.
+      if (rawMerchant && rawMerchant.toLowerCase() !== resolvedName.toLowerCase()) {
+        var mapResult = setMerchantResolution(rawMerchant, resolvedName);
+        if (!mapResult.success) {
+          answerCallbackQuery(callbackQueryId, "❌ " + mapResult.message, false);
+          return;
+        }
       }
       // Save merchant → category in CategoryOverrides
       setCategoryOverride(resolvedName, newCategory);
