@@ -47,6 +47,12 @@ function getSpreadsheet() {
   return _cachedSpreadsheet;
 }
 
+// Pick the right category list for a transaction based on its type cell value.
+// Accepts the raw value from column TRANSACTION_TYPE_COLUMN (e.g. "Debit" / "Credit").
+function getCategoryListForType(txnType) {
+  return txnType && txnType.toString().toLowerCase() === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
+}
+
 // Find the row number where a column has a specific value. Returns -1 if not found.
 function findRowByColumnValue(column_number, value) {
   var sheet = getSpreadsheet().getSheets()[0];

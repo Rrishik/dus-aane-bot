@@ -1,3 +1,15 @@
+// Look up the sheet row for a callback's email message id. If not found, answer
+// the callback with the standard "not found" toast and return -1 so the caller
+// can early-out. Centralizes the most-duplicated guard in the callback dispatch.
+function requireRowForCallback(callbackQueryId, emailMessageId) {
+  var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
+  if (rowNumber < 0) {
+    answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
+    return -1;
+  }
+  return rowNumber;
+}
+
 // Method to handle messages sent to the Telegram bot.
 function handleMessage(update) {
   if (update.message) {
@@ -72,11 +84,10 @@ function handleMessage(update) {
         props.setProperty("editmerch_newname_" + pendingEditMsgId, newName);
 
         var sheet = getSpreadsheet().getSheets()[0];
-        var txnType = sheet.getRange(rowNumber, 6).getValue();
-        var isCredit = txnType && txnType.toString().toLowerCase() === "credit";
+        var txnType = sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue();
         sendTelegramMessage(chatId, "📂 *Pick a category for " + escapeMarkdown(newName) + ":*", {
           parse_mode: "Markdown",
-          reply_markup: buildCategoryKeyboard(pendingEditMsgId, isCredit ? CREDIT_CATEGORIES : CATEGORIES, "mapcat")
+          reply_markup: buildCategoryKeyboard(pendingEditMsgId, getCategoryListForType(txnType), "mapcat")
         });
         return;
       }
@@ -91,7 +102,7 @@ function handleMessage(update) {
           sendTelegramMessage(chatId, "❌ Transaction not found");
           return;
         }
-        updateGoogleSheetCellWithFeedback(rowNumber, 3, merchantName, "");
+        updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, merchantName, "");
         // Add to MerchantResolution and auto-populate category if available
         addNewMerchantIfNeeded(merchantName);
         var resolutions = getMerchantResolutions();
@@ -135,26 +146,44 @@ function handleHelpCommand(chatId, username) {
   });
 }
 
-// Method to handle the /backfill command
-function handleBackfillCommand(chatId, messageText) {
-  var parts = messageText.split(" ");
+// Backfill duration unit alias map (module-scope so it isn't rebuilt per call,
+// and so tests can inspect it).
+var BACKFILL_UNIT_MAP = {
+  m: "minute",
+  min: "minute",
+  mins: "minute",
+  minute: "minute",
+  minutes: "minute",
+  h: "hour",
+  hour: "hour",
+  hours: "hour",
+  d: "day",
+  day: "day",
+  days: "day",
+  w: "week",
+  week: "week",
+  weeks: "week",
+  month: "month",
+  months: "month"
+};
 
-  if (parts.length < 2) {
-    sendTelegramMessage(
-      chatId,
-      "❌ *Invalid format!*\n\n" +
-        "Use: `/backfill 10m` or `/backfill 3 days` or `/backfill 2 weeks`\n" +
-        "Or: `/backfill YYYY-MM-DD YYYY-MM-DD`"
-    );
-    return;
-  }
+var BACKFILL_USAGE_MSG =
+  "❌ *Invalid format!*\n\n" +
+  "Use: `/backfill 10m` or `/backfill 3 days` or `/backfill 2 weeks`\n" +
+  "Or: `/backfill YYYY-MM-DD YYYY-MM-DD`";
 
-  var startDate, endDate;
+// Pure parser for /backfill arguments. Pulled out for unit-testability.
+//   Input:  messageText (the full command), optional `now` Date for tests.
+//   Output: { ok:true, startDate, endDate } | { ok:false, error: 'usage' | 'unknown_unit' | 'invalid_dates' | 'invalid_range' }
+//
+// Supported forms:
+//   /backfill 10m | 2h | 3d | 1w           (compact)
+//   /backfill 10 min | 3 days | 2 weeks    (spaced)
+//   /backfill YYYY-MM-DD YYYY-MM-DD        (absolute range)
+function parseBackfillDuration(messageText, now) {
+  var parts = (messageText || "").split(" ");
+  if (parts.length < 2) return { ok: false, error: "usage" };
 
-  // Check for relative duration. Supports two forms:
-  //   /backfill <N> <unit>   e.g. "/backfill 10 min"
-  //   /backfill <N><unit>    e.g. "/backfill 10m", "/backfill 2h", "/backfill 3d"
-  // Units: min(ute[s]) | m, hour[s] | h, day[s] | d, week[s] | w, month[s]
   var amount, unit;
   var compactMatch =
     parts[1] && parts[1].match(/^(\d+)(m|h|d|w|min|mins|minute|minutes|hour|hours|day|days|week|weeks|month|months)$/i);
@@ -168,72 +197,51 @@ function handleBackfillCommand(chatId, messageText) {
     }
   }
 
+  var startDate, endDate;
   if (unit) {
-    // Normalize aliases and plurals
-    var unitMap = {
-      m: "minute",
-      min: "minute",
-      mins: "minute",
-      minute: "minute",
-      minutes: "minute",
-      h: "hour",
-      hour: "hour",
-      hours: "hour",
-      d: "day",
-      day: "day",
-      days: "day",
-      w: "week",
-      week: "week",
-      weeks: "week",
-      month: "month",
-      months: "month"
-    };
-    var normalized = unitMap[unit];
-    if (!normalized) {
-      sendTelegramMessage(chatId, "❌ *Unknown unit!* Use `min`, `hour`, `day`, `week`, or `month`.");
-      return;
-    }
-    endDate = new Date();
-    startDate = new Date();
-    if (normalized === "minute") {
-      startDate.setMinutes(startDate.getMinutes() - amount);
-    } else if (normalized === "hour") {
-      startDate.setHours(startDate.getHours() - amount);
-    } else if (normalized === "day") {
-      startDate.setDate(startDate.getDate() - amount);
-    } else if (normalized === "week") {
-      startDate.setDate(startDate.getDate() - amount * 7);
-    } else if (normalized === "month") {
-      startDate.setMonth(startDate.getMonth() - amount);
-    }
+    var normalized = BACKFILL_UNIT_MAP[unit];
+    if (!normalized) return { ok: false, error: "unknown_unit" };
+    var nowMs = now ? now.getTime() : Date.now();
+    endDate = new Date(nowMs);
+    startDate = new Date(nowMs);
+    if (normalized === "minute") startDate.setMinutes(startDate.getMinutes() - amount);
+    else if (normalized === "hour") startDate.setHours(startDate.getHours() - amount);
+    else if (normalized === "day") startDate.setDate(startDate.getDate() - amount);
+    else if (normalized === "week") startDate.setDate(startDate.getDate() - amount * 7);
+    else if (normalized === "month") startDate.setMonth(startDate.getMonth() - amount);
   } else if (parts.length >= 3) {
-    // Absolute date range: /backfill YYYY-MM-DD YYYY-MM-DD
     startDate = new Date(parts[1]);
     endDate = new Date(parts[2]);
   } else {
-    sendTelegramMessage(
-      chatId,
-      "❌ *Invalid format!*\n\n" +
-        "Use: `/backfill 10m` or `/backfill 3 days` or `/backfill 2 weeks`\n" +
-        "Or: `/backfill YYYY-MM-DD YYYY-MM-DD`"
-    );
-    return;
+    return { ok: false, error: "usage" };
   }
 
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-    sendTelegramMessage(
-      chatId,
-      "❌ *Invalid dates!* Use format YYYY-MM-DD\n\nExample: `/backfill 2026-03-01 2026-03-31`"
-    );
+    return { ok: false, error: "invalid_dates" };
+  }
+  if (startDate > endDate) return { ok: false, error: "invalid_range" };
+  return { ok: true, startDate: startDate, endDate: endDate };
+}
+
+// Method to handle the /backfill command
+function handleBackfillCommand(chatId, messageText) {
+  var parsed = parseBackfillDuration(messageText);
+  if (!parsed.ok) {
+    if (parsed.error === "unknown_unit") {
+      sendTelegramMessage(chatId, "❌ *Unknown unit!* Use `min`, `hour`, `day`, `week`, or `month`.");
+    } else if (parsed.error === "invalid_dates") {
+      sendTelegramMessage(
+        chatId,
+        "❌ *Invalid dates!* Use format YYYY-MM-DD\n\nExample: `/backfill 2026-03-01 2026-03-31`"
+      );
+    } else if (parsed.error === "invalid_range") {
+      sendTelegramMessage(chatId, "❌ *Start date must be before end date.*");
+    } else {
+      sendTelegramMessage(chatId, BACKFILL_USAGE_MSG);
+    }
     return;
   }
-
-  if (startDate > endDate) {
-    sendTelegramMessage(chatId, "❌ *Start date must be before end date.*");
-    return;
-  }
-
-  startChunkedBackfill(startDate, endDate);
+  startChunkedBackfill(parsed.startDate, parsed.endDate);
 }
 
 // Method to handle the callback queries sent from the Telegram message reply buttons.
@@ -277,16 +285,15 @@ function handleCallbackQuery(update) {
     // Handle "Edit Category" — show category picker
     if (action === "editcat") {
       var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, callbackPayload);
-      var isCredit = false;
+      var catList = CATEGORIES;
       if (rowNumber > 0) {
         var sheet = getSpreadsheet().getSheets()[0];
-        var txnType = sheet.getRange(rowNumber, 6).getValue(); // Column F = Transaction Type
-        isCredit = txnType && txnType.toString().toLowerCase() === "credit";
+        catList = getCategoryListForType(sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue());
       }
       answerCallbackQuery(callbackQueryId, "📂 Pick a category", false);
       sendTelegramMessage(chatId, "📂 *Select a category:*", {
         parse_mode: "Markdown",
-        reply_markup: buildCategoryKeyboard(callbackPayload, isCredit ? CREDIT_CATEGORIES : CATEGORIES)
+        reply_markup: buildCategoryKeyboard(callbackPayload, catList)
       });
       return;
     }
@@ -302,16 +309,12 @@ function handleCallbackQuery(update) {
       var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
 
       // Look up transaction type to determine which category list to use
-      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
-      if (rowNumber < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
-        return;
-      }
+      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      if (rowNumber < 0) return;
 
       var sheet = getSpreadsheet().getSheets()[0];
       var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
-      var txnType = rowData[5]; // Column F = Transaction Type
-      var catList = txnType && txnType.toString().toLowerCase() === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
+      var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
 
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
         answerCallbackQuery(callbackQueryId, "❌ Invalid category", false);
@@ -320,7 +323,6 @@ function handleCallbackQuery(update) {
 
       var newCategory = catList[categoryIndex];
       var currentCategory = rowData[CATEGORY_COLUMN - 1];
-      var merchant = rowData[2]; // Column C = Merchant
       var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, newCategory, currentCategory);
 
       if (!updateResult.success) {
@@ -340,11 +342,8 @@ function handleCallbackQuery(update) {
     // Handle "Set Merchant" — ask user to type merchant name
     if (action === "setmerch") {
       var emailMessageId = callbackPayload;
-      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
-      if (rowNumber < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
-        return;
-      }
+      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      if (rowNumber < 0) return;
       // Store pending state per user per user
       var userId = update.callback_query.from.id;
       var props = PropertiesService.getScriptProperties();
@@ -359,11 +358,8 @@ function handleCallbackQuery(update) {
     // Handle delete transaction: del_{messageId}
     if (action === "del") {
       var emailMessageId = callbackPayload;
-      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
-      if (rowNumber < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
-        return;
-      }
+      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      if (rowNumber < 0) return;
 
       deleteSheetRow(rowNumber);
 
@@ -378,14 +374,11 @@ function handleCallbackQuery(update) {
     // Handle "Save Mapping" — confirm the LLM-suggested merchant + category mapping
     if (action === "savemerch") {
       var emailMessageId = callbackPayload;
-      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
-      if (rowNumber < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
-        return;
-      }
+      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      if (rowNumber < 0) return;
       var sheet = getSpreadsheet().getSheets()[0];
       var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
-      var merchant = (rowData[2] || "").toString().trim(); // Column C = Merchant
+      var merchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
       var category = (rowData[CATEGORY_COLUMN - 1] || "").toString().trim();
       if (!merchant) {
         answerCallbackQuery(callbackQueryId, "❌ No merchant to save", false);
@@ -418,11 +411,8 @@ function handleCallbackQuery(update) {
     // Handle "Edit Merchant" — prompt for a new merchant name; category picker follows after reply
     if (action === "editmerchname") {
       var emailMessageId = callbackPayload;
-      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
-      if (rowNumber < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
-        return;
-      }
+      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      if (rowNumber < 0) return;
       var userIdEdit = update.callback_query.from.id;
       var propsEdit = PropertiesService.getScriptProperties();
       propsEdit.setProperty("pending_editmerch_" + userIdEdit, emailMessageId);
@@ -445,16 +435,12 @@ function handleCallbackQuery(update) {
       }
       var emailMessageId = callbackPayload.substring(0, lastUnderscore);
       var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
-      var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
-      if (rowNumber < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
-        return;
-      }
+      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      if (rowNumber < 0) return;
       var sheet = getSpreadsheet().getSheets()[0];
       var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
-      var rawMerchant = (rowData[2] || "").toString().trim(); // current value in col C; for new-merchant flow this == the original raw pattern
-      var txnType = rowData[5];
-      var catList = txnType && txnType.toString().toLowerCase() === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
+      var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim(); // current value in col C; for new-merchant flow this == the original raw pattern
+      var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
         answerCallbackQuery(callbackQueryId, "❌ Invalid category", false);
         return;
@@ -483,7 +469,7 @@ function handleCallbackQuery(update) {
 
       // Update this transaction's row to reflect the resolved name + chosen category
       if (resolvedName !== rawMerchant) {
-        updateGoogleSheetCellWithFeedback(rowNumber, 3, resolvedName, rawMerchant);
+        updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, resolvedName, rawMerchant);
       }
       updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, newCategory, rowData[CATEGORY_COLUMN - 1]);
 
@@ -505,9 +491,8 @@ function handleCallbackQuery(update) {
     }
 
     // Look up the row by message ID
-    var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
+    var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
     if (rowNumber < 0) {
-      answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
       sendTelegramMessage(chatId, "❌ *Error:* Could not find the transaction in the sheet.");
       return;
     }
@@ -598,7 +583,7 @@ function showRecentTransactions(chatId, messageText) {
     // Filter by user if specified
     if (userFilter) {
       data = data.filter(function (row) {
-        var user = (row[6] || "").toString().toLowerCase();
+        var user = (row[USER_COLUMN - 1] || "").toString().toLowerCase();
         return user.indexOf(userFilter) !== -1;
       });
     }
@@ -616,16 +601,16 @@ function showRecentTransactions(chatId, messageText) {
     var message = header + "\n\n";
 
     recentTransactions.forEach(function (row, index) {
-      var rawDate = row[0] || row[1];
+      var rawDate = row[EMAIL_DATE_COLUMN - 1] || row[TRANSACTION_DATE_COLUMN - 1];
       var date =
         rawDate instanceof Date
           ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
           : rawDate || "Unknown Date";
-      var merchant = row[2] || "Unknown Merchant";
-      var amount = parseFloat(row[3]) || 0;
-      var type = row[5] || "Unknown";
-      var category = row[4] || "Uncategorized";
-      var currency = row[9] || "INR";
+      var merchant = row[MERCHANT_COLUMN - 1] || "Unknown Merchant";
+      var amount = parseFloat(row[AMOUNT_COLUMN - 1]) || 0;
+      var type = row[TRANSACTION_TYPE_COLUMN - 1] || "Unknown";
+      var category = row[CATEGORY_COLUMN - 1] || "Uncategorized";
+      var currency = row[CURRENCY_COLUMN - 1] || "INR";
 
       var emoji = type === "Debit" ? "💸" : "💰";
       message += `${emoji} *${date}*\n`;
