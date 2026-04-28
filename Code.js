@@ -282,6 +282,48 @@ function continueBackfill() {
   }
 }
 
+// ─── Weekly Summary ──────────────────────────────────────────────────
+//
+// Time-based trigger handler. Runs once per week (Friday morning) and walks
+// every active tenant sequentially, sending a digest of the prior 7 days
+// (rolling, ending yesterday). Skips tenants with no transactions in that
+// window. One trigger drives all tenants — install manually from the Apps
+// Script console (Triggers panel → Add Trigger → function:
+// sendWeeklySummaries, event: time-driven, week timer, Friday, 8–9am).
+function sendWeeklySummaries() {
+  var range = weekRangeFor(new Date());
+  var tenants = loadTenants().filter(function (t) {
+    return t.status === TENANT_STATUS.ACTIVE && t.sheet_id;
+  });
+
+  var sentCount = 0;
+  var skipCount = 0;
+  var failCount = 0;
+
+  tenants.forEach(function (t) {
+    try {
+      setCurrentTenant(t);
+      var data = getWeeklyAnalytics(range.start, range.end);
+      if (!data) {
+        skipCount++;
+        return;
+      }
+      var msg = formatWeeklyMessage(range, data);
+      sendTelegramMessage(t.chat_id, msg, { parse_mode: "Markdown" });
+      sentCount++;
+    } catch (e) {
+      failCount++;
+      console.error("[sendWeeklySummaries] tenant " + t.chat_id + ": " + e.message);
+    } finally {
+      setCurrentTenant(null);
+    }
+  });
+
+  console.log(
+    "[sendWeeklySummaries] sent=" + sentCount + " skipped=" + skipCount + " failed=" + failCount
+  );
+}
+
 // Human-readable duration formatter: 90000 → "1m 30s", 3660000 → "1h 1m", 90061000 → "1d 1h".
 function formatDurationMs(ms) {
   if (!ms || ms < 0) return "0s";
