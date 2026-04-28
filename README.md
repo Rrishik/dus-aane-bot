@@ -219,6 +219,7 @@ The LLM chains up to 3 tool calls per query.
 ```
 ├── Code.js                 # Webhook endpoint, async dispatch, time-based triggers
 ├── Backfill.js             # /backfill parser, command handler, chunked orchestration
+├── Nudge.js                # Dormant-tenant nudge: shouldNudge + weekly trigger handler
 ├── Constants.js            # Categories, column mappings, bank sender allowlists, Gmail query
 ├── AIProviders.js          # Azure OpenAI tool-calling client
 ├── TransactionProcessor.js # Email extraction, forwarder-email parsing, merchant resolution, saving
