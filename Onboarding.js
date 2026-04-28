@@ -150,7 +150,9 @@ function findRecentForwardFromEmail(email) {
 }
 
 /**
- * Sends the Gmail filter query + setup steps. Used after activation.
+ * Build the Gmail filter query that auto-forwards transaction alerts to the
+ * bot inbox. Pure function — extracted so it can be reused by the email and
+ * the /setup command without re-deriving.
  *
  * Query shape: `from:(<verified senders>) -(subject:OTP OR subject:statement OR ...)`
  * Two layers of protection:
@@ -160,21 +162,107 @@ function findRecentForwardFromEmail(email) {
  * Uses `-subject:` (not bare `-`) so body mentions of "OTP" in real alerts
  * don't drop the message.
  */
-function sendFilterInstructions(chatId) {
+function buildGmailFilterQuery() {
   var senders = "from:(" + TRANSACTION_SENDERS.join(" OR ") + ")";
   var excludes = IGNORE_SUBJECTS.map(function (s) {
     return "subject:" + s;
   }).join(" OR ");
-  var query = senders + " -(" + excludes + ")";
-  var intro =
-    "📋 *Auto-forward bank alerts (optional, ~1 min)*\n\n" +
-    "Skip manual forwarding with one Gmail filter. It only matches verified bank transaction alerts — no OTPs, statements, or marketing.\n\n" +
-    "Gmail → Settings → *Filters and Blocked Addresses* → *Create a new filter* → " +
-    "paste the query below into *Has the words* → *Forward it to* `" +
-    BOT_INBOX_EMAIL +
-    "`.";
-  sendTelegramMessage(chatId, intro, { parse_mode: "Markdown" });
-  sendTelegramMessage(chatId, "```\n" + query + "\n```", { parse_mode: "Markdown" });
+  return senders + " -(" + excludes + ")";
+}
+
+// HTML escape — covers the four characters that matter inside a <pre> block
+// or attribute value. Used by buildFilterEmailHtml.
+function _escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/**
+ * Build the HTML body for the filter-setup email. Pure — accepts the query
+ * and the bot inbox address, returns a self-contained HTML string. Pulled
+ * out for unit-testability (raw HTML string assertions on escaping etc.).
+ */
+function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl) {
+  var q = _escHtml(query);
+  var bot = _escHtml(botInboxEmail);
+  var demo = _escHtml(demoUrl);
+  var guide = _escHtml(guideUrl);
+  return (
+    '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.5;color:#222;max-width:640px">' +
+    '<h2 style="margin:0 0 8px">Set up auto-forwarding (~1 min)</h2>' +
+    "<p>Skip manual forwarding with one Gmail filter. It only matches verified bank transaction alerts &mdash; no OTPs, statements, or marketing.</p>" +
+    '<h3 style="margin:20px 0 8px">Step-by-step</h3>' +
+    "<ol>" +
+    "<li>Open Gmail on desktop &rarr; <b>Settings (gear)</b> &rarr; <b>See all settings</b>.</li>" +
+    "<li>Go to the <b>Filters and Blocked Addresses</b> tab.</li>" +
+    "<li>Click <b>Create a new filter</b>.</li>" +
+    "<li>Paste the query below into the <b>Has the words</b> field, then click <b>Create filter</b>.</li>" +
+    "<li>Tick <b>Forward it to</b> and select (or add) <code>" +
+    bot +
+    "</code> as the destination.</li>" +
+    "<li>Click <b>Create filter</b>. Done.</li>" +
+    "</ol>" +
+    '<h3 style="margin:20px 0 8px">The filter query</h3>' +
+    '<pre style="background:#f4f4f4;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:13px">' +
+    q +
+    "</pre>" +
+    '<p style="margin-top:20px">' +
+    '<a href="' +
+    demo +
+    '" style="display:inline-block;padding:10px 16px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;margin-right:8px">Watch 60-sec demo</a>' +
+    '<a href="' +
+    guide +
+    '" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px">Setup guide (with screenshots)</a>' +
+    "</p>" +
+    '<hr style="margin:28px 0;border:0;border-top:1px solid #eee">' +
+    '<p style="font-size:13px;color:#666">If a forwarding-confirmation prompt appears in your inbox afterwards, click the link inside &mdash; Gmail requires this once per destination address.</p>' +
+    "</div>"
+  );
+}
+
+/**
+ * Send the filter setup email to one or more tenant email addresses, then
+ * send a short Telegram confirmation. Used after activation and from /setup.
+ */
+function sendFilterInstructions(chatId) {
+  var tenant = findTenantByChatId(chatId);
+  if (!tenant || tenant.emails.length === 0) {
+    sendTelegramMessage(chatId, "⚠️ No registered email yet. Send `/register your.name@gmail.com` first.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  var query = buildGmailFilterQuery();
+  var html = buildFilterEmailHtml(query, BOT_INBOX_EMAIL, DEMO_VIDEO_URL, SETUP_GUIDE_URL);
+  var to = tenant.emails.join(",");
+  try {
+    MailApp.sendEmail({
+      to: to,
+      subject: "Set up Dus Aane Bot — auto-forward bank alerts",
+      htmlBody: html
+    });
+  } catch (e) {
+    console.error("[sendFilterInstructions] mail send failed:", e.message);
+    sendTelegramMessage(chatId, "⚠️ Couldn't email setup instructions right now. Try `/setup` again in a minute.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  var emailList = tenant.emails.map((e) => "`" + e + "`").join(", ");
+  sendTelegramMessage(
+    chatId,
+    "📬 Setup instructions emailed to " +
+      emailList +
+      ".\n\nCheck your inbox (and spam folder, just in case). It includes the Gmail filter query, step-by-step instructions, and a demo video.\n\nResend any time with `/setup`.",
+    { parse_mode: "Markdown" }
+  );
+}
+
+/**
+ * /setup — re-send the filter setup email. Useful if the user lost the
+ * original or didn't receive it.
+ */
+function handleSetupCommand(chatId) {
+  sendFilterInstructions(chatId);
 }
 
 /**

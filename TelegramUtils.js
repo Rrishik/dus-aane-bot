@@ -23,6 +23,7 @@ function setTelegramCommands() {
     { command: "/myinfo", description: "Show your account status" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
+    { command: "/setup", description: "Email auto-forward setup instructions" },
     { command: "/help", description: "Show available commands" }
   ];
   var payload = {
