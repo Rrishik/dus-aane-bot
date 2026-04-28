@@ -4,12 +4,11 @@ import { loadAppsScript } from "./_loader.js";
 let parseBackfillDuration;
 
 beforeAll(() => {
-  // BotHandlers.js references many globals (sendTelegramMessage, CATEGORIES,
-  // MESSAGE_ID_COLUMN, ...) at *call* time but not at *load* time, so we can
-  // load it standalone for parser tests. Stub anything the top-level might
-  // touch as a no-op.
+  // Backfill.js references many globals (sendTelegramMessage, PropertiesService,
+  // ...) at *call* time but not at *load* time, so we can load it standalone
+  // for parser tests. Stub anything the top-level might touch as a no-op.
   const noop = () => undefined;
-  ({ parseBackfillDuration } = loadAppsScript(["BotHandlers.js"], ["parseBackfillDuration"], {
+  ({ parseBackfillDuration } = loadAppsScript(["Backfill.js"], ["parseBackfillDuration"], {
     sendTelegramMessage: noop,
     PropertiesService: { getScriptProperties: () => ({ getProperty: noop, setProperty: noop, deleteProperty: noop }) }
   }));
