@@ -52,7 +52,7 @@ function handleMerchantInput(chatId, userId, messageText) {
   // Auto-apply shortcut: typed name already maps to a category — skip the picker.
   if (resolved && resolved.category) {
     var sheet = getSpreadsheet().getSheets()[0];
-    var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+    var rowData = getRowData(rowNumber);
     var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
     if (rawMerchant && rawMerchant.toLowerCase() !== typedName.toLowerCase()) {
       setMerchantResolution(rawMerchant, typedName);
@@ -63,7 +63,7 @@ function handleMerchantInput(chatId, userId, messageText) {
     updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, rowData[CATEGORY_COLUMN - 1]);
     sendTelegramMessage(
       chatId,
-      "✅ *Merchant:* " + escapeMarkdown(typedName) + " *→* " + escapeMarkdown(resolved.category),
+      "✅ *Mapping saved:* " + escapeMarkdown(typedName) + " → " + escapeMarkdown(resolved.category),
       { parse_mode: "Markdown" }
     );
     return true;
@@ -326,8 +326,7 @@ function handleCallbackQuery(update) {
       var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
       if (rowNumber < 0) return;
 
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+      var rowData = getRowData(rowNumber);
       var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
 
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
@@ -391,8 +390,7 @@ function handleCallbackQuery(update) {
       var emailMessageId = callbackPayload;
       var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
       if (rowNumber < 0) return;
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+      var rowData = getRowData(rowNumber);
       var merchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
       var category = (rowData[CATEGORY_COLUMN - 1] || "").toString().trim();
       if (!merchant) {
@@ -452,8 +450,7 @@ function handleCallbackQuery(update) {
       var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
       var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
       if (rowNumber < 0) return;
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+      var rowData = getRowData(rowNumber);
       var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim(); // current value in col C; for new-merchant flow this == the original raw pattern
       var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {

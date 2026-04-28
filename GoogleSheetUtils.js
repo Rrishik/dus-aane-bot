@@ -53,6 +53,14 @@ function getCategoryListForType(txnType) {
   return txnType && txnType.toString().toLowerCase() === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
 }
 
+// Fetch a single row from the main transactions sheet as a 0-indexed array.
+// Width covers all known columns up to EMAIL_LINK_COLUMN; extend the constant
+// (and this fetch implicitly stays in sync) when a new column is added.
+function getRowData(rowNumber) {
+  var sheet = getSpreadsheet().getSheets()[0];
+  return sheet.getRange(rowNumber, 1, 1, EMAIL_LINK_COLUMN).getValues()[0];
+}
+
 // Find the row number where a column has a specific value. Returns -1 if not found.
 function findRowByColumnValue(column_number, value) {
   var sheet = getSpreadsheet().getSheets()[0];
