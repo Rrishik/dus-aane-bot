@@ -6,17 +6,17 @@ function getAllTransactions() {
   data.shift(); // remove header
 
   return data.map(function (row) {
-    var rawDate = row[1] || row[0]; // Transaction Date preferred, fall back to Email Date
+    var rawDate = row[TRANSACTION_DATE_COLUMN - 1] || row[EMAIL_DATE_COLUMN - 1]; // Transaction Date preferred, fall back to Email Date
     var dateObj = rawDate instanceof Date ? rawDate : new Date(rawDate);
     return {
       date: dateObj,
-      merchant: (row[2] || "").toString(),
-      amount: parseFloat(row[3]) || 0,
-      category: (row[4] || "Uncategorized").toString(),
-      type: (row[5] || "").toString(),
-      user: (row[6] || "").toString(),
-      split: (row[7] || "").toString(),
-      currency: (row[9] || "INR").toString()
+      merchant: (row[MERCHANT_COLUMN - 1] || "").toString(),
+      amount: parseFloat(row[AMOUNT_COLUMN - 1]) || 0,
+      category: (row[CATEGORY_COLUMN - 1] || "Uncategorized").toString(),
+      type: (row[TRANSACTION_TYPE_COLUMN - 1] || "").toString(),
+      user: (row[USER_COLUMN - 1] || "").toString(),
+      split: (row[SPLIT_COLUMN - 1] || "").toString(),
+      currency: (row[CURRENCY_COLUMN - 1] || "INR").toString()
     };
   });
 }

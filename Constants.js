@@ -14,7 +14,13 @@ const BOT_INBOX_EMAIL = "dusaanebot.inbox@gmail.com";
 // GitHub secrets during deploy). They identify tenant 0's spreadsheet + chat,
 // which also hosts the shared Tenants / MerchantResolution / CategoryOverrides tabs.
 
+const EMAIL_DATE_COLUMN = 1; // Column A
+const TRANSACTION_DATE_COLUMN = 2; // Column B
+const MERCHANT_COLUMN = 3; // Column C
+const AMOUNT_COLUMN = 4; // Column D
 const CATEGORY_COLUMN = 5; // Column E
+const TRANSACTION_TYPE_COLUMN = 6; // Column F
+const USER_COLUMN = 7; // Column G
 const SPLIT_COLUMN = 8; // Column H
 const MESSAGE_ID_COLUMN = 9; // Column I
 const CURRENCY_COLUMN = 10; // Column J
