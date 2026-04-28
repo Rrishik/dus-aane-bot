@@ -54,11 +54,23 @@ function adminProvisionTenantSheet(displayName, shareWithEmail) {
   var name = "Dus Aane — " + (displayName || "Tenant");
   var copy = DriveApp.getFileById(TEMPLATE_SHEET_ID).makeCopy(name);
   if (shareWithEmail) {
+    // Add the user as editor first (so they can write even before accepting
+    // ownership transfer), then initiate ownership transfer. For consumer
+    // Gmail accounts the user must accept the transfer in Drive — until then
+    // admin remains owner. We stay an editor afterwards so the bot can keep
+    // appending transactions; the user can revoke that access anytime.
     try {
       copy.addEditor(shareWithEmail);
-      console.log("Shared sheet " + copy.getId() + " with " + shareWithEmail);
     } catch (e) {
       console.error("[adminProvisionTenantSheet] addEditor failed for " + shareWithEmail + ": " + e.message);
+    }
+    try {
+      copy.setOwner(shareWithEmail);
+      console.log("Initiated ownership transfer of " + copy.getId() + " to " + shareWithEmail);
+    } catch (e) {
+      // Cross-account transfers can fail (e.g. recipient not yet on Drive,
+      // Workspace policy). Sheet still works as admin-owned + user-editor.
+      console.error("[adminProvisionTenantSheet] setOwner failed for " + shareWithEmail + ": " + e.message);
     }
   }
   console.log("Provisioned sheet: " + copy.getId() + " (" + name + ")");

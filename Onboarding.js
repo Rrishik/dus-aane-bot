@@ -238,6 +238,7 @@ function activatePendingTenantForEmail(email) {
         "I've created a Google Sheet and shared it with `" +
         email +
         "` as editor. *This sheet is yours* — open, edit or export anytime. It's the *entire* data I use, fully under your control.\n\n" +
+        "📬 *Check your Gmail* — Drive has sent an ownership-transfer request. Accept it to fully own the sheet; until then I remain the owner. (I'll stay on as editor afterwards so I can keep adding rows; you can revoke that anytime.)\n\n" +
         "*How it works:* forward any bank transaction email to `" +
         BOT_INBOX_EMAIL +
         "` and it becomes a row here. I'll follow up with a one-time Gmail filter so this happens automatically.",
