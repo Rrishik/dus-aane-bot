@@ -51,12 +51,12 @@ function handleMerchantInput(chatId, userId, messageText) {
 
   // Auto-apply shortcut: typed name already maps to a category — skip the picker.
   if (resolved && resolved.category) {
-    var sheet = getSpreadsheet().getSheets()[0];
     var rowData = getRowData(rowNumber);
     var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
     if (rawMerchant && rawMerchant.toLowerCase() !== typedName.toLowerCase()) {
       setMerchantResolution(rawMerchant, typedName);
     }
+    setCategoryOverride(typedName, resolved.category);
     if (rawMerchant !== typedName) {
       updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, typedName, rawMerchant);
     }
