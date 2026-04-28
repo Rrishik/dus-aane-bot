@@ -59,7 +59,7 @@ function handleRegisterCommand(chatId, username, messageText) {
   if (currentTenant && currentTenant.status === TENANT_STATUS.ACTIVE) {
     // Don't let someone add another account's verified email.
     var owner = findTenantByEmail(email);
-    if (owner && String(owner.chat_id) !== String(chatId)) {
+    if (owner && !sameChatId(owner.chat_id, chatId)) {
       sendTelegramMessage(chatId, "❌ That email is already registered to another account.");
       return;
     }
@@ -79,7 +79,7 @@ function handleRegisterCommand(chatId, username, messageText) {
 
   // Someone else already owns this email — reject.
   var existingActive = findTenantByEmail(email);
-  if (existingActive && String(existingActive.chat_id) !== String(chatId)) {
+  if (existingActive && !sameChatId(existingActive.chat_id, chatId)) {
     sendTelegramMessage(chatId, "❌ That email is already registered to another account.");
     return;
   }
@@ -195,7 +195,7 @@ function handleMyInfoCommand(chatId) {
   lines.push("Chat ID: `" + tenant.chat_id + "`");
   lines.push("Emails: " + (tenant.emails.length > 0 ? tenant.emails.map((e) => "`" + e + "`").join(", ") : "_none_"));
   if (tenant.sheet_id) {
-    lines.push("Sheet: [open](https://docs.google.com/spreadsheets/d/" + tenant.sheet_id + ")");
+    lines.push("Sheet: [open](" + sheetUrl(tenant.sheet_id) + ")");
   } else {
     lines.push("Sheet: _not provisioned yet_");
   }
@@ -230,7 +230,7 @@ function activatePendingTenantForEmail(email) {
   if (!ok) return null;
 
   var activated = findTenantByChatId(pending.chat_id);
-  var sheetUrl = "https://docs.google.com/spreadsheets/d/" + sheetId;
+  var url = sheetUrl(sheetId);
   try {
     sendTelegramMessage(
       pending.chat_id,
@@ -244,7 +244,7 @@ function activatePendingTenantForEmail(email) {
         "` and it becomes a row here. I'll follow up with a one-time Gmail filter so this happens automatically.",
       {
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: [[{ text: "📋 Open your sheet", url: sheetUrl }]] }
+        reply_markup: { inline_keyboard: [[{ text: "📋 Open your sheet", url: url }]] }
       }
     );
   } catch (e) {

@@ -262,11 +262,11 @@ function continueBackfill() {
     if (totalFailed > 0) summary += "❌ *Failed:* " + totalFailed + "\n";
     if (chunk > 1) summary += "📦 *Chunks:* " + chunk + "\n";
 
-    var sheetUrl = "https://docs.google.com/spreadsheets/d/" + getTenantSheetId();
+    var url = sheetUrl(getTenantSheetId());
     sendTelegramMessage(getTenantChatId(), summary, {
       parse_mode: "Markdown",
       reply_markup: {
-        inline_keyboard: [[{ text: "📋 Open Sheet", url: sheetUrl }]]
+        inline_keyboard: [[{ text: "📋 Open Sheet", url: url }]]
       }
     });
 

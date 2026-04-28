@@ -32,6 +32,12 @@ function getTenantChatId() {
   return (_currentTenant && _currentTenant.chat_id) || ADMIN_CHAT_ID;
 }
 
+// Build a Google Sheets web URL from a sheet id. Centralized so the prefix
+// only lives in one place.
+function sheetUrl(sheetId) {
+  return "https://docs.google.com/spreadsheets/d/" + sheetId;
+}
+
 // Lazy-cached spreadsheet accessor — avoids redundant openById calls within a single execution
 var _cachedSpreadsheet = null;
 function getSpreadsheet() {

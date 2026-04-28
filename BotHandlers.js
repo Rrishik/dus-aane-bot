@@ -121,13 +121,13 @@ function handleHelpCommand(chatId, username) {
     `• /myinfo — your account\n` +
     `• /help — this message`;
 
-  var sheetUrl = "https://docs.google.com/spreadsheets/d/" + getTenantSheetId();
+  var url = sheetUrl(getTenantSheetId());
   sendTelegramMessage(chatId, message, {
     parse_mode: "Markdown",
     reply_markup: {
       inline_keyboard: [
         [
-          { text: "📋 Open Sheet", url: sheetUrl },
+          { text: "📋 Open Sheet", url: url },
           { text: "📖 README", url: "https://github.com/Rrishik/dus-aane-bot#readme" }
         ]
       ]
