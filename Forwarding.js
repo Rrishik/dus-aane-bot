@@ -128,24 +128,26 @@ function extractForwardingConfirmUrl(body) {
 }
 
 /**
- * Scan the bot inbox for unread forwarding-confirmation mails and click the
- * `vf-...` link in each. Returns a small report:
- *   { confirmed: number, failed: number, addresses: string[] }
+ * Scan the bot inbox for unread forwarding-confirmation mails. Returns the
+ * vf-... URLs + the requesting addresses parsed from each thread's subject.
  *
- * `addresses` is the list of forwarding addresses we attempted to confirm
- * (parsed from the subject; useful in the response page so users can see
- * which address got verified).
+ *   { urls: string[], addresses: string[] }
  *
- * Idempotent — re-running over the same threads simply re-fetches a single-
- * use URL that Google now treats as a no-op. We mark threads as read so we
- * don't keep noticing them.
+ * NOTE: We deliberately do NOT fetch the vf URL server-side. Google's confirm
+ * page requires a button click — a plain GET reaches the page but doesn't
+ * complete the flow (forwarding stays in 'pending' state). The verify-click
+ * handler redirects the user's browser to the URL so they click Confirm
+ * themselves. One extra click, but bulletproof.
+ *
+ * markRead is called on each thread to avoid re-prompting on subsequent runs;
+ * if the gmail.modify scope isn't yet authorized this throws a warn and the
+ * verify flow continues — the URL is still returned to the caller.
  */
-function confirmForwardingAddresses() {
+function findPendingForwardingConfirmations() {
   var query =
     "from:" + FORWARDING_CONFIRM_FROM + ' subject:"' + FORWARDING_CONFIRM_SUBJECT + '" is:unread newer_than:14d';
   var threads = GmailApp.search(query, 0, 25);
-  var confirmed = 0;
-  var failed = 0;
+  var urls = [];
   var addresses = [];
 
   for (var i = 0; i < threads.length; i++) {
@@ -153,43 +155,22 @@ function confirmForwardingAddresses() {
     for (var j = 0; j < msgs.length; j++) {
       var msg = msgs[j];
       var subject = msg.getSubject() || "";
-      // Subject format: "<email> has requested to automatically forward mail
-      // to your email address (#NNNN)" or "Gmail Forwarding Confirmation -
-      // Receive Mail from <email>". Pull the first email-shaped token.
       var addrMatch = subject.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
-      if (addrMatch) addresses.push(addrMatch[0]);
-
       var body = msg.getPlainBody() || msg.getBody() || "";
       var url = extractForwardingConfirmUrl(body);
-      if (!url) {
-        failed++;
-        continue;
-      }
-      try {
-        var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
-        var code = resp.getResponseCode();
-        if (code >= 200 && code < 400) {
-          confirmed++;
-        } else {
-          console.warn("[confirmForwardingAddresses] non-2xx from confirm URL: " + code);
-          failed++;
-        }
-      } catch (e) {
-        console.error("[confirmForwardingAddresses] fetch failed: " + e.message);
-        failed++;
-      }
+      if (!url) continue;
+      urls.push(url);
+      if (addrMatch) addresses.push(addrMatch[0]);
     }
     try {
       threads[i].markRead();
     } catch (e) {
-      // markRead requires gmail.modify. If the scope was just added to the
-      // manifest but not yet authorized, this throws — we keep the verify
-      // flow working (confirmation already succeeded) and log so the operator
-      // can spot it in the Executions panel.
-      console.warn("[confirmForwardingAddresses] markRead failed (need gmail.modify re-auth?): " + e.message);
+      // gmail.modify not yet authorized — non-fatal, the URL was already
+      // captured. Log so it's visible in the Executions panel.
+      console.warn("[findPendingForwardingConfirmations] markRead failed: " + e.message);
     }
   }
-  return { confirmed: confirmed, failed: failed, addresses: addresses };
+  return { urls: urls, addresses: addresses };
 }
 
 /**
@@ -210,38 +191,32 @@ function handleVerifyForwardingClick(params) {
     });
   }
   try {
-    var result = confirmForwardingAddresses();
-    if (result.confirmed > 0) {
-      var addrText = result.addresses.length > 0 ? " for " + result.addresses.map(_escHtml).join(", ") : "";
-      // Notify Telegram side too so the user gets confirmation across channels.
+    var result = findPendingForwardingConfirmations();
+    if (result.urls.length > 0) {
+      // Take the most recent (last) URL — Gmail lists threads newest-first
+      // but iteration order is reversed by getMessages(); last entry is the
+      // freshest confirmation request.
+      var targetUrl = result.urls[result.urls.length - 1];
+      var addr = result.addresses.length > 0 ? result.addresses[result.addresses.length - 1] : "";
+      // Optimistic Telegram nudge — user is about to land on Google'''s page.
       try {
         sendTelegramMessage(
           Number(chatId),
-          "✅ Forwarding address verified" +
-            (result.addresses.length ? " for `" + result.addresses[0] + "`" : "") +
-            ". Now create the Gmail filter from the same email — that's the last step.",
+          "🔗 Opening Google'''s confirmation page" +
+            (addr ? " for `" + addr + "`" : "") +
+            ". Click *Confirm* on that page, then return here.",
           { parse_mode: "Markdown" }
         );
       } catch (e) {
         console.warn("[handleVerifyForwardingClick] telegram notify failed: " + e.message);
       }
-      return _verifyResponseHtml({
-        ok: true,
-        title: "Forwarding address verified",
-        body:
-          "We confirmed " +
-          result.confirmed +
-          " pending forwarding " +
-          (result.confirmed === 1 ? "address" : "addresses") +
-          addrText +
-          ". You can now go back to the setup email and create the filter — that's the last step."
-      });
+      return _verifyRedirectHtml(targetUrl, addr);
     }
     return _verifyResponseHtml({
       ok: false,
       title: "No pending confirmation found",
       body:
-        "We didn't find a pending Gmail forwarding-confirmation email. Make sure you completed step 1 (Forwarding settings &rarr; Add a forwarding address &rarr; <code>" +
+        "We didn'''t find a pending Gmail forwarding-confirmation email. Make sure you completed step 1 (Forwarding settings &rarr; Add a forwarding address &rarr; <code>" +
         _escHtml(BOT_INBOX_EMAIL) +
         "</code> &rarr; Next), wait ~30 seconds, then click the verify button again."
     });
@@ -253,6 +228,43 @@ function handleVerifyForwardingClick(params) {
       body: "We hit an error verifying your forwarding address. Try again in a minute, or send /setup on Telegram for a fresh link."
     });
   }
+}
+
+/**
+ * Build a small HTML page that bounces the user'''s browser to Google'''s
+ * confirmation URL. Apps Script web-apps render in an iframe, so we navigate
+ * the top-level window via JS, with a clearly visible fallback link in case
+ * the script is blocked or noscript is set.
+ */
+function _verifyRedirectHtml(targetUrl, addr) {
+  var url = _escHtml(targetUrl);
+  var addrText = addr ? " for <code>" + _escHtml(addr) + "</code>" : "";
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    "<title>Confirm forwarding &middot; Dus Aane Bot</title>" +
+    "<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f7f7f8;margin:0;padding:48px 16px;color:#222}" +
+    ".card{max-width:520px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;box-shadow:0 2px 12px rgba(0,0,0,.06)}" +
+    "h1{font-size:22px;margin:8px 0 12px}" +
+    "p{font-size:15px;line-height:1.55;color:#444}" +
+    ".btn{display:inline-block;padding:12px 20px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;margin-top:8px}" +
+    "code{background:#f4f4f4;padding:2px 6px;border-radius:4px;font-size:13px}</style>" +
+    "<script>try{window.top.location.href=" +
+    JSON.stringify(targetUrl) +
+    ";}catch(e){window.location.href=" +
+    JSON.stringify(targetUrl) +
+    ";}</" +
+    "script>" +
+    '</head><body><div class="card">' +
+    "<h1>Almost there&hellip;</h1>" +
+    "<p>Opening Google'''s confirmation page" +
+    addrText +
+    ". On that page, click <b>Confirm</b> to enable forwarding.</p>" +
+    "<p>If nothing happens in a moment:</p>" +
+    '<p><a class="btn" href="' +
+    url +
+    '" target="_top" rel="noopener">Open confirmation page</a></p>' +
+    "</div></body></html>"
+  );
 }
 
 /**

@@ -6,7 +6,7 @@ let signVerifyToken,
   buildVerifyForwardingUrl,
   extractForwardingConfirmUrl,
   handleVerifyForwardingClick,
-  confirmForwardingAddresses;
+  findPendingForwardingConfirmations;
 
 // Capture state for stubs so tests can assert against it.
 var propsStore;
@@ -45,7 +45,7 @@ beforeAll(() => {
     buildVerifyForwardingUrl,
     extractForwardingConfirmUrl,
     handleVerifyForwardingClick,
-    confirmForwardingAddresses
+    findPendingForwardingConfirmations
   } = loadAppsScript(
     ["Forwarding.js"],
     [
@@ -54,7 +54,7 @@ beforeAll(() => {
       "buildVerifyForwardingUrl",
       "extractForwardingConfirmUrl",
       "handleVerifyForwardingClick",
-      "confirmForwardingAddresses"
+      "findPendingForwardingConfirmations"
     ],
     {
       BOT_INBOX_EMAIL: "bot@gmail.com",
@@ -204,10 +204,9 @@ describe("extractForwardingConfirmUrl", () => {
   });
 });
 
-describe("confirmForwardingAddresses", () => {
-  it("fetches the vf URL for each unread thread and reports counts", () => {
+describe("findPendingForwardingConfirmations", () => {
+  it("returns the vf URL and parsed address for each unread thread", () => {
     fakeThreads.length = 0;
-    fetchedUrls.length = 0;
     fakeThreads.push(
       makeThread([
         makeMessage(
@@ -222,28 +221,25 @@ describe("confirmForwardingAddresses", () => {
         )
       ])
     );
-    var result = confirmForwardingAddresses();
-    expect(result.confirmed).toBe(2);
-    expect(result.failed).toBe(0);
+    var result = findPendingForwardingConfirmations();
+    expect(result.urls).toEqual([
+      "https://mail-settings.google.com/mail/vf-token1",
+      "https://mail-settings.google.com/mail/vf-token2"
+    ]);
     expect(result.addresses).toEqual(["user@example.com", "other@example.com"]);
-    expect(fetchedUrls).toContain("https://mail-settings.google.com/mail/vf-token1");
-    expect(fetchedUrls).toContain("https://mail-settings.google.com/mail/vf-token2");
   });
 
-  it("counts threads with no extractable URL as failed", () => {
+  it("skips threads with no extractable URL", () => {
     fakeThreads.length = 0;
-    fetchedUrls.length = 0;
     fakeThreads.push(makeThread([makeMessage("Gmail Forwarding Confirmation", "No link in body.")]));
-    var result = confirmForwardingAddresses();
-    expect(result.confirmed).toBe(0);
-    expect(result.failed).toBe(1);
+    var result = findPendingForwardingConfirmations();
+    expect(result.urls).toEqual([]);
   });
 });
 
 describe("handleVerifyForwardingClick", () => {
-  it("returns success HTML when token valid and confirmation found", () => {
+  it("returns redirect HTML targeting the vf URL when token valid and confirmation found", () => {
     fakeThreads.length = 0;
-    fetchedUrls.length = 0;
     sentTelegramMessages.length = 0;
     fakeThreads.push(
       makeThread([
@@ -256,8 +252,11 @@ describe("handleVerifyForwardingClick", () => {
     var iat = Date.now();
     var sig = signVerifyToken("777", iat);
     var html = handleVerifyForwardingClick({ t: "777", iat: String(iat), sig: sig });
-    expect(html).toContain("Forwarding address verified");
+    expect(html).toContain("Almost there");
+    expect(html).toContain("https://mail-settings.google.com/mail/vf-abc");
     expect(html).toContain("u@example.com");
+    // top-level redirect (escapes the Apps Script iframe)
+    expect(html).toContain("window.top.location.href");
     expect(sentTelegramMessages.length).toBe(1);
     expect(sentTelegramMessages[0].chatId).toBe(777);
   });
