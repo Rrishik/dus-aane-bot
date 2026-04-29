@@ -20,6 +20,7 @@ function setTelegramCommands() {
   // add an argument, so listing them here just produces usage errors.
   var commands = [
     { command: "/start", description: "Onboard / show welcome" },
+    { command: "/register", description: "Register a Gmail address to forward from" },
     { command: "/account", description: "Account & settings" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
