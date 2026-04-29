@@ -5,12 +5,12 @@
 //
 //   - inactive: was forwarding, then stopped (>= NUDGE_INACTIVE_DAYS since
 //     last_forward_at)
-//   - pending : onboarded but never forwarded once (>= NUDGE_PENDING_DAYS
-//     since created_at, last_forward_at empty)
+//   - pending : registered but never forwarded once (>= NUDGE_PENDING_DAYS
+//     since created_at, last_forward_at empty). Includes both PENDING and
+//     ACTIVE-with-no-stamp tenants.
 //
-// A nudge writes last_nag_at + increments nag_count. After NUDGE_MAX nudges
-// without a fresh forward, the tenant flips to DORMANT and stops receiving
-// nudges (and the weekly digest, since that filter on status === ACTIVE).
+// A nudge writes last_nag_at + increments nag_count. The maxNudges-th nudge
+// flips the tenant to DORMANT in the same pass; subsequent runs skip them.
 // reactivateIfDormant (called from extractTransactions on the next live
 // forward) flips them back to ACTIVE and clears the counters.
 //
@@ -34,7 +34,8 @@ var NUDGE_CONFIG = {
 //   config: { inactiveDays, pendingDays, cooldownDays, maxNudges }
 function shouldNudge(tenant, now, config) {
   if (!tenant) return null;
-  if (tenant.status !== "active") return null; // pending/disabled/dormant: skip
+  // PENDING and ACTIVE qualify; DORMANT/DISABLED are explicitly out.
+  if (tenant.status !== "active" && tenant.status !== "pending") return null;
   if ((tenant.nag_count || 0) >= config.maxNudges) return null;
 
   var nowMs = now.getTime();
@@ -70,14 +71,16 @@ function shouldNudge(tenant, now, config) {
 }
 
 // Pure formatter. Returns a Markdown message body for sendTelegramMessage.
+// The resend-setup inline button is attached by the caller (nudgeDormantTenants).
 function formatNudgeMessage(decision, tenantName) {
   var greeting = tenantName ? "Hi " + tenantName + "! 👋" : "Hi! 👋";
   if (decision.kind === "pending") {
     return (
       greeting +
-      "\n\nYou set up Dus Aane Bot a few days ago but haven't forwarded any " +
-      "transaction emails yet. Forward any bank/card alert to get started — " +
-      "I'll log it and ask about the merchant. Try it once and you're set."
+      "\n\nYou registered with Dus Aane Bot but haven't forwarded any bank " +
+      "emails yet. Open the setup email I sent and follow the 3 steps " +
+      "(~1 min on desktop) — or forward any bank email manually to start. " +
+      "Tap below if you need the setup email again."
     );
   }
   // inactive
@@ -85,9 +88,9 @@ function formatNudgeMessage(decision, tenantName) {
     greeting +
     "\n\nIt's been " +
     decision.daysSilent +
-    " days since your last forwarded transaction. " +
-    "If you've been forwarding emails and they aren't showing up, reply with " +
-    "the bank name and I'll take a look. Otherwise — happy spending! 🙂"
+    " days since your last forwarded transaction. If your Gmail filter is " +
+    "still active, you should be all set. If not, tap below to resend the " +
+    "setup steps."
   );
 }
 
@@ -113,7 +116,12 @@ function nudgeDormantTenants() {
         return;
       }
       var msg = formatNudgeMessage(decision, t.name);
-      sendTelegramMessage(t.chat_id, msg, { parse_mode: "Markdown" });
+      sendTelegramMessage(t.chat_id, msg, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "\uD83D\uDCEC Resend setup instructions", callback_data: "resend_setup" }]]
+        }
+      });
 
       // Record the nudge: stamp last_nag_at + bump nag_count. If we just
       // hit the cap, flip to DORMANT — they get one final nudge, then quiet.

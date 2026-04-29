@@ -236,3 +236,54 @@ describe("dormant -> active reactivation", () => {
     expect(env.getRow("111").nag_count).toBe(0);
   });
 });
+
+describe("nudge message includes resend-setup button", () => {
+  it("attaches a resend_setup inline button to every nudge", () => {
+    var env = setupNudgeEnv([
+      [
+        "111",
+        "Alice",
+        "",
+        "sheet-a",
+        "active",
+        new Date(NOW_FIXED.getTime() - 60 * DAY_MS).toISOString(),
+        "",
+        new Date(NOW_FIXED.getTime() - 6 * DAY_MS).toISOString(),
+        "",
+        0
+      ]
+    ]);
+
+    env.mod.nudgeDormantTenants();
+
+    expect(env.sentMessages.length).toBe(1);
+    var sent = env.sentMessages[0];
+    expect(sent.opts.reply_markup.inline_keyboard[0][0]).toEqual({
+      text: "📬 Resend setup instructions",
+      callback_data: "resend_setup"
+    });
+  });
+
+  it("nudges PENDING tenants who registered but never forwarded", () => {
+    var env = setupNudgeEnv([
+      [
+        "555",
+        "Eve",
+        "eve@example.com",
+        "",
+        "pending",
+        new Date(NOW_FIXED.getTime() - 5 * DAY_MS).toISOString(),
+        "",
+        "",
+        "",
+        0
+      ]
+    ]);
+
+    env.mod.nudgeDormantTenants();
+
+    expect(env.sentMessages.length).toBe(1);
+    expect(env.sentMessages[0].chatId).toBe("555");
+    expect(env.sentMessages[0].msg).toContain("registered");
+  });
+});

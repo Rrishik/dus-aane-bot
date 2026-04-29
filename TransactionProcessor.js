@@ -83,10 +83,6 @@ function extractTransactions() {
 
   var resolutions = getMerchantResolutions();
   var skipped = 0;
-  // Track which tenants saw a live forward this run, so we stamp
-  // last_forward_at + reactivate-if-dormant exactly once per tenant per run
-  // (avoids N writes for a tenant who has multiple emails in one fire).
-  var stampedTenants = {};
 
   messagesToProcess.forEach((message) => {
     var userEmail = extractForwarderEmail(message);
@@ -110,11 +106,16 @@ function extractTransactions() {
     setCurrentTenant(tenant);
     try {
       ensureSheetHeaders();
-      processSingleEmail(message, userEmail, false, resolutions);
-      if (!stampedTenants[tenant.chat_id]) {
-        stampLastForward(tenant.chat_id);
-        reactivateIfDormant(tenant.chat_id);
-        stampedTenants[tenant.chat_id] = true;
+      var result = processSingleEmail(message, userEmail, false, resolutions);
+      if (result && result.saved) {
+        // Track activity: bump last_forward_at and undo any prior dormancy.
+        // Only on real saves — duplicates and parse failures don't count.
+        try {
+          stampLastForward(tenant.chat_id);
+          reactivateIfDormant(tenant.chat_id);
+        } catch (e) {
+          console.error("[extractTransactions] activity stamp failed:", e.message);
+        }
       }
     } finally {
       setCurrentTenant(null);
