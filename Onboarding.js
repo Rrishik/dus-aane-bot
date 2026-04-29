@@ -1,13 +1,13 @@
-// Onboarding commands: /start, /register, /myinfo.
-// Plus auto-activation: when a pending tenant forwards their first valid bank
-// email, we provision their sheet and flip them to active.
+// Onboarding: /start, /register, /account, /ownsheet.
 //
-// Uses Telegram "Markdown" (legacy) parse mode to avoid MarkdownV2 escaping
-// pitfalls with `.` and `-` in email addresses.
+// Activation model: /register creates a pending tenant and emails setup
+// instructions. The first valid forwarded transaction (manual or filter-
+// driven) provisions the sheet via activatePendingTenantForEmail() and flips
+// status to active.
+//
+// Uses Telegram "Markdown" (legacy) parse mode — MarkdownV2 escaping is
+// painful with `.` and `-` in email addresses.
 
-/**
- * /start — welcome message, differs for new vs onboarded chats.
- */
 function handleStartCommand(chatId, username) {
   var tenant = findTenantByChatId(chatId);
   if (tenant && tenant.status === TENANT_STATUS.ACTIVE) {
@@ -21,50 +21,41 @@ function handleStartCommand(chatId, username) {
     greeting +
     "Track your spends by forwarding bank emails — no full-inbox access, no account linking.\n\n" +
     "Worried about apps like Cred reading your OTPs, statements, and personal mail? This [open-source bot](https://github.com/Rrishik/dus-aane-bot) solves that.\n\n" +
-    "*2 steps to activate:*\n" +
-    "1. From your Gmail, send a quick `hi` to `" +
-    BOT_INBOX_EMAIL +
-    "`\n" +
-    "2. Back here, send `/register your.name@gmail.com`";
+    "Send `/register your.email@gmail.com` to begin.";
   sendTelegramMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
 /**
- * /register <addr> — claim an email. We search the bot inbox for a recent
- * forward from that address; if found, activate the tenant and send the
- * Gmail filter query to automate future forwards.
+ * /register <addr> — claim an email and email auto-forwarding instructions
+ * to it. No proof-of-ownership step: the email itself is the proof, and
+ * activation is gated on the first valid forwarded transaction.
  */
 function handleRegisterCommand(chatId, username, messageText) {
   var parts = messageText.split(/\s+/);
   if (parts.length < 2) {
-    sendTelegramMessage(
-      chatId,
-      "Usage: `/register your.name@gmail.com`\n\nFirst send a quick `hi` to `" +
-        BOT_INBOX_EMAIL +
-        "` from that Gmail, then run this command.",
-      { parse_mode: "Markdown" }
-    );
+    sendTelegramMessage(chatId, "Usage: `/register your.email@gmail.com`", { parse_mode: "Markdown" });
     return;
   }
   var email = parts[1].trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    sendTelegramMessage(chatId, "❌ That doesn't look like a valid email. Try: `/register your.name@gmail.com`", {
+    sendTelegramMessage(chatId, "❌ That doesn't look like a valid email. Try: `/register your.email@gmail.com`", {
       parse_mode: "Markdown"
     });
     return;
   }
 
-  // Already active? Just add this email to the list (multi-forwarder case).
+  // Reject if the address is already attached to a different tenant (active
+  // or pending). Same-chat re-registration is a no-op merge.
+  var conflict = findTenantByEmail(email) || findPendingTenantByEmail(email);
+  if (conflict && !sameChatId(conflict.chat_id, chatId)) {
+    sendTelegramMessage(chatId, "❌ That email is already registered to another account.");
+    return;
+  }
+
   var currentTenant = findTenantByChatId(chatId);
+  upsertPendingTenant(chatId, email, username || (currentTenant && currentTenant.name) || "");
+
   if (currentTenant && currentTenant.status === TENANT_STATUS.ACTIVE) {
-    // Don't let someone add another account's verified email.
-    var owner = findTenantByEmail(email);
-    if (owner && !sameChatId(owner.chat_id, chatId)) {
-      sendTelegramMessage(chatId, "❌ That email is already registered to another account.");
-      return;
-    }
-    upsertPendingTenant(chatId, email, username || currentTenant.name || "");
-    // upsertPendingTenant keeps status as-is for existing active rows; re-check.
     var updated = findTenantByChatId(chatId);
     sendTelegramMessage(
       chatId,
@@ -74,94 +65,22 @@ function handleRegisterCommand(chatId, username, messageText) {
         updated.emails.map((e) => "• `" + e + "`").join("\n"),
       { parse_mode: "Markdown" }
     );
+    sendSetupInstructions(chatId, [email]);
     return;
   }
 
-  // Someone else already owns this email — reject.
-  var existingActive = findTenantByEmail(email);
-  if (existingActive && !sameChatId(existingActive.chat_id, chatId)) {
-    sendTelegramMessage(chatId, "❌ That email is already registered to another account.");
-    return;
-  }
-
-  // Ownership proof: search bot inbox for a recent forward from this address.
-  sendTelegramMessage(chatId, "🔎 Looking for a forward from `" + email + "`...", { parse_mode: "Markdown" });
-  var found = findRecentForwardFromEmail(email);
-  if (!found) {
-    sendTelegramMessage(
-      chatId,
-      "⚠️ I haven't seen any mail from `" +
-        email +
-        "` in the last 2 days.\n\n" +
-        "Send a quick `hi` from that Gmail to `" +
-        BOT_INBOX_EMAIL +
-        "`, then run `/register " +
-        email +
-        "` again.",
-      { parse_mode: "Markdown" }
-    );
-    return;
-  }
-
-  // Proof of ownership established. Create pending row, provision sheet, activate.
-  upsertPendingTenant(chatId, email, username || "");
-  var activated = activatePendingTenantForEmail(email);
-  if (!activated) {
-    sendTelegramMessage(chatId, "⚠️ Activation failed — please contact the admin.");
-    return;
-  }
-  // The activation helper sends the welcome DM with sheet link. Follow up with
-  // the Gmail filter query so they can set up auto-forwarding.
-  sendFilterInstructions(chatId);
+  sendSetupInstructions(chatId);
 }
 
 /**
- * Searches the bot inbox for a recent (last 2 days) message where the
- * forwarder was `email` — either via the From: header (manual Gmail forwards
- * rewrite From:) or via the X-Forwarded-For header (Gmail filter auto-forward).
- * Returns true if any match is found.
- */
-function findRecentForwardFromEmail(email) {
-  var lc = email.toLowerCase();
-  try {
-    // Manual forward: From: rewritten to user's Gmail.
-    var threads = GmailApp.search("in:inbox from:" + lc + " newer_than:2d", 0, 20);
-    for (var i = 0; i < threads.length; i++) {
-      var msgs = threads[i].getMessages();
-      for (var j = 0; j < msgs.length; j++) {
-        var fwd = extractForwarderEmail(msgs[j]);
-        if (fwd && fwd.toLowerCase() === lc) return true;
-      }
-    }
-    // Auto-forward: Gmail doesn't expose the X-Forwarded-For header via search
-    // operators, so fall back to scanning recent inbox mail by raw headers.
-    var recent = GmailApp.search("in:inbox newer_than:2d", 0, 50);
-    for (var k = 0; k < recent.length; k++) {
-      var msgs2 = recent[k].getMessages();
-      for (var m = 0; m < msgs2.length; m++) {
-        var f2 = extractForwarderEmail(msgs2[m]);
-        if (f2 && f2.toLowerCase() === lc) return true;
-      }
-    }
-  } catch (e) {
-    console.error("[findRecentForwardFromEmail] search failed:", e.message);
-  }
-  return false;
-}
-
-/**
- * Build the Gmail filter query that auto-forwards transaction alerts to the
- * bot inbox. Pure function — extracted so it can be reused by the email and
- * the /setup command without re-deriving.
+ * Gmail filter query: `from:(<verified senders>) -(subject:OTP OR ...)`.
  *
- * Query shape: `from:(<verified senders>) -(subject:OTP OR subject:MPIN OR ...)`
- * The sender allowlist is the primary filter — only verified transaction-alert
- * addresses match. The subject exclusion (FILTER_OTP_SUBJECTS) is narrower than
- * the server-side IGNORE_SUBJECTS: it only blocks OTP / auth-code mail from
- * being auto-forwarded (those must stay in the user's inbox for security).
- * Other non-transaction noise (statements, marketing, login alerts) is dropped
- * server-side after the bot receives the mail — keeping the user-pasted query
- * short and readable.
+ * The sender allowlist is the primary filter — only verified bank
+ * transaction senders match. The subject exclusion (FILTER_OTP_SUBJECTS) is
+ * narrower than server-side IGNORE_SUBJECTS: it only blocks OTP / auth-code
+ * mail from being auto-forwarded; those must stay in the user's inbox.
+ * Other noise (statements, marketing, login alerts) is dropped server-side
+ * after the bot receives the mail, keeping the user-pasted query short.
  */
 function buildGmailFilterQuery() {
   var senders = "from:(" + TRANSACTION_SENDERS.join(" OR ") + ")";
@@ -171,39 +90,21 @@ function buildGmailFilterQuery() {
   return senders + " -(" + excludes + ")";
 }
 
-// HTML escape — covers the four characters that matter inside a <pre> block
-// or attribute value. Used by buildFilterEmailHtml.
 function _escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/**
- * Build a Gmail search URL that pre-loads the filter query. Clicking opens
- * Gmail with the query already typed into the search box; the user then hits
- * the search-dropdown's "Create filter" link and Gmail auto-populates the
- * "Has the words" field — zero copy/paste required.
- *
- * Falls back gracefully: if the URL ends up too long for the browser address
- * bar (~2000 char practical limit), the email still ships the manual paste
- * block as a backup CTA.
- */
 function buildGmailFilterPrefillUrl(query) {
   return "https://mail.google.com/mail/#search/" + encodeURIComponent(query);
 }
 
 /**
- * Resolve the published web-app URL for this script. Used to build the signed
- * "Verify forwarding address" link in the setup email.
+ * Web-app URL for the verify-forwarding click handler.
  *
  * Resolution order:
- *   1. ScriptProperty `WEBAPP_URL` — set this once after publishing the
- *      web-app deployment. Survives redeploys.
- *   2. `ScriptApp.getService().getUrl()` fallback — returns the head/dev URL
- *      which may not match the published deployment, but at least keeps the
- *      flow working in development.
- *
- * Returns null if neither is available; callers should hide the verify
- * button when null.
+ *   1. ScriptProperty `WEBAPP_URL` (set after publishing; survives redeploys).
+ *   2. ScriptApp.getService().getUrl() fallback (head/dev URL).
+ * Returns null if neither is available; callers must hide the verify button.
  */
 function getWebAppUrl() {
   var props = PropertiesService.getScriptProperties();
@@ -217,22 +118,14 @@ function getWebAppUrl() {
 }
 
 /**
- * Build the HTML body for the filter-setup email. Pure — accepts the query,
- * the bot inbox address, demo/guide URLs, and the signed verify URL
- * (or null if the web-app deployment isn't published yet — in which case the
- * verify button is omitted and a manual instruction is shown instead).
+ * Build the auto-forwarding setup email body. Steps 1+2+3 since they all
+ * serve the same goal (auto-forward future bank emails) — manually
+ * forwarding one email needs none of these.
  *
- * Layout:
- *   - Desktop-only notice up top (Gmail forwarding setup is desktop-only).
- *   - Step 1: add forwarding address (link to Gmail Forwarding settings).
- *   - Step 2: verify the forwarding address (signed click-button).
- *   - Step 3: create the Gmail filter (existing prefill CTA).
- *   - Fallback `paste-manually` block for the filter step.
- *   - Demo + guide CTAs.
- *
- * All external links open in a new tab so the email survives the click.
+ * `verifyUrl` may be null if the web-app deployment isn't published; in
+ * that case we render a manual-instruction fallback.
  */
-function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl) {
+function buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl) {
   var q = _escHtml(query);
   var bot = _escHtml(botInboxEmail);
   var demo = _escHtml(demoUrl);
@@ -240,19 +133,21 @@ function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl
   var prefillUrl = _escHtml(buildGmailFilterPrefillUrl(query));
   var verify = verifyUrl ? _escHtml(verifyUrl) : null;
   var verifyBlock = verify
-    ? '<p style="margin:0 0 8px">Once you click <b>Next</b>, Gmail sends a confirmation code to our inbox. Click below — we\'ll auto-confirm it for you (takes ~2 seconds).</p>' +
+    ? '<p style="margin:0 0 8px">After clicking <b>Next</b> in step 1, Gmail emails a confirmation code to our inbox. Tap below — we\'ll auto-confirm it.</p>' +
       '<p style="margin:0 0 4px">' +
       '<a href="' +
       verify +
       '" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;background:#137333;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">\u2705 Verify forwarding address</a>' +
       "</p>" +
-      '<p style="margin:0;color:#666;font-size:13px">If you click too early, just wait ~30 seconds and click again — the link is reusable for 7 days.</p>'
+      '<p style="margin:0;color:#666;font-size:13px">If you tap too early, wait ~30 seconds and tap again — the link is reusable for 7 days.</p>'
     : "<p style=\"margin:0;color:#666;font-size:14px\">Wait for the confirmation email in our inbox; we'll handle the rest. (Verify-button auto-link unavailable — contact support if this step doesn't complete within a minute.)</p>";
 
   return (
     '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.5;color:#222;max-width:640px">' +
-    '<h2 style="margin:0 0 8px">Set up auto-forwarding (~1 min)</h2>' +
-    "<p>Skip manual forwarding with one Gmail filter. It only matches verified bank transaction alerts &mdash; no OTPs, statements, or marketing.</p>" +
+    '<h2 style="margin:0 0 8px">Auto-forward bank emails (~1 min)</h2>' +
+    "<p>Skip manual forwarding. One Gmail filter routes only verified bank transaction alerts to <code>" +
+    bot +
+    "</code> — no OTPs, statements, or marketing.</p>" +
     '<div style="background:#fff8e1;border-left:4px solid #f9ab00;padding:10px 14px;border-radius:4px;margin:16px 0;font-size:14px">' +
     "<b>\uD83D\uDDA5\uFE0F Open this email on a desktop browser.</b> Gmail's forwarding settings aren't available in the mobile app or mobile web." +
     "</div>" +
@@ -268,14 +163,13 @@ function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl
     '<h3 style="margin:32px 0 8px">Step 3 &middot; Create the filter</h3>' +
     '<p style="margin:0 0 12px">Click below — Gmail opens with the filter query pre-loaded. From the search dropdown, click <b>Create filter</b>, tick <b>Forward it to</b> &rarr; <code>' +
     bot +
-    "</code> &rarr; <b>Create filter</b>. Done.</p>" +
+    "</code> &rarr; <b>Create filter</b>.</p>" +
     '<p style="margin:0 0 20px">' +
     '<a href="' +
     prefillUrl +
     '" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">\uD83E\uDE84 Open Gmail with filter pre-filled</a>' +
     "</p>" +
     '<h4 style="margin:28px 0 8px;color:#666;font-size:14px;font-weight:600">Or paste the filter manually</h4>' +
-    '<p style="margin:0 0 8px;color:#555;font-size:14px">If the button above doesn\'t work, copy this query first:</p>' +
     '<pre style="background:#f4f4f4;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:13px;user-select:all">' +
     q +
     "</pre>" +
@@ -294,58 +188,64 @@ function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl
   );
 }
 
+// Source-compat alias for the previous function name.
+function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl) {
+  return buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl);
+}
+
 /**
- * Send the filter setup email to one or more tenant email addresses, then
- * send a short Telegram confirmation. Used after activation and from /setup.
+ * Email setup instructions to the tenant's address(es) and ack on Telegram.
+ *
+ * @param chatId       Telegram chat id of the requester.
+ * @param onlyEmails   Optional subset of emails to send to (e.g. just the
+ *                     newly-added forwarder when extending an active tenant).
  */
-function sendFilterInstructions(chatId) {
+function sendSetupInstructions(chatId, onlyEmails) {
   var tenant = findTenantByChatId(chatId);
   if (!tenant || tenant.emails.length === 0) {
-    sendTelegramMessage(chatId, "⚠️ No registered email yet. Send `/register your.name@gmail.com` first.", {
+    sendTelegramMessage(chatId, "⚠️ No registered email yet. Send `/register your.email@gmail.com` first.", {
       parse_mode: "Markdown"
     });
     return;
   }
+  var recipients = onlyEmails && onlyEmails.length ? onlyEmails : tenant.emails;
   var query = buildGmailFilterQuery();
   var webAppUrl = getWebAppUrl();
   var verifyUrl = webAppUrl ? buildVerifyForwardingUrl(webAppUrl, chatId) : null;
-  var html = buildFilterEmailHtml(query, BOT_INBOX_EMAIL, DEMO_VIDEO_URL, SETUP_GUIDE_URL, verifyUrl);
-  var to = tenant.emails.join(",");
+  var html = buildSetupEmailHtml(query, BOT_INBOX_EMAIL, DEMO_VIDEO_URL, SETUP_GUIDE_URL, verifyUrl);
   try {
     MailApp.sendEmail({
-      to: to,
+      to: recipients.join(","),
       subject: "Set up Dus Aane Bot — auto-forward bank alerts",
       htmlBody: html
     });
   } catch (e) {
-    console.error("[sendFilterInstructions] mail send failed:", e.message);
-    sendTelegramMessage(chatId, "⚠️ Couldn't email setup instructions right now. Try `/setup` again in a minute.", {
-      parse_mode: "Markdown"
-    });
+    console.error("[sendSetupInstructions] mail send failed:", e.message);
+    sendTelegramMessage(
+      chatId,
+      "⚠️ Couldn't email setup instructions right now. Try again from `/account` in a minute.",
+      { parse_mode: "Markdown" }
+    );
     return;
   }
-  var emailList = tenant.emails.map((e) => "`" + e + "`").join(", ");
+  var emailList = recipients.map((e) => "`" + e + "`").join(", ");
   sendTelegramMessage(
     chatId,
-    "📬 Setup instructions emailed to " +
+    "📬 Auto-forwarding setup emailed to " +
       emailList +
-      ".\n\nCheck your inbox (and spam folder, just in case). It includes the Gmail filter query, step-by-step instructions, and a demo video.\n\nResend any time with `/setup`.",
+      ".\n\n" +
+      "_You can start right now_ by manually forwarding any bank email to `" +
+      BOT_INBOX_EMAIL +
+      "`. The email I sent has the steps to skip manual forwarding (~1 min on desktop). Resend any time from `/account`.",
     { parse_mode: "Markdown" }
   );
 }
 
 /**
- * /setup — re-send the filter setup email. Useful if the user lost the
- * original or didn't receive it.
+ * /account — show tenant status + a single inline button to resend setup
+ * instructions. Replaces the older /myinfo / /setup / /filter trio.
  */
-function handleSetupCommand(chatId) {
-  sendFilterInstructions(chatId);
-}
-
-/**
- * /myinfo — show this chat's tenant status.
- */
-function handleMyInfoCommand(chatId) {
+function handleAccountCommand(chatId) {
   var tenant = findTenantByChatId(chatId);
   if (!tenant) {
     sendTelegramMessage(chatId, "No account found for this chat. Use `/start` to onboard.", {
@@ -364,13 +264,69 @@ function handleMyInfoCommand(chatId) {
   } else {
     lines.push("Sheet: _not provisioned yet_");
   }
-  sendTelegramMessage(chatId, lines.join("\n"), { parse_mode: "Markdown" });
+
+  var opts = { parse_mode: "Markdown" };
+  if (tenant.emails.length > 0) {
+    opts.reply_markup = {
+      inline_keyboard: [[{ text: "📬 Resend auto-forwarding setup", callback_data: "resend_setup" }]]
+    };
+  }
+  sendTelegramMessage(chatId, lines.join("\n"), opts);
+}
+
+/** Callback handler for the "Resend auto-forwarding setup" button on /account. */
+function handleResendSetupCallback(chatId, callbackQueryId) {
+  try {
+    answerCallbackQuery(callbackQueryId, "📬 Sending...", false);
+  } catch (_) {}
+  sendSetupInstructions(chatId);
 }
 
 /**
- * Called when extractTransactions sees a forward from an email that matches a
- * pending tenant. Provisions a sheet, activates the tenant, and DMs them a
- * welcome message. Returns the activated tenant or null on failure.
+ * /ownsheet — initiate Drive ownership transfer of the tenant's sheet to
+ * their primary registered email. Drive notifies the user; until they
+ * accept, admin remains owner (sheet still works because user is editor).
+ */
+function handleOwnSheetCommand(chatId) {
+  var tenant = findTenantByChatId(chatId);
+  if (!tenant || tenant.status !== TENANT_STATUS.ACTIVE) {
+    sendTelegramMessage(
+      chatId,
+      "⏳ Your sheet hasn't been provisioned yet. Forward a bank email to finish setup first.",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+  if (!tenant.sheet_id || tenant.emails.length === 0) {
+    sendTelegramMessage(chatId, "⚠️ I don't have a sheet on file for you. Please contact the admin.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  var primary = tenant.emails[0];
+  var ok = adminTransferSheetOwnership(tenant.sheet_id, primary);
+  if (!ok) {
+    sendTelegramMessage(
+      chatId,
+      "⚠️ Drive refused the ownership transfer. Try again in a minute, or contact the admin if it keeps failing.",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+  sendTelegramMessage(
+    chatId,
+    "📬 Drive has emailed `" +
+      primary +
+      "` an ownership-transfer request. Accept it from your inbox to fully own the sheet.\n\n" +
+      "_I'll stay on as editor afterwards so I can keep adding rows; you can revoke that anytime from Sheet → Share._",
+    { parse_mode: "Markdown" }
+  );
+}
+
+/**
+ * Called when a forward arrives from a pending tenant's email. Provisions
+ * the sheet, activates the tenant, and DMs them a welcome message.
+ * Returns the activated tenant or null on failure.
  */
 function activatePendingTenantForEmail(email) {
   var pending = findPendingTenantByEmail(email);
@@ -391,22 +347,18 @@ function activatePendingTenantForEmail(email) {
     return null;
   }
 
-  var ok = activateTenant(pending.chat_id, sheetId);
-  if (!ok) return null;
+  if (!activateTenant(pending.chat_id, sheetId)) return null;
 
   var activated = findTenantByChatId(pending.chat_id);
   var url = sheetUrl(sheetId);
   try {
     sendTelegramMessage(
       pending.chat_id,
-      "🎉 *You're all set!*\n\n" +
+      "🎉 *Your first transaction is in!*\n\n" +
         "I've created a Google Sheet and shared it with `" +
         email +
-        "` as editor. *This sheet is yours* — open, edit or export anytime. It's the *entire* data I use, fully under your control.\n\n" +
-        "📬 *Check your Gmail* — Drive has sent an ownership-transfer request. Accept it to fully own the sheet; until then I remain the owner. (I'll stay on as editor afterwards so I can keep adding rows; you can revoke that anytime.)\n\n" +
-        "*How it works:* forward any bank transaction email to `" +
-        BOT_INBOX_EMAIL +
-        "` and it becomes a row here. I'll follow up with a one-time Gmail filter so this happens automatically.",
+        "` as editor. *This sheet is yours* — open, edit or export anytime. It's the entire data I use.\n\n" +
+        "_Want to fully own the sheet?_ Run `/ownsheet` and I'll initiate a Drive ownership transfer.",
       {
         parse_mode: "Markdown",
         reply_markup: { inline_keyboard: [[{ text: "📋 Open your sheet", url: url }]] }
@@ -418,17 +370,15 @@ function activatePendingTenantForEmail(email) {
   return activated;
 }
 
-/**
- * Gate non-onboarding commands on an active tenant for this chat.
- * Returns true if the command should be allowed, false if already rejected.
- */
 function gateTenantForCommand(chatId) {
   var tenant = findTenantByChatId(chatId);
   if (tenant && tenant.status === TENANT_STATUS.ACTIVE) return true;
   sendTelegramMessage(
     chatId,
     tenant && tenant.status === TENANT_STATUS.PENDING
-      ? "⏳ Your setup is still pending. Forward a bank email from your registered address to finish setup."
+      ? "⏳ Your setup isn't active yet. Forward any bank email to `" +
+          BOT_INBOX_EMAIL +
+          "` to activate, or run `/account` to resend setup instructions."
       : "👋 I don't know this chat yet. Send `/start` to onboard.",
     { parse_mode: "Markdown" }
   );

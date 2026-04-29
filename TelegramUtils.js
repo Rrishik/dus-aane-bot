@@ -20,10 +20,10 @@ function setTelegramCommands() {
   // add an argument, so listing them here just produces usage errors.
   var commands = [
     { command: "/start", description: "Onboard / show welcome" },
-    { command: "/myinfo", description: "Show your account status" },
+    { command: "/account", description: "Account & settings" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
-    { command: "/setup", description: "Email auto-forward setup instructions" },
+    { command: "/ownsheet", description: "Transfer Drive ownership of your sheet" },
     { command: "/help", description: "Show available commands" }
   ];
   var payload = {

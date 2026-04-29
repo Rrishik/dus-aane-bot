@@ -75,21 +75,19 @@ function handleMerchantInput(chatId, userId, messageText) {
   return true;
 }
 
-// Method to handle messages sent to the Telegram bot.
 function handleMessage(update) {
   if (update.message) {
     var chatId = update.message.chat.id;
     var messageText = update.message.text;
     var username = update.message.from.first_name || update.message.from.username;
 
-    if (!messageText) return; // Ignore non-text messages (photos, joins, etc.)
+    if (!messageText) return; // photos, joins, etc.
 
-    // Handle commands
     if (messageText.startsWith("/")) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();
 
       // Onboarding commands always allowed (they're how tenants are created).
-      var ONBOARDING = ["/start", "/register", "/myinfo"];
+      var ONBOARDING = ["/start", "/register", "/account"];
       if (ONBOARDING.indexOf(command) === -1) {
         if (!gateTenantForCommand(chatId)) return;
       }
@@ -101,11 +99,11 @@ function handleMessage(update) {
         case "/register":
           handleRegisterCommand(chatId, username, messageText);
           break;
-        case "/myinfo":
-          handleMyInfoCommand(chatId);
+        case "/account":
+          handleAccountCommand(chatId);
           break;
-        case "/setup":
-          handleSetupCommand(chatId);
+        case "/ownsheet":
+          handleOwnSheetCommand(chatId);
           break;
         case "/help":
           handleHelpCommand(chatId, username);
@@ -145,7 +143,9 @@ function handleHelpCommand(chatId, username) {
     `   _e.g. /ask how much on food last month?_\n` +
     `• /stats — analytics dashboard\n` +
     `• /recent — recent transactions _(e.g. /recent 10)_\n` +
-    `• /setup — email auto-forward setup instructions\n` +
+    `• /setup — re-email forwarding setup instructions\n` +
+    `• /filter — set up the auto-forward Gmail filter\n` +
+    `• /ownsheet — transfer Drive ownership of your sheet to you\n` +
     `• /myinfo — your account\n` +
     `• /help — this message`;
 
@@ -174,22 +174,27 @@ function handleCallbackQuery(update) {
     var chatId = update.callback_query.message.chat.id;
     var telegramMessageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
-    var data = update.callback_query.data; // Example: "split_abc123", "partner_abc123", "personal_abc123"
+    var data = update.callback_query.data;
 
     if (!data) {
       answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
       return;
     }
 
-    // Parse action and message ID from callback data
+    // Callback data format: "<action>_<payload>" (e.g. "split_abc123", "stats_monthly").
     var separatorIndex = data.indexOf("_");
     if (separatorIndex < 0) {
       answerCallbackQuery(callbackQueryId, "❌ Error: Invalid request", false);
       return;
     }
 
-    var action = data.substring(0, separatorIndex); // "personal", "split", "partner", "editcat", "cat", "del", "setmerch", "stats", etc.
+    var action = data.substring(0, separatorIndex);
     var callbackPayload = data.substring(separatorIndex + 1);
+
+    // Resend auto-forwarding setup email (button on /account).
+    if (action === "resend" && callbackPayload === "setup") {
+      return handleResendSetupCallback(chatId, callbackQueryId);
+    }
 
     // Handle stats callbacks: stats_monthly, stats_trends, stats_whoowes
     if (action === "stats") {
