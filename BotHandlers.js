@@ -128,7 +128,8 @@ function handleMessage(update) {
     else if (messageText === " Recent Transactions") {
       showRecentTransactions(chatId, "/recent");
     } else {
-      // Pending merchant-name reply (from Set Merchant or Edit Merchant flow).
+      // Pending /register email prompt takes priority over merchant input.
+      if (handleRegisterEmailReply(chatId, username, messageText)) return;
       var userId = update.message.from.id;
       if (handleMerchantInput(chatId, userId, messageText)) return;
     }

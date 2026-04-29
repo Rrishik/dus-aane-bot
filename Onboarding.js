@@ -26,17 +26,41 @@ function handleStartCommand(chatId, username) {
 }
 
 /**
- * /register <addr> — claim an email and email auto-forwarding instructions
- * to it. No proof-of-ownership step: the email itself is the proof, and
- * activation is gated on the first valid forwarded transaction.
+ * /register [<addr>] — claim an email and email auto-forwarding instructions
+ * to it. If invoked without an address, stash a pending-input flag so the
+ * user's next plain message is treated as the email. No proof-of-ownership
+ * step: the email itself is the proof, and activation is gated on the first
+ * valid forwarded transaction.
  */
 function handleRegisterCommand(chatId, username, messageText) {
   var parts = messageText.split(/\s+/);
   if (parts.length < 2) {
-    sendTelegramMessage(chatId, "Usage: `/register your.email@gmail.com`", { parse_mode: "Markdown" });
+    PropertiesService.getScriptProperties().setProperty("pending_register_" + chatId, "1");
+    sendTelegramMessage(
+      chatId,
+      "📬 What's the Gmail address you'd like to forward bank emails from?\n\n_Reply with just the address, or send_ `/register your.email@gmail.com`.",
+      { parse_mode: "Markdown" }
+    );
     return;
   }
-  var email = parts[1].trim().toLowerCase();
+  registerEmailForChat(chatId, username, parts[1]);
+}
+
+/**
+ * Consume a plain-text reply when the user is mid-/register flow.
+ * Returns true if the message was consumed.
+ */
+function handleRegisterEmailReply(chatId, username, messageText) {
+  var props = PropertiesService.getScriptProperties();
+  var key = "pending_register_" + chatId;
+  if (!props.getProperty(key)) return false;
+  props.deleteProperty(key);
+  registerEmailForChat(chatId, username, (messageText || "").trim());
+  return true;
+}
+
+function registerEmailForChat(chatId, username, rawEmail) {
+  var email = (rawEmail || "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     sendTelegramMessage(chatId, "❌ That doesn't look like a valid email. Try: `/register your.email@gmail.com`", {
       parse_mode: "Markdown"
