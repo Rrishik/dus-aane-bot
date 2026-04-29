@@ -1,3 +1,20 @@
+// HTTP GET endpoint for the script's web app. Currently used only for the
+// forwarding-address verify click-link in the setup email. Anything else
+// returns a generic 200 to keep curious crawlers quiet.
+function doGet(e) {
+  try {
+    var params = (e && e.parameter) || {};
+    if (params.action === "verify_forwarding") {
+      return HtmlService.createHtmlOutput(handleVerifyForwardingClick(params)).setXFrameOptionsMode(
+        HtmlService.XFrameOptionsMode.ALLOWALL
+      );
+    }
+  } catch (err) {
+    console.error("Error in doGet:", err.message, err.stack);
+  }
+  return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+}
+
 // Webhook endpoint for the Telegram bot
 // Process most commands inline for instant responses; defer /backfill to async trigger
 function doPost(e) {

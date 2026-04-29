@@ -192,26 +192,81 @@ function buildGmailFilterPrefillUrl(query) {
 }
 
 /**
- * Build the HTML body for the filter-setup email. Pure — accepts the query
- * and the bot inbox address, returns a self-contained HTML string. Pulled
- * out for unit-testability (raw HTML string assertions on escaping etc.).
+ * Resolve the published web-app URL for this script. Used to build the signed
+ * "Verify forwarding address" link in the setup email.
  *
- * UX layout choice: query block comes BEFORE the CTA so the user reads the
- * artifact they need to copy first; the link is the last action in the visual
- * flow. All external links open in a new tab so the email tab survives.
+ * Resolution order:
+ *   1. ScriptProperty `WEBAPP_URL` — set this once after publishing the
+ *      web-app deployment. Survives redeploys.
+ *   2. `ScriptApp.getService().getUrl()` fallback — returns the head/dev URL
+ *      which may not match the published deployment, but at least keeps the
+ *      flow working in development.
+ *
+ * Returns null if neither is available; callers should hide the verify
+ * button when null.
  */
-function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl) {
+function getWebAppUrl() {
+  var props = PropertiesService.getScriptProperties();
+  var stored = props.getProperty("WEBAPP_URL");
+  if (stored) return stored;
+  try {
+    return ScriptApp.getService().getUrl();
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Build the HTML body for the filter-setup email. Pure — accepts the query,
+ * the bot inbox address, demo/guide URLs, and the signed verify URL
+ * (or null if the web-app deployment isn't published yet — in which case the
+ * verify button is omitted and a manual instruction is shown instead).
+ *
+ * Layout:
+ *   - Desktop-only notice up top (Gmail forwarding setup is desktop-only).
+ *   - Step 1: add forwarding address (link to Gmail Forwarding settings).
+ *   - Step 2: verify the forwarding address (signed click-button).
+ *   - Step 3: create the Gmail filter (existing prefill CTA).
+ *   - Fallback `paste-manually` block for the filter step.
+ *   - Demo + guide CTAs.
+ *
+ * All external links open in a new tab so the email survives the click.
+ */
+function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl) {
   var q = _escHtml(query);
   var bot = _escHtml(botInboxEmail);
   var demo = _escHtml(demoUrl);
   var guide = _escHtml(guideUrl);
   var prefillUrl = _escHtml(buildGmailFilterPrefillUrl(query));
+  var verify = verifyUrl ? _escHtml(verifyUrl) : null;
+  var verifyBlock = verify
+    ? '<p style="margin:0 0 8px">Once you click <b>Next</b>, Gmail sends a confirmation code to our inbox. Click below — we\'ll auto-confirm it for you (takes ~2 seconds).</p>' +
+      '<p style="margin:0 0 4px">' +
+      '<a href="' +
+      verify +
+      '" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;background:#137333;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">\u2705 Verify forwarding address</a>' +
+      "</p>" +
+      '<p style="margin:0;color:#666;font-size:13px">If you click too early, just wait ~30 seconds and click again — the link is reusable for 7 days.</p>'
+    : "<p style=\"margin:0;color:#666;font-size:14px\">Wait for the confirmation email in our inbox; we'll handle the rest. (Verify-button auto-link unavailable — contact support if this step doesn't complete within a minute.)</p>";
+
   return (
     '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.5;color:#222;max-width:640px">' +
     '<h2 style="margin:0 0 8px">Set up auto-forwarding (~1 min)</h2>' +
     "<p>Skip manual forwarding with one Gmail filter. It only matches verified bank transaction alerts &mdash; no OTPs, statements, or marketing.</p>" +
-    '<h3 style="margin:24px 0 8px">Quick path (recommended)</h3>' +
-    '<p style="margin:0 0 12px">Click below &mdash; Gmail opens with the query pre-loaded. From the search dropdown, click <b>Create filter</b>, then tick <b>Forward it to</b> &rarr; <code>' +
+    '<div style="background:#fff8e1;border-left:4px solid #f9ab00;padding:10px 14px;border-radius:4px;margin:16px 0;font-size:14px">' +
+    "<b>\uD83D\uDDA5\uFE0F Open this email on a desktop browser.</b> Gmail's forwarding settings aren't available in the mobile app or mobile web." +
+    "</div>" +
+    '<h3 style="margin:24px 0 8px">Step 1 &middot; Add the forwarding address</h3>' +
+    '<p style="margin:0 0 8px">Click below, then in the Gmail tab: <b>Add a forwarding address</b> &rarr; paste <code>' +
+    bot +
+    "</code> &rarr; <b>Next</b> &rarr; <b>Proceed</b>.</p>" +
+    '<p style="margin:0 0 20px">' +
+    '<a href="https://mail.google.com/mail/#settings/fwdandpop" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">\uD83D\uDCE7 Open Gmail forwarding settings</a>' +
+    "</p>" +
+    '<h3 style="margin:28px 0 8px">Step 2 &middot; Verify the forwarding address</h3>' +
+    verifyBlock +
+    '<h3 style="margin:32px 0 8px">Step 3 &middot; Create the filter</h3>' +
+    '<p style="margin:0 0 12px">Click below — Gmail opens with the filter query pre-loaded. From the search dropdown, click <b>Create filter</b>, tick <b>Forward it to</b> &rarr; <code>' +
     bot +
     "</code> &rarr; <b>Create filter</b>. Done.</p>" +
     '<p style="margin:0 0 20px">' +
@@ -219,7 +274,7 @@ function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl) {
     prefillUrl +
     '" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">\uD83E\uDE84 Open Gmail with filter pre-filled</a>' +
     "</p>" +
-    '<h3 style="margin:28px 0 8px;color:#666;font-size:15px">Or paste manually</h3>' +
+    '<h4 style="margin:28px 0 8px;color:#666;font-size:14px;font-weight:600">Or paste the filter manually</h4>' +
     '<p style="margin:0 0 8px;color:#555;font-size:14px">If the button above doesn\'t work, copy this query first:</p>' +
     '<pre style="background:#f4f4f4;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-word;font-size:13px;user-select:all">' +
     q +
@@ -227,7 +282,7 @@ function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl) {
     '<p style="margin:8px 0 0;color:#555;font-size:14px">Then <a href="https://mail.google.com/mail/#settings/filters" target="_blank" rel="noopener" style="color:#1a73e8">open filter settings</a> &rarr; <b>Create a new filter</b> &rarr; paste into <b>Has the words</b> &rarr; <b>Create filter</b> &rarr; tick <b>Forward it to</b> <code>' +
     bot +
     "</code> &rarr; <b>Create filter</b>.</p>" +
-    '<p style="margin-top:28px">' +
+    '<p style="margin-top:32px">' +
     '<a href="' +
     demo +
     '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px;margin-right:8px">Watch 60-sec demo</a>' +
@@ -235,8 +290,6 @@ function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl) {
     guide +
     '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px">Setup guide (with screenshots)</a>' +
     "</p>" +
-    '<hr style="margin:28px 0;border:0;border-top:1px solid #eee">' +
-    '<p style="font-size:13px;color:#666">If a forwarding-confirmation prompt appears in your inbox afterwards, click the link inside &mdash; Gmail requires this once per destination address.</p>' +
     "</div>"
   );
 }
@@ -254,7 +307,9 @@ function sendFilterInstructions(chatId) {
     return;
   }
   var query = buildGmailFilterQuery();
-  var html = buildFilterEmailHtml(query, BOT_INBOX_EMAIL, DEMO_VIDEO_URL, SETUP_GUIDE_URL);
+  var webAppUrl = getWebAppUrl();
+  var verifyUrl = webAppUrl ? buildVerifyForwardingUrl(webAppUrl, chatId) : null;
+  var html = buildFilterEmailHtml(query, BOT_INBOX_EMAIL, DEMO_VIDEO_URL, SETUP_GUIDE_URL, verifyUrl);
   var to = tenant.emails.join(",");
   try {
     MailApp.sendEmail({
