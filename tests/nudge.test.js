@@ -102,12 +102,13 @@ describe("shouldNudge — caps and status gates", () => {
     expect(shouldNudge(t, NOW, NUDGE_CONFIG)).toBeNull();
   });
 
-  it("does not nudge tenants in pending status", () => {
+  it("nudges tenants in pending status (registered but never forwarded)", () => {
     var t = tenant({
       status: "pending",
       created_at: new Date(NOW.getTime() - 30 * DAY_MS).toISOString()
     });
-    expect(shouldNudge(t, NOW, NUDGE_CONFIG)).toBeNull();
+    var d = shouldNudge(t, NOW, NUDGE_CONFIG);
+    expect(d).toEqual({ kind: "pending", daysSilent: 30 });
   });
 
   it("does not nudge tenants in disabled status", () => {
