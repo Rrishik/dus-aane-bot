@@ -13,6 +13,7 @@ var propsStore;
 var fetchedUrls;
 var sentTelegramMessages;
 var fakeThreads;
+var fakeTenants;
 
 function makeMessage(subject, body) {
   return {
@@ -38,6 +39,7 @@ beforeAll(() => {
   fetchedUrls = [];
   sentTelegramMessages = [];
   fakeThreads = [];
+  fakeTenants = {};
 
   ({
     signVerifyToken,
@@ -103,6 +105,7 @@ beforeAll(() => {
         sentTelegramMessages.push({ chatId: chatId, msg: msg });
         return "{}";
       },
+      findTenantByChatId: (chatId) => fakeTenants[String(chatId)] || null,
       _escHtml: (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     }
   ));
@@ -248,6 +251,55 @@ describe("findPendingForwardingConfirmations", () => {
     var result = findPendingForwardingConfirmations();
     expect(result.urls).toEqual([]);
   });
+
+  it("filters by tenantEmails — only returns mails mentioning an allow-listed address", () => {
+    fakeThreads.length = 0;
+    fakeThreads.push(
+      makeThread([
+        makeMessage(
+          "(Gmail Forwarding Confirmation - Receive Mail from ramenarishik@gmail.com)",
+          "ramenarishik@gmail.com has requested ... https://mail.google.com/mail/vf-OLD"
+        )
+      ]),
+      makeThread([
+        makeMessage(
+          "(Gmail Forwarding Confirmation - Receive Mail from rishikramena@gmail.com)",
+          "rishikramena@gmail.com has requested ... https://mail.google.com/mail/vf-NEW"
+        )
+      ])
+    );
+    var result = findPendingForwardingConfirmations(["rishikramena@gmail.com"]);
+    expect(result.urls).toEqual(["https://mail.google.com/mail/vf-NEW"]);
+    expect(result.addresses).toEqual(["rishikramena@gmail.com"]);
+  });
+
+  it("returns nothing when no thread mentions the tenant's email", () => {
+    fakeThreads.length = 0;
+    fakeThreads.push(
+      makeThread([
+        makeMessage(
+          "(Gmail Forwarding Confirmation - Receive Mail from someone-else@gmail.com)",
+          "someone-else@gmail.com has requested ... https://mail.google.com/mail/vf-XYZ"
+        )
+      ])
+    );
+    var result = findPendingForwardingConfirmations(["nope@gmail.com"]);
+    expect(result.urls).toEqual([]);
+  });
+
+  it("matches case-insensitively against the body", () => {
+    fakeThreads.length = 0;
+    fakeThreads.push(
+      makeThread([
+        makeMessage(
+          "Gmail Forwarding Confirmation",
+          "RishikRamena@Gmail.com has requested ... https://mail.google.com/mail/vf-mix"
+        )
+      ])
+    );
+    var result = findPendingForwardingConfirmations(["rishikramena@gmail.com"]);
+    expect(result.urls).toEqual(["https://mail.google.com/mail/vf-mix"]);
+  });
 });
 
 describe("handleVerifyForwardingClick", () => {
@@ -286,5 +338,37 @@ describe("handleVerifyForwardingClick", () => {
     var html = handleVerifyForwardingClick({ t: "888", iat: String(iat), sig: sig });
     expect(html).toContain("No pending confirmation found");
     expect(html).toContain("bot@gmail.com");
+  });
+
+  it("uses the tenant's registered emails to scope the inbox scan", () => {
+    fakeThreads.length = 0;
+    sentTelegramMessages.length = 0;
+    fakeTenants["555"] = {
+      chat_id: "555",
+      emails: ["rishikramena@gmail.com"],
+      status: "pending"
+    };
+    fakeThreads.push(
+      // Older mail for a different tenant — must NOT be returned.
+      makeThread([
+        makeMessage(
+          "(Gmail Forwarding Confirmation - Receive Mail from ramenarishik@gmail.com)",
+          "ramenarishik@gmail.com has requested ... https://mail.google.com/mail/vf-OLD"
+        )
+      ]),
+      // Recent mail for this tenant — should win.
+      makeThread([
+        makeMessage(
+          "(Gmail Forwarding Confirmation - Receive Mail from rishikramena@gmail.com)",
+          "rishikramena@gmail.com has requested ... https://mail.google.com/mail/vf-NEW"
+        )
+      ])
+    );
+    var iat = Date.now();
+    var sig = signVerifyToken("555", iat);
+    var html = handleVerifyForwardingClick({ t: "555", iat: String(iat), sig: sig });
+    expect(html).toContain("https://mail.google.com/mail/vf-NEW");
+    expect(html).not.toContain("vf-OLD");
+    expect(html).toContain("rishikramena@gmail.com");
   });
 });

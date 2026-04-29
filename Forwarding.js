@@ -137,6 +137,13 @@ function extractForwardingConfirmUrl(body) {
  *
  *   { urls: string[], addresses: string[] }
  *
+ * If `tenantEmails` is a non-empty array of gmail addresses, only confirmation
+ * mails whose subject or body mentions one of those addresses are returned.
+ * The bot inbox receives confirmations for many tenants, so without this
+ * filter we'd hand back the wrong tenant's pending URL (e.g. an old
+ * `ramenarishik@gmail.com` request when the user is verifying
+ * `rishikramena@gmail.com`).
+ *
  * NOTE: We deliberately do NOT fetch the vf URL server-side. Google's confirm
  * page requires a button click — a plain GET reaches the page but doesn't
  * complete the flow (forwarding stays in 'pending' state). The verify-click
@@ -147,7 +154,7 @@ function extractForwardingConfirmUrl(body) {
  * if the gmail.modify scope isn't yet authorized this throws a warn and the
  * verify flow continues — the URL is still returned to the caller.
  */
-function findPendingForwardingConfirmations() {
+function findPendingForwardingConfirmations(tenantEmails) {
   // Search by sender + recency only. The subject filter was too narrow
   // (real subjects look like '(Gmail Forwarding Confirmation - Receive
   // Mail from <user>@gmail.com)\u2019 with a leading paren that confuses
@@ -158,25 +165,55 @@ function findPendingForwardingConfirmations() {
   var threads = GmailApp.search(query, 0, 25);
   var urls = [];
   var addresses = [];
+  // Normalize allow-list once. Empty/missing = accept all (back-compat).
+  var allow = [];
+  if (tenantEmails && tenantEmails.length) {
+    for (var a = 0; a < tenantEmails.length; a++) {
+      var e = String(tenantEmails[a] || "")
+        .trim()
+        .toLowerCase();
+      if (e) allow.push(e);
+    }
+  }
 
   for (var i = 0; i < threads.length; i++) {
     var msgs = threads[i].getMessages();
+    var matchedAny = false;
     for (var j = 0; j < msgs.length; j++) {
       var msg = msgs[j];
       var subject = msg.getSubject() || "";
-      var addrMatch = subject.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
       var body = msg.getPlainBody() || msg.getBody() || "";
       var url = extractForwardingConfirmUrl(body);
       if (!url) continue;
+      // Tenant filter: subject usually contains the requester's address
+      // ("... Receive Mail from foo@gmail.com"), and the body always does
+      // ("foo@gmail.com has requested ..."). Match against either.
+      if (allow.length > 0) {
+        var haystack = (subject + "\n" + body).toLowerCase();
+        var hit = false;
+        for (var k = 0; k < allow.length; k++) {
+          if (haystack.indexOf(allow[k]) !== -1) {
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) continue;
+      }
+      var addrMatch = subject.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/);
       urls.push(url);
       if (addrMatch) addresses.push(addrMatch[0]);
+      matchedAny = true;
     }
-    try {
-      threads[i].markRead();
-    } catch (e) {
-      // gmail.modify not yet authorized — non-fatal, the URL was already
-      // captured. Log so it's visible in the Executions panel.
-      console.warn("[findPendingForwardingConfirmations] markRead failed: " + e.message);
+    // Only mark threads we actually consumed. Leaves another tenant's
+    // pending confirmation unread for their own /setup click.
+    if (matchedAny) {
+      try {
+        threads[i].markRead();
+      } catch (e) {
+        // gmail.modify not yet authorized — non-fatal, the URL was already
+        // captured. Log so it's visible in the Executions panel.
+        console.warn("[findPendingForwardingConfirmations] markRead failed: " + e.message);
+      }
     }
   }
   return { urls: urls, addresses: addresses };
@@ -200,13 +237,30 @@ function handleVerifyForwardingClick(params) {
     });
   }
   try {
-    var result = findPendingForwardingConfirmations();
+    // Scope the inbox scan to this tenant's registered addresses so an old,
+    // unread confirmation mail from a different tenant (sharing the bot
+    // inbox) can't be returned by mistake. If the tenant isn't registered
+    // or has no emails on file, fall back to the unfiltered scan — the
+    // user is mid-onboarding and any vf URL that arrived after they hit
+    // /setup is overwhelmingly likely to be theirs.
+    var tenantEmails = null;
+    try {
+      if (typeof findTenantByChatId === "function") {
+        var tenant = findTenantByChatId(chatId);
+        if (tenant && tenant.emails && tenant.emails.length) {
+          tenantEmails = tenant.emails;
+        }
+      }
+    } catch (lookupErr) {
+      console.warn("[handleVerifyForwardingClick] tenant lookup failed: " + lookupErr.message);
+    }
+    var result = findPendingForwardingConfirmations(tenantEmails);
     if (result.urls.length > 0) {
-      // Take the most recent (last) URL — Gmail lists threads newest-first
-      // but iteration order is reversed by getMessages(); last entry is the
-      // freshest confirmation request.
-      var targetUrl = result.urls[result.urls.length - 1];
-      var addr = result.addresses.length > 0 ? result.addresses[result.addresses.length - 1] : "";
+      // GmailApp.search() returns threads newest-first, so urls[0] is from
+      // the most recent confirmation request — exactly what we want when a
+      // tenant has multiple pending vf-... mails (e.g. they retried setup).
+      var targetUrl = result.urls[0];
+      var addr = result.addresses.length > 0 ? result.addresses[0] : "";
       // Optimistic Telegram nudge — user is about to land on Google's page.
       try {
         sendTelegramMessage(
