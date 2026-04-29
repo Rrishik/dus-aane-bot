@@ -175,6 +175,33 @@ describe("extractForwardingConfirmUrl", () => {
     expect(extractForwardingConfirmUrl("")).toBe(null);
     expect(extractForwardingConfirmUrl(null)).toBe(null);
   });
+
+  // Real-data fixture: actual Gmail forwarding-confirmation mail body (with
+  // requester/destination addresses redacted but URL token shape preserved).
+  // Contains BOTH the confirm (vf-) and cancel (uf-) URLs in that order, plus
+  // the surrounding boilerplate. Guards against three regressions:
+  //   1. URL-encoded brackets %5B / %5D in the token must not break matching.
+  //   2. The cancel uf- URL must NOT be returned (would silently revoke the
+  //      forwarding the user just set up).
+  //   3. The plaintext-body shape Gmail actually sends is what we parse, not
+  //      a hand-crafted shorter version.
+  it("picks the vf- confirm URL and ignores the uf- cancel URL in real Gmail body", () => {
+    var body =
+      "rishikramena@gmail.com has requested to automatically forward mail to your email\n" +
+      "address dus-aane-bot@healthvault.online.\n\n" +
+      "To allow rishikramena@gmail.com to automatically forward mail to your address,\n" +
+      "please click the link below to confirm the request:\n\n" +
+      "https://mail-settings.google.com/mail/vf-%5BANGjdJ9m_MKB23WZVALRU-0FlkRgveaNAcBKL_mqY5e12GFOkDqq0_vhkHANE4XTopLPm-zlfPFqE6yU7Yx6MM-DrgOWDl57RrndnKnAyQ%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME\n\n" +
+      "If you click the link and it appears to be broken, please copy and paste it\n" +
+      "into a new browser window.\n\n" +
+      "If you accidentally clicked the link, click this link to cancel:\n" +
+      "https://mail-settings.google.com/mail/uf-%5BANGjdJ80HyFa-p9Zyw-AYBFDWcUzVAw9zXiOHv-_fb1wmap0OClsQ1FTvcjZwskGuFpmgFHD6AhXB8_dB92DKklQQ9ru0tiT7lEQGqhWqg%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME\n";
+    var url = extractForwardingConfirmUrl(body);
+    expect(url).toMatch(/^https:\/\/mail-settings\.google\.com\/mail\/vf-/);
+    expect(url).not.toMatch(/\/uf-/);
+    // Sanity: full token captured (no premature termination on -, %, brackets).
+    expect(url).toContain("DrgOWDl57RrndnKnAyQ%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME");
+  });
 });
 
 describe("confirmForwardingAddresses", () => {
