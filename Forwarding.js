@@ -182,8 +182,11 @@ function confirmForwardingAddresses() {
     try {
       threads[i].markRead();
     } catch (e) {
-      // markRead requires gmail.modify; if scope missing this throws but we
-      // still confirmed the URL — non-fatal.
+      // markRead requires gmail.modify. If the scope was just added to the
+      // manifest but not yet authorized, this throws — we keep the verify
+      // flow working (confirmation already succeeded) and log so the operator
+      // can spot it in the Executions panel.
+      console.warn("[confirmForwardingAddresses] markRead failed (need gmail.modify re-auth?): " + e.message);
     }
   }
   return { confirmed: confirmed, failed: failed, addresses: addresses };
