@@ -111,7 +111,6 @@ function executeAskTool(toolName, args, allTransactions) {
   var all = allTransactions;
   var filtered = all;
 
-  // Apply date filter if present
   if (args.start_date && args.end_date) {
     filtered = filterByDateRange(all, args.start_date, args.end_date);
   } else if (args.start_date) {

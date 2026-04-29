@@ -469,9 +469,7 @@ function handleCallbackQuery(update) {
   }
 }
 
-// Function to show transaction summary. Optional limit param: /summary 10
-// Function to show recent transactions
-// Supports: /recent, /recent 10, /recent rishik, /recent 10 rishik
+// Recent transactions. Supports: /recent, /recent 10, /recent rishik, /recent 10 rishik.
 function showRecentTransactions(chatId, messageText) {
   try {
     var parts = messageText.trim().split(/\s+/);
@@ -502,10 +500,8 @@ function showRecentTransactions(chatId, messageText) {
       return;
     }
 
-    // Skip header row
     data.shift();
 
-    // Filter by user if specified
     if (userFilter) {
       data = data.filter(function (row) {
         var user = (row[USER_COLUMN - 1] || "").toString().toLowerCase();
