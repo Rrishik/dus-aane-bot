@@ -50,7 +50,7 @@ describe("buildFilterEmailHtml", () => {
     var html = buildFilterEmailHtml("q", "bot@gmail.com", "https://demo", "https://guide", null);
     expect(html.startsWith("<div")).toBe(true);
     expect(html.endsWith("</div>")).toBe(true);
-    expect(html).toContain("Set up auto-forwarding");
+    expect(html).toContain("Auto-forward bank emails");
   });
 
   it("includes the prefill URL as the primary CTA and target=_blank on links", () => {

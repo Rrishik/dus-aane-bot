@@ -46,33 +46,56 @@ function adminCreateTemplateSheet() {
  * Returns the new sheet's ID. Caller is responsible for registering it.
  *
  * Used by Phase 4's onboarding flow; exposed as admin helper for dry runs.
+ *
+ * Ownership: by default the caller (admin) stays as owner and the tenant
+ * is added as an editor. Pass `transferOwnership=true` to also kick off a
+ * Drive ownership transfer to the tenant — that requires the tenant to
+ * accept a Drive notification, so we don't do it as part of the default
+ * onboarding path. Tenants can opt in later via `/ownsheet`.
  */
-function adminProvisionTenantSheet(displayName, shareWithEmail) {
+function adminProvisionTenantSheet(displayName, shareWithEmail, transferOwnership) {
   if (typeof TEMPLATE_SHEET_ID !== "string" || !TEMPLATE_SHEET_ID) {
     throw new Error("TEMPLATE_SHEET_ID not set. Run adminCreateTemplateSheet() first.");
   }
   var name = "Dus Aane — " + (displayName || "Tenant");
   var copy = DriveApp.getFileById(TEMPLATE_SHEET_ID).makeCopy(name);
   if (shareWithEmail) {
-    // Add the user as editor first (so they can write even before accepting
-    // ownership transfer), then initiate ownership transfer. For consumer
-    // Gmail accounts the user must accept the transfer in Drive — until then
-    // admin remains owner. We stay an editor afterwards so the bot can keep
-    // appending transactions; the user can revoke that access anytime.
     try {
       copy.addEditor(shareWithEmail);
     } catch (e) {
       console.error("[adminProvisionTenantSheet] addEditor failed for " + shareWithEmail + ": " + e.message);
     }
-    try {
-      copy.setOwner(shareWithEmail);
-      console.log("Initiated ownership transfer of " + copy.getId() + " to " + shareWithEmail);
-    } catch (e) {
-      // Cross-account transfers can fail (e.g. recipient not yet on Drive,
-      // Workspace policy). Sheet still works as admin-owned + user-editor.
-      console.error("[adminProvisionTenantSheet] setOwner failed for " + shareWithEmail + ": " + e.message);
+    if (transferOwnership) {
+      try {
+        copy.setOwner(shareWithEmail);
+        console.log("Initiated ownership transfer of " + copy.getId() + " to " + shareWithEmail);
+      } catch (e) {
+        // Cross-account transfers can fail (e.g. recipient not yet on Drive,
+        // Workspace policy). Sheet still works as admin-owned + user-editor.
+        console.error("[adminProvisionTenantSheet] setOwner failed for " + shareWithEmail + ": " + e.message);
+      }
     }
   }
   console.log("Provisioned sheet: " + copy.getId() + " (" + name + ")");
   return copy.getId();
+}
+
+/**
+ * Initiate a Drive ownership transfer of `sheetId` to `email`. The user
+ * must accept a Drive notification before the transfer completes. Until
+ * then admin remains the owner; the user stays an editor.
+ *
+ * Returns true on a successful initiate (Drive accepted the request),
+ * false on any error (logged to the Executions panel).
+ */
+function adminTransferSheetOwnership(sheetId, email) {
+  try {
+    var file = DriveApp.getFileById(sheetId);
+    file.setOwner(email);
+    console.log("[adminTransferSheetOwnership] initiated transfer of " + sheetId + " to " + email);
+    return true;
+  } catch (e) {
+    console.error("[adminTransferSheetOwnership] failed for " + email + ": " + e.message);
+    return false;
+  }
 }
