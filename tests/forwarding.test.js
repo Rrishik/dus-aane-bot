@@ -165,9 +165,22 @@ describe("buildVerifyForwardingUrl", () => {
 
 describe("extractForwardingConfirmUrl", () => {
   it("extracts the vf-... URL from a typical confirmation body", () => {
-    var body = "Confirm by clicking https://mail-settings.google.com/mail/vf-%5BANGjdJ_xyz%5D-AbC123 then refresh.";
+    var body = "Confirm by clicking https://mail.google.com/mail/vf-%5BANGjdJ_xyz%5D-AbC123 then refresh.";
     var url = extractForwardingConfirmUrl(body);
-    expect(url).toBe("https://mail-settings.google.com/mail/vf-%5BANGjdJ_xyz%5D-AbC123");
+    expect(url).toBe("https://mail.google.com/mail/vf-%5BANGjdJ_xyz%5D-AbC123");
+  });
+
+  it("also accepts the older mail-settings.google.com host", () => {
+    var body = "Old format: https://mail-settings.google.com/mail/vf-token123";
+    var url = extractForwardingConfirmUrl(body);
+    expect(url).toBe("https://mail-settings.google.com/mail/vf-token123");
+  });
+
+  it("rejects the uf-... decline URL even when no vf URL is present", () => {
+    // The decline URL must NEVER be returned — clicking it permanently denies
+    // the forwarding request.
+    var body = "To cancel: https://mail.google.com/mail/uf-DECLINE_TOKEN";
+    expect(extractForwardingConfirmUrl(body)).toBe(null);
   });
 
   it("returns null when no vf URL present", () => {
@@ -191,13 +204,13 @@ describe("extractForwardingConfirmUrl", () => {
       "address dus-aane-bot@healthvault.online.\n\n" +
       "To allow rishikramena@gmail.com to automatically forward mail to your address,\n" +
       "please click the link below to confirm the request:\n\n" +
-      "https://mail-settings.google.com/mail/vf-%5BANGjdJ9m_MKB23WZVALRU-0FlkRgveaNAcBKL_mqY5e12GFOkDqq0_vhkHANE4XTopLPm-zlfPFqE6yU7Yx6MM-DrgOWDl57RrndnKnAyQ%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME\n\n" +
+      "https://mail.google.com/mail/vf-%5BANGjdJ9m_MKB23WZVALRU-0FlkRgveaNAcBKL_mqY5e12GFOkDqq0_vhkHANE4XTopLPm-zlfPFqE6yU7Yx6MM-DrgOWDl57RrndnKnAyQ%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME\n\n" +
       "If you click the link and it appears to be broken, please copy and paste it\n" +
       "into a new browser window.\n\n" +
       "If you accidentally clicked the link, click this link to cancel:\n" +
-      "https://mail-settings.google.com/mail/uf-%5BANGjdJ80HyFa-p9Zyw-AYBFDWcUzVAw9zXiOHv-_fb1wmap0OClsQ1FTvcjZwskGuFpmgFHD6AhXB8_dB92DKklQQ9ru0tiT7lEQGqhWqg%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME\n";
+      "https://mail.google.com/mail/uf-%5BANGjdJ80HyFa-p9Zyw-AYBFDWcUzVAw9zXiOHv-_fb1wmap0OClsQ1FTvcjZwskGuFpmgFHD6AhXB8_dB92DKklQQ9ru0tiT7lEQGqhWqg%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME\n";
     var url = extractForwardingConfirmUrl(body);
-    expect(url).toMatch(/^https:\/\/mail-settings\.google\.com\/mail\/vf-/);
+    expect(url).toMatch(/^https:\/\/mail\.google\.com\/mail\/vf-/);
     expect(url).not.toMatch(/\/uf-/);
     // Sanity: full token captured (no premature termination on -, %, brackets).
     expect(url).toContain("DrgOWDl57RrndnKnAyQ%5D-1W_oD4IDrdOEG6rAF3hEBDp70ME");

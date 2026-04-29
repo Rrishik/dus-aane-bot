@@ -17,16 +17,20 @@
 // This is a click-driven, idempotent endpoint. No background polling, no
 // time-based triggers — runs only when a user opts in by clicking.
 
-// Subject prefix Gmail uses for the forwarding confirmation mail (locale-
-// independent enough; matched as a substring).
-var FORWARDING_CONFIRM_SUBJECT = "Gmail Forwarding Confirmation";
+// Sender of the Gmail forwarding-confirmation mail. Subject varies by locale
+// and Gmail version (real ones look like "(Gmail Forwarding Confirmation -
+// Receive Mail from <user>@gmail.com)" with a leading paren that confuses
+// Gmail's tokenizer), so we filter only by sender and validate matches via
+// the vf-... URL regex below.
 var FORWARDING_CONFIRM_FROM = "forwarding-noreply@google.com";
 // Confirmation URLs look like:
-//   https://mail-settings.google.com/mail/vf-%5B<id>%5D-<token>
-// Pattern is permissive on purpose: Google has tweaked the URL shape over the
-// years and we only need a single-shot fetch — false positives self-correct
-// because the URL is single-use and idempotent.
-var FORWARDING_CONFIRM_URL_RE = /https:\/\/mail-settings\.google\.com\/mail\/vf-[^\s"'<>)]+/;
+//   https://mail.google.com/mail/vf-%5B<id>%5D-<token>          (current)
+//   https://mail-settings.google.com/mail/vf-%5B<id>%5D-<token> (older variant)
+// We accept either host. The `vf-` prefix is critical: the same mail also
+// contains a `uf-` URL for declining the request, which must NOT be opened.
+// Pattern is permissive on the token side because Google has tweaked the URL
+// shape over the years.
+var FORWARDING_CONFIRM_URL_RE = /https:\/\/mail(?:-settings)?\.google\.com\/mail\/vf-[^\s"'<>)]+/;
 
 // Property key for the HMAC secret used to sign verify tokens. Generated
 // lazily on first use; never logged.
@@ -144,8 +148,13 @@ function extractForwardingConfirmUrl(body) {
  * verify flow continues — the URL is still returned to the caller.
  */
 function findPendingForwardingConfirmations() {
-  var query =
-    "from:" + FORWARDING_CONFIRM_FROM + ' subject:"' + FORWARDING_CONFIRM_SUBJECT + '" is:unread newer_than:14d';
+  // Search by sender + recency only. The subject filter was too narrow
+  // (real subjects look like '(Gmail Forwarding Confirmation - Receive
+  // Mail from <user>@gmail.com)\u2019 with a leading paren that confuses
+  // Gmail's tokenizer), and is:unread misfires when Gmail's preview pane
+  // auto-marks a thread read. We dedup downstream by extracting the vf-
+  // URL via regex, so false positives are harmless.
+  var query = "from:" + FORWARDING_CONFIRM_FROM + " newer_than:14d";
   var threads = GmailApp.search(query, 0, 25);
   var urls = [];
   var addresses = [];
@@ -198,11 +207,11 @@ function handleVerifyForwardingClick(params) {
       // freshest confirmation request.
       var targetUrl = result.urls[result.urls.length - 1];
       var addr = result.addresses.length > 0 ? result.addresses[result.addresses.length - 1] : "";
-      // Optimistic Telegram nudge — user is about to land on Google'''s page.
+      // Optimistic Telegram nudge — user is about to land on Google's page.
       try {
         sendTelegramMessage(
           Number(chatId),
-          "🔗 Opening Google'''s confirmation page" +
+          "🔗 Opening Google's confirmation page" +
             (addr ? " for `" + addr + "`" : "") +
             ". Click *Confirm* on that page, then return here.",
           { parse_mode: "Markdown" }
@@ -216,7 +225,7 @@ function handleVerifyForwardingClick(params) {
       ok: false,
       title: "No pending confirmation found",
       body:
-        "We didn'''t find a pending Gmail forwarding-confirmation email. Make sure you completed step 1 (Forwarding settings &rarr; Add a forwarding address &rarr; <code>" +
+        "We didn't find a pending Gmail forwarding-confirmation email. Make sure you completed step 1 (Forwarding settings &rarr; Add a forwarding address &rarr; <code>" +
         _escHtml(BOT_INBOX_EMAIL) +
         "</code> &rarr; Next), wait ~30 seconds, then click the verify button again."
     });
@@ -231,7 +240,7 @@ function handleVerifyForwardingClick(params) {
 }
 
 /**
- * Build a small HTML page that bounces the user'''s browser to Google'''s
+ * Build a small HTML page that bounces the user's browser to Google's
  * confirmation URL. Apps Script web-apps render in an iframe, so we navigate
  * the top-level window via JS, with a clearly visible fallback link in case
  * the script is blocked or noscript is set.
@@ -256,7 +265,7 @@ function _verifyRedirectHtml(targetUrl, addr) {
     "script>" +
     '</head><body><div class="card">' +
     "<h1>Almost there&hellip;</h1>" +
-    "<p>Opening Google'''s confirmation page" +
+    "<p>Opening Google's confirmation page" +
     addrText +
     ". On that page, click <b>Confirm</b> to enable forwarding.</p>" +
     "<p>If nothing happens in a moment:</p>" +
