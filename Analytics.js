@@ -1,4 +1,4 @@
-// Read all transactions from the sheet as structured objects
+// Read all transactions as structured objects.
 function getAllTransactions() {
   var sheet = getSpreadsheet().getSheets()[0];
   var data = sheet.getDataRange().getValues();
@@ -21,7 +21,6 @@ function getAllTransactions() {
   });
 }
 
-// Filter transactions to a specific year/month
 function filterByMonth(transactions, year, month) {
   return transactions.filter(function (t) {
     return t.date.getFullYear() === year && t.date.getMonth() === month;
@@ -664,7 +663,6 @@ function filterByDateRange(transactions, startDate, endDate) {
   });
 }
 
-// Sum amounts by currency from a list of transactions
 function sumByCurrency(transactions) {
   var result = {};
   transactions.forEach(function (t) {
@@ -691,7 +689,6 @@ function aggregateByField(transactions, field) {
     });
 }
 
-// Per-user spend breakdown
 function aggregateByUser(transactions) {
   var users = {};
   transactions.forEach(function (t) {
@@ -701,8 +698,7 @@ function aggregateByUser(transactions) {
   return users;
 }
 
-// Calculate split settlements between users
-// Split = 50/50 shared; Partner = payer paid 100% on behalf of other user(s)
+// Split = 50/50 shared; Partner = payer paid 100% on behalf of other user(s).
 function calcSplitSettlement(debits) {
   var splitTxns = debits.filter(function (t) {
     return t.split === SPLIT_STATUS.SPLIT;
