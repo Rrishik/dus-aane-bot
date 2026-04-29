@@ -265,7 +265,7 @@ describe("handleVerifyForwardingClick", () => {
     var iat = Date.now();
     var sig = signVerifyToken("777", iat);
     var html = handleVerifyForwardingClick({ t: "777", iat: String(iat), sig: sig });
-    expect(html).toContain("Almost there");
+    expect(html).toContain("One last click");
     expect(html).toContain("https://mail-settings.google.com/mail/vf-abc");
     expect(html).toContain("u@example.com");
     // top-level redirect (escapes the Apps Script iframe)

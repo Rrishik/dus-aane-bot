@@ -211,9 +211,9 @@ function handleVerifyForwardingClick(params) {
       try {
         sendTelegramMessage(
           Number(chatId),
-          "🔗 Opening Google's confirmation page" +
+          "🔗 Found the confirmation email" +
             (addr ? " for `" + addr + "`" : "") +
-            ". Click *Confirm* on that page, then return here.",
+            ". Click *Open confirmation page* in your browser, then click *Confirm* on Google's page.",
           { parse_mode: "Markdown" }
         );
       } catch (e) {
@@ -257,21 +257,24 @@ function _verifyRedirectHtml(targetUrl, addr) {
     "p{font-size:15px;line-height:1.55;color:#444}" +
     ".btn{display:inline-block;padding:12px 20px;background:#1a73e8;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;margin-top:8px}" +
     "code{background:#f4f4f4;padding:2px 6px;border-radius:4px;font-size:13px}</style>" +
+    // Best-effort top navigation. Apps Script's iframe sandbox usually blocks
+    // this without prior user activation, so the visible button below is the
+    // real path. We deliberately do NOT fall back to `window.location.href` —
+    // that would load Google's page *inside* the iframe, which it refuses
+    // (X-Frame-Options: SAMEORIGIN) and the user sees a broken-frame error.
     "<script>try{window.top.location.href=" +
     JSON.stringify(targetUrl) +
-    ";}catch(e){window.location.href=" +
-    JSON.stringify(targetUrl) +
-    ";}</" +
+    ";}catch(e){}</" +
     "script>" +
     '</head><body><div class="card">' +
-    "<h1>Almost there&hellip;</h1>" +
-    "<p>Opening Google's confirmation page" +
+    "<h1>One last click</h1>" +
+    "<p>Open Google's confirmation page" +
     addrText +
-    ". On that page, click <b>Confirm</b> to enable forwarding.</p>" +
-    "<p>If nothing happens in a moment:</p>" +
+    " and click <b>Confirm</b> there to enable forwarding.</p>" +
     '<p><a class="btn" href="' +
     url +
-    '" target="_top" rel="noopener">Open confirmation page</a></p>' +
+    '" target="_top" rel="noopener">Open confirmation page &rarr;</a></p>' +
+    '<p style="font-size:13px;color:#777;margin-top:24px">After clicking <b>Confirm</b> on Google\'s page, return to Telegram &mdash; the bot will pick it up automatically.</p>' +
     "</div></body></html>"
   );
 }
