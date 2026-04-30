@@ -36,6 +36,8 @@ jobs:
           printf "const ADMIN_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> AConfig.js
           printf "const SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n" >> AConfig.js
           printf "const TEMPLATE_SHEET_ID = \"${{ secrets.TEMPLATE_SHEET_ID }}\";\n\n" >> AConfig.js
+          printf "// Looker Studio\n" >> AConfig.js
+          printf "const LOOKER_DASHBOARD_REPORT_ID = \"${{ secrets.LOOKER_DASHBOARD_REPORT_ID }}\";\n\n" >> AConfig.js
           printf "// Azure OpenAI\n" >> AConfig.js
           printf "const AZURE_OPENAI_ENDPOINT = \"${{ secrets.AZURE_OPENAI_ENDPOINT }}\";\n" >> AConfig.js
           printf "const AZURE_OPENAI_API_KEY = \"${{ secrets.AZURE_OPENAI_API_KEY }}\";\n" >> AConfig.js

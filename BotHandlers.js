@@ -114,6 +114,9 @@ function handleMessage(update) {
         case "/stats":
           handleStatsCommand(chatId);
           break;
+        case "/dashboard":
+          handleDashboardCommand(chatId);
+          break;
         case "/ask":
           handleAskCommand(chatId, messageText);
           break;
@@ -143,11 +146,10 @@ function handleHelpCommand(chatId, username) {
     `• /ask — ask anything about your spending\n` +
     `   _e.g. /ask how much on food last month?_\n` +
     `• /stats — analytics dashboard\n` +
+    `• /dashboard — open your visual Looker Studio dashboard\n` +
     `• /recent — recent transactions _(e.g. /recent 10)_\n` +
-    `• /setup — re-email forwarding setup instructions\n` +
-    `• /filter — set up the auto-forward Gmail filter\n` +
+    `• /account — your account & settings\n` +
     `• /ownsheet — transfer Drive ownership of your sheet to you\n` +
-    `• /myinfo — your account\n` +
     `• /help — this message`;
 
   var url = sheetUrl(getTenantSheetId());

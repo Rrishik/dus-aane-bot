@@ -24,6 +24,7 @@ function setTelegramCommands() {
     { command: "/account", description: "Account & settings" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
+    { command: "/dashboard", description: "Open your Looker Studio dashboard" },
     { command: "/ownsheet", description: "Transfer Drive ownership of your sheet" },
     { command: "/help", description: "Show available commands" }
   ];
