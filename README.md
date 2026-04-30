@@ -1,40 +1,25 @@
 # 💰 Dus Aane Bot
 
-Open-source, multi-tenant Telegram bot that reads forwarded bank transaction emails, extracts structured data with an LLM, and logs it to a per-user Google Sheet.
+> **Splitwise that fills itself in — from your bank emails, into your own Google Sheet.**
 
-Built on Google Apps Script + a Cloudflare Worker proxy. Self-host your own instance or run it for a group of friends — each tenant gets their own isolated sheet.
+A self-hostable Telegram bot for couples, roommates, and friends who want shared expenses tracked automatically and a private spreadsheet they actually own.
 
-- 🔒 **Privacy by construction** — the bot's Gmail only ever receives the narrow allowlist of transaction-alert senders you configure. OTPs, statements, security codes and marketing are excluded at the Gmail-filter layer before anything reaches the bot.
-- 🔓 **Auditable** — the full code lives in this repo. See [docs/PRIVACY.md](docs/PRIVACY.md) for what the bot reads, stores and shares.
-- 🏠 **Multi-tenant** — one deploy serves many users. Each tenant is onboarded with a single `/register` command after proving inbox ownership.
-
-## How is this different from Cred / Walnut / CashKaro?
-
-Closed-source finance apps typically ask for **full Gmail read access** via OAuth — which means they can (and do) scan everything: OTPs, statements, personal mail, receipts, newsletters. You trust them to look only at what they claim.
-
-Dus Aane Bot inverts that:
-
-|                                       | Cred / Walnut / etc.                          | Dus Aane Bot                                                                  |
-| ------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------- |
-| **Access scope**                      | Full Gmail read (all mail, all labels)        | Only emails you forward to the bot inbox                                      |
-| **OTPs / statements / personal mail** | Readable by the app                           | Never leaves your Gmail                                                       |
-| **Data location**                     | Their servers, their schema                   | Your Google Sheet, your account                                               |
-| **Export / delete**                   | Via their UI, if offered                      | Native Google Sheets — yours forever                                          |
-| **Source code**                       | Closed                                        | [This repo](https://github.com/Rrishik/dus-aane-bot) — audit before you trust |
-| **Revoke access**                     | OAuth revoke (still had full read until then) | Delete the Gmail filter                                                       |
-
-The trust model is: you set up a one-time Gmail filter that matches a **fixed allowlist of ~30 verified bank sender addresses** (see [`TRANSACTION_SENDERS`](Constants.js)). Nothing else is ever forwarded. If you don't trust the allowlist, read it — it's in this repo.
+- 🤖 **Auto-fills from your inbox** — forward bank transaction emails (manually or via a one-time Gmail filter) and an LLM extracts merchant, amount, category. No data entry.
+- 👫 **Built for shared expenses** — every transaction has a one-tap _Personal / Split 50–50 / Partner paid 100%_ button. `/stats` rolls it into a who-owes-whom settlement.
+- 📊 **Your sheet, your data** — each tenant gets their own Google Sheet, shared with them as editor on day 1 and transferable to full ownership via `/ownsheet`. Native CSV export, Apps Script, Sheets formulas — anything you can do with a spreadsheet, you can do here.
+- 🔒 **Narrow access by design** — the bot only ever sees emails matching a fixed allowlist of ~30 verified bank senders. OTPs, statements, security codes and personal mail never leave your Gmail.
+- 🏠 **Self-hostable** — one Apps Script deploy serves your whole friend group. Code's in this repo; audit it before you trust it.
 
 ## Table of contents
 
 - [Features](#features)
 - [How it works](#how-it-works)
-- [How is this different from Cred / Walnut / CashKaro?](#how-is-this-different-from-cred--walnut--cashkaro)
 - [User onboarding (`/start` → `/register`)](#user-onboarding)
 - [Commands](#commands)
 - [Admin setup (one-time, per deployment)](#admin-setup)
 - [Data model](#data-model)
 - [Architecture](#architecture)
+- [FAQ: How is this different from CRED / Walnut / CashKaro?](#faq-how-is-this-different-from-cred--walnut--cashkaro)
 - [Project structure](#project-structure)
 - [CI/CD](#cicd)
 - [Troubleshooting](#troubleshooting)
@@ -213,6 +198,23 @@ Both extraction and `/ask` use OpenAI function calling. Tools are defined once, 
 | `search_transactions`    | Filter by merchant, category, user, amount, type, date range |
 
 The LLM chains up to 3 tool calls per query.
+
+## FAQ: How is this different from CRED / Walnut / CashKaro?
+
+Closed-source finance apps typically ask for **full Gmail read access** via OAuth — which lets them scan everything: OTPs, statements, personal mail, receipts, newsletters. You trust them to look only at what they claim.
+
+Dus Aane Bot inverts that:
+
+|                                       | CRED / Walnut / etc.                          | Dus Aane Bot                                                                  |
+| ------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Access scope**                      | Full Gmail read (all mail, all labels)        | Only emails you forward to the bot inbox                                      |
+| **OTPs / statements / personal mail** | Readable by the app                           | Never leaves your Gmail                                                       |
+| **Data location**                     | Their servers, their schema                   | Your Google Sheet, your account                                               |
+| **Export / delete**                   | Via their UI, if offered                      | Native Google Sheets — yours forever                                          |
+| **Source code**                       | Closed                                        | [This repo](https://github.com/Rrishik/dus-aane-bot) — audit before you trust |
+| **Revoke access**                     | OAuth revoke (still had full read until then) | Delete the Gmail filter                                                       |
+
+The trust model: you set up a one-time Gmail filter that matches a **fixed allowlist of ~30 verified bank sender addresses** (see [`TRANSACTION_SENDERS`](Constants.js)). Nothing else is ever forwarded. If you don't trust the allowlist, read it — it's in this repo.
 
 ## Project structure
 
