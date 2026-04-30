@@ -57,34 +57,37 @@ This is the flow once the bot is deployed.
 
 **From Telegram (this chat):**
 
-1. `/start` — bot shows the welcome + 2-step setup
-2. **Forward any recent bank transaction email** from your Gmail to `dusaanebot.inbox@gmail.com`
-3. `/register your.name@gmail.com` — bot searches its inbox for the forward to prove ownership, then:
-   - Provisions a new Google Sheet (a copy of the template)
-   - Shares the sheet with `your.name@gmail.com` as editor
-   - DMs you the sheet link + a Gmail filter query to automate future forwards
+**From Telegram (this chat):**
 
-**Automate forwarding (one-time, in your Gmail):**
-
-1. Gmail → Settings → Forwarding and POP/IMAP → **Add forwarding address** → `dusaanebot.inbox@gmail.com`. Gmail emails a verification code to the bot inbox; the bot relays it to you on Telegram.
-2. Settings → Filters and Blocked Addresses → **Create a new filter** → paste the query the bot sent you into **Has the words** → **Forward it to** `dusaanebot.inbox@gmail.com`. Optional: **Skip the Inbox** if you don't want these in your Gmail inbox.
+1. `/start` — bot shows the welcome.
+2. `/register your.name@gmail.com` — the bot:
+   - Reserves a pending tenant slot keyed to your chat + email.
+   - Emails `your.name@gmail.com` a 3-step auto-forwarding setup (add forwarding address → verify → create filter), with a one-tap **Verify forwarding address** button that auto-confirms the Gmail verification code.
+   - DMs an ack with a manual-forward fallback (forward any bank email to `dusaanebot.inbox@gmail.com`) so you can start using it immediately.
+3. **First valid forward arrives** (manual or filter-driven). The bot:
+   - Provisions a new Google Sheet (a copy of the template).
+   - Shares it with `your.name@gmail.com` as editor.
+   - DMs you the sheet link.
+4. `/account` — view status; tap **📬 Resend auto-forwarding setup** if you lost the email.
+5. `/ownsheet` — optional, initiates a Drive ownership transfer of the sheet to your registered email.
 
 From here, every matching transaction email auto-forwards; the hourly trigger processes it and you get a Telegram notification within the hour.
 
 ## Commands
 
-| Command                           | Description                                                      |
-| --------------------------------- | ---------------------------------------------------------------- |
-| `/start`                          | Welcome + onboarding instructions                                |
-| `/register <email>`               | Claim a Gmail address (after forwarding a bank email to the bot) |
-| `/myinfo`                         | Show your tenant status, registered emails, sheet link           |
-| `/recent [N] [user]`              | Recent transactions with optional filters                        |
-| `/stats`                          | Analytics dashboard — monthly / trends / who owes                |
-| `/ask <question>`                 | AI-powered spending queries (e.g., "food spending last month")   |
-| `/help`                           | Show commands                                                    |
-| `/backfill 10m`                   | Backfill last N minutes/hours (compact: `10m`, `2h`, `3d`, `1w`) |
-| `/backfill 3 days`                | Backfill last N days/weeks/months                                |
-| `/backfill YYYY-MM-DD YYYY-MM-DD` | Backfill a date range                                            |
+| Command                           | Description                                                                                              |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/start`                          | Welcome + onboarding instructions                                                                        |
+| `/register [email]`               | Claim a Gmail address; emails the auto-forwarding setup steps. Bare `/register` prompts for the address. |
+| `/account`                        | Show tenant status, registered emails, sheet link; one-tap resend of the auto-forwarding setup email     |
+| `/ownsheet`                       | Initiate Drive ownership transfer of your sheet to your registered email                                 |
+| `/recent [N] [user]`              | Recent transactions with optional filters                                                                |
+| `/stats`                          | Analytics dashboard — monthly / trends / who owes                                                        |
+| `/ask <question>`                 | AI-powered spending queries (e.g., "food spending last month")                                           |
+| `/help`                           | Show commands                                                                                            |
+| `/backfill 10m`                   | Backfill last N minutes/hours (compact: `10m`, `2h`, `3d`, `1w`)                                         |
+| `/backfill 3 days`                | Backfill last N days/weeks/months                                                                        |
+| `/backfill YYYY-MM-DD YYYY-MM-DD` | Backfill a date range                                                                                    |
 
 ### Inline buttons
 
@@ -231,7 +234,7 @@ The trust model: you set up a one-time Gmail filter that matches a **fixed allow
 ├── Analytics.js            # /stats data + formatters, split settlement
 ├── AskTools.js             # /ask tool definitions, executor, system prompt
 ├── TenantRegistry.js       # Tenants tab CRUD, tenant lookup helpers
-├── Onboarding.js           # /start, /register, /myinfo, sheet provisioning, filter-query DM
+├── Onboarding.js           # /start, /register, /account, /ownsheet, sheet provisioning, setup email
 ├── AdminHelpers.js         # adminCreateTemplateSheet, adminProvisionTenantSheet, seed helpers
 ├── worker/src/index.js     # Cloudflare Worker proxy
 └── .github/workflows/deploy.yml  # CI/CD pipeline
@@ -264,11 +267,12 @@ GitHub Actions on push to `main`:
 - Check `Tenants` tab — is the user's email registered against their `chat_id`? Multi-forwarder setups need `upsertPendingTenant(chatId, email)` for each.
 - Check Apps Script logs for `[extractTransactions] No tenant for <email>` lines — that's a forward from an unregistered address.
 
-### `/register` says "I haven't seen any forward"
+### Tenant stuck in PENDING (no sheet provisioned)
 
-- The user must forward from the _same_ Gmail address they're trying to register. `X-Forwarded-For` (auto-forward) or `From:` (manual forward) must match.
-- Forwards are searched for the last 2 days only.
-- Check the bot inbox in a browser — is the forward actually there?
+- Activation requires a successful first forward from the registered email. Check the bot inbox: did any forward arrive?
+- The forward's sender (auto-forward `X-Forwarded-For`, or manual-forward `From:`) must match the `/register`-ed email exactly.
+- Tenant can `/account` \u2192 **Resend auto-forwarding setup** to get the email again.
+- Check Apps Script logs for `[extractTransactions] No tenant for <email>` lines \u2014 that's a forward from an address not in any tenant's email list.
 
 ### "I couldn't create your sheet" (Dutch / localized Drive error)
 
