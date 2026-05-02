@@ -1273,7 +1273,7 @@ describe("handleGroupCallback dispatch", () => {
     expect(kb.inline_keyboard[0][0].text).toContain("50-50 with Bob");
   });
 
-  it("gst/gun → 'Coming in step 4' toast, no edit", () => {
+  it("gst → 'Coming in step 4' toast, no edit", () => {
     var sent = [];
     var { SpreadsheetApp } = setupRegistry([
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
@@ -1287,21 +1287,18 @@ describe("handleGroupCallback dispatch", () => {
       PropertiesService: { getScriptProperties: () => makeProps() }
     });
 
-    ["gst:m1:-100:1", "gun:m1"].forEach((data) => {
-      handleGroupCallback({
-        callback_query: {
-          id: "cb",
-          from: { id: 111 },
-          data: data,
-          message: { chat: { id: 111 }, message_id: 42, text: "txn" }
-        }
-      });
+    handleGroupCallback({
+      callback_query: {
+        id: "cb",
+        from: { id: 111 },
+        data: "gst:m1:-100:1",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
     });
 
     expect(sent.filter((s) => s.url.indexOf("/editMessageText") !== -1).length).toBe(0);
-    var acks = sent.filter((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(acks.length).toBe(2);
-    acks.forEach((a) => expect(a.payload.text).toContain("step 4"));
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("step 4");
   });
 });
 
@@ -1459,7 +1456,8 @@ var PERSONAL_COL_STUBS = {
   CURRENCY_COLUMN: 10,
   EMAIL_LINK_COLUMN: 11,
   GROUP_REF_COLUMN: 12,
-  GROUP_MESSAGE_ID_COLUMN: 13
+  GROUP_MESSAGE_ID_COLUMN: 13,
+  G_TX_ID_COLUMN: 9
 };
 
 // Build a SpreadsheetApp mock with: admin Tenants tab + one personal sheet
@@ -1724,5 +1722,232 @@ describe("handleGroupCallback gsp execution", () => {
     expect(row[5]).toBe("111"); // paid by
     expect(row[6]).toBe("222"); // share holder = the partner
     expect(row[7]).toBe(600); // share amount = full
+  });
+});
+
+// Seed N share rows on the group sheet for an existing Tx ID. Used by undo tests.
+function seedGroupShareRows(SpreadsheetApp, sheetId, txId, holders, sharePerHolder) {
+  var sheet = SpreadsheetApp.openById(sheetId).getSheets()[0];
+  // Header (matches GROUP_SHEET_HEADERS — only really need col 9 = Tx ID for
+  // the undo logic, but appending full rows mirrors what gsp wrote).
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow([
+      "Email Date",
+      "Transaction Date",
+      "Merchant",
+      "Amount",
+      "Currency",
+      "Paid By",
+      "Share Holder",
+      "Share Amount",
+      "Tx ID",
+      "Category",
+      "Transaction Type",
+      "Message ID",
+      "Email Link"
+    ]);
+  }
+  for (var i = 0; i < holders.length; i++) {
+    sheet.appendRow([
+      "2026-05-01",
+      "2026-05-01",
+      "Swiggy",
+      sharePerHolder * holders.length,
+      "INR",
+      "111",
+      holders[i],
+      sharePerHolder,
+      txId,
+      "Food",
+      "Debit",
+      "1",
+      "https://mail.google.com/x"
+    ]);
+  }
+}
+
+describe("handleGroupCallback gun execution (undo)", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["handleGroupCallback", "setCurrentTenant"],
+      stubs
+    );
+  }
+
+  function makeStubs(SpreadsheetApp, sent, fetchOverride) {
+    return {
+      ...urlStubs(),
+      ...PERSONAL_COL_STUBS,
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: fetchOverride || makeFetch(sent),
+      Utilities: { sleep: () => {}, getUuid: () => "tx-uuid-1" },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      Logger: { log: () => {} }
+    };
+  }
+
+  it("happy path: edits group msg, deletes group rows, clears personal cells, restores DM keyboard", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600, groupRef: "-100:tx-uuid-1", groupMessageId: "55" }
+    );
+    seedGroupShareRows(fix.SpreadsheetApp, "g1", "tx-uuid-1", ["111", "222"], 300);
+    // Add a stray row from a different transaction — must NOT be deleted.
+    seedGroupShareRows(fix.SpreadsheetApp, "g1", "tx-other", ["111", "222"], 100);
+
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gun:msg-X",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn body" }
+      }
+    });
+
+    // Group notification was edited (HTML strikethrough).
+    var groupEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === "-100");
+    expect(groupEdit).toBeTruthy();
+    expect(groupEdit.payload.message_id).toBe("55");
+    expect(groupEdit.payload.parse_mode).toBe("HTML");
+    expect(groupEdit.payload.text).toContain("<s>");
+    expect(groupEdit.payload.text).toContain("split reverted");
+
+    // Only the matching Tx ID rows were deleted. Header (row 1) + the stray
+    // tx-other rows (2 of them) survive. Original 2 share rows for tx-uuid-1
+    // are gone.
+    var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
+    expect(groupSheet.getLastRow()).toBe(3); // 1 header + 2 stray
+    var remainingTxIds = groupSheet
+      .getRange(2, 9, 2, 1)
+      .getValues()
+      .map((r) => r[0]);
+    expect(remainingTxIds).toEqual(["tx-other", "tx-other"]);
+
+    // Personal row cells cleared.
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
+
+    // DM keyboard restored to Level 0 (parent + legacy split row).
+    var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
+    expect(dmEdit).toBeTruthy();
+    var kb = JSON.parse(dmEdit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
+    var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(lastRow.map((b) => b.text)).toEqual(["✂️ Split", "✏️ Category", "🗑️ Delete"]);
+
+    // Toast.
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Made personal again");
+  });
+
+  it("rejects when GROUP_REF is empty (row was never split)", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600 } // no groupRef set
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gun:msg-X",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn body" }
+      }
+    });
+
+    expect(sent.find((s) => s.url.indexOf("/editMessageText") !== -1)).toBeUndefined();
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Not a group split");
+  });
+
+  it("aborts when group editMessageText fails (>48h cutoff), keeps group rows and personal cells", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600, groupRef: "-100:tx-uuid-1", groupMessageId: "55" }
+    );
+    seedGroupShareRows(fix.SpreadsheetApp, "g1", "tx-uuid-1", ["111", "222"], 300);
+
+    // Custom fetch: editMessageText returns ok:false (Telegram-style 48h reject).
+    var fetch = {
+      fetch: vi.fn((url, opts) => {
+        sent.push({ url: url, payload: JSON.parse(opts.payload) });
+        if (url.indexOf("/editMessageText") !== -1) {
+          return {
+            getResponseCode: () => 400,
+            getContentText: () => JSON.stringify({ ok: false, description: "Bad Request: message can't be edited" })
+          };
+        }
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({ ok: true, result: { message_id: 1 } })
+        };
+      })
+    };
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent, fetch));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gun:msg-X",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn body" }
+      }
+    });
+
+    // Group rows still there (header + 2 share rows).
+    var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
+    expect(groupSheet.getLastRow()).toBe(3);
+    // Personal row's group ref unchanged.
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:tx-uuid-1");
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Couldn't edit the group message");
+  });
+
+  it("clears local refs when the group tenant has been deleted from the registry", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"]
+        // No -100 group row in registry.
+      ],
+      { messageId: "msg-X", amount: 600, groupRef: "-100:tx-uuid-1", groupMessageId: "55" }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gun:msg-X",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn body" }
+      }
+    });
+
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("no longer exists");
   });
 });

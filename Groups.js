@@ -687,9 +687,14 @@ function handleGroupCallback(update) {
     return;
   }
 
-  // Remaining leaf taps (gst, gun) — wired in step 4.3 / 4.4. Acknowledge
-  // with a toast so the menu visibly responds.
-  if (decoded.action === "gst" || decoded.action === "gun") {
+  if (decoded.action === "gun") {
+    executeGroupUndo(cb, decoded, callerChatId, chatId, telegramMessageId, bodyText);
+    return;
+  }
+
+  // Remaining leaf taps (gst) — wired in step 4.4. Acknowledge with a toast
+  // so the menu visibly responds.
+  if (decoded.action === "gst") {
     answerCallbackQuery(cb.id, "🚧 Recording lands in step 4", true);
     return;
   }
@@ -1049,4 +1054,101 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
   });
 
   answerCallbackQuery(cb.id, "✅ Split recorded");
+}
+
+// gun executor — undo a previously-recorded split. Strikes through the group
+// notification (preserves replies/reactions), hard-deletes every group share
+// row for the Tx ID, clears the personal row's group_ref + group_message_id,
+// and restores the original DM keyboard (group parents + legacy split row).
+//
+// Telegram's editMessageText API has a server-side 48h cutoff. If the edit
+// fails (older message, bot kicked, etc.) we abort BEFORE deleting group
+// rows — keeping state consistent and prompting the user to clean the sheet
+// manually.
+function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
+  var emailMessageId = decoded.parts[0];
+
+  var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
+  if (rowNumber < 0) {
+    answerCallbackQuery(cb.id, "❌ Transaction not found", true);
+    return;
+  }
+  var personalSheet = getSpreadsheet().getSheets()[0];
+  var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
+  var groupRef = rowData[GROUP_REF_COLUMN - 1];
+  var groupMsgId = rowData[GROUP_MESSAGE_ID_COLUMN - 1];
+  if (!groupRef) {
+    answerCallbackQuery(cb.id, "ℹ️ Not a group split", true);
+    return;
+  }
+
+  var refBits = String(groupRef).split(":");
+  var groupChatId = refBits[0];
+  var txId = refBits.slice(1).join(":");
+  var group = findGroupTenantByChatId(groupChatId);
+  if (!group) {
+    // Group disappeared (rare). Clear the local refs so the row stops
+    // pointing at a phantom; nothing else we can clean up.
+    personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue("");
+    personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue("");
+    answerCallbackQuery(cb.id, "ℹ️ Group no longer exists — cleared local link", true);
+    return;
+  }
+
+  // Try to strike through the group notification first. If we can't (48h
+  // edit cutoff, bot kicked), abort: deleting group rows without editing
+  // the message would leave the group chat lying about a split that no
+  // longer exists in the sheet.
+  var strikeText = "<s>✂️ " + escapeHtml(rowData[MERCHANT_COLUMN - 1] || "(transaction)") + " — split reverted</s>";
+  var editOk = false;
+  try {
+    var editResp = sendTelegramMessage(groupChatId, strikeText, {
+      parse_mode: "HTML",
+      message_id: groupMsgId
+    });
+    var parsed = JSON.parse(editResp || "{}");
+    editOk = !!(parsed && parsed.ok);
+  } catch (e) {
+    // sendRequest throws on persistent non-200 (e.g. 400 "message can't be
+    // edited" past the 48h cutoff). Treat as edit failure.
+    editOk = false;
+  }
+  if (!editOk) {
+    answerCallbackQuery(cb.id, "⚠️ Couldn't edit the group message (older than 48h?). Edit your sheet manually.", true);
+    return;
+  }
+
+  // Delete every share row in the group sheet matching this Tx ID. Walk
+  // bottom-up so row numbers stay valid as we splice.
+  var groupSheet = openGroupSheet(group.sheet_id);
+  var lastRow = groupSheet.getLastRow();
+  if (lastRow > 1) {
+    var txIds = groupSheet.getRange(2, G_TX_ID_COLUMN, lastRow - 1, 1).getValues();
+    for (var i = txIds.length - 1; i >= 0; i--) {
+      if (String(txIds[i][0]) === String(txId)) {
+        groupSheet.deleteRow(i + 2);
+      }
+    }
+  }
+
+  // Clear personal row's group ref + msg id so the row goes back to "personal".
+  personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue("");
+  personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue("");
+
+  // Restore the original transaction keyboard (group parents + legacy row).
+  var newKb = buildTransactionLevel0Keyboard(callerChatId, emailMessageId);
+  sendTelegramMessage(dmChatId, bodyText, {
+    parse_mode: "Markdown",
+    message_id: telegramMessageId,
+    reply_markup: newKb
+  });
+
+  answerCallbackQuery(cb.id, "↩️ Made personal again");
+}
+
+// Minimal HTML escaper for Telegram parse_mode=HTML. Apps Script doesn't
+// ship one and we only need the four characters Telegram flags as unsafe.
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
