@@ -488,8 +488,9 @@ function handleGroupHelpCommand(update) {
     "*Group commands*\n" +
     "• `/start` — re-sync the member list from this chat\n" +
     "• `/account` — show this group's setup\n" +
+    "• `/stats` — who owes whom (per currency)\n" +
     "• `/help` — this message\n\n" +
-    "_Splitting expenses, settlements, and group analytics arrive in upcoming releases._";
+    "_Settlements: forward the UPI confirmation email in DM, tap_ 👥 *Split with <group>* _→_ 💸 *Settlement* _→ recipient._";
   var opts = { parse_mode: "Markdown" };
   if (group.sheet_id) {
     opts.reply_markup = {
@@ -1307,4 +1308,168 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
   });
 
   answerCallbackQuery(cb.id, "✅ Settlement recorded");
+}
+
+// --- Step 5.1 group /stats: per-currency raw pairwise summary ---
+
+// Pure helper. Walks every β row of a group sheet (excluding the header) and
+// produces, per currency, the net amount each (debtor → creditor) pair owes
+// after settlement netting.
+//
+// Input:
+//   rows   — array of arrays (the values returned by getRange().getValues(),
+//            EXCLUDING the header). Each row is the full G_COL_COUNT (13)
+//            wide. May be empty.
+//
+// Output:
+//   { <currency>: [ { debtor, creditor, amount } ... ] }
+//   - Each pair appears at most once per currency, with `amount > 0` and
+//     `debtor` being the member who net-owes.
+//   - Rows where holder === payer are skipped (they paid for their own share).
+//   - Rows where Category === "Settlement" subtract from what the payer owes
+//     the holder (i.e. add to the holder's positive balance with payer).
+//   - Empty input or fully-netted balances return an empty object.
+//
+// No Telegram, no Sheet, no global state — easy to unit-test.
+function aggregatePairwiseDebts(rows) {
+  // balances[currency][debtor][creditor] = amount debtor owes creditor.
+  // We collapse to a single signed value per unordered pair at the end.
+  var balances = {};
+  for (var i = 0; i < (rows || []).length; i++) {
+    var r = rows[i];
+    if (!r || !r.length) continue;
+    var currency = String(r[G_CURRENCY_COLUMN - 1] || "").trim();
+    if (!currency) continue;
+    var payer = String(r[G_PAID_BY_COLUMN - 1] || "").trim();
+    var holder = String(r[G_SHARE_HOLDER_COLUMN - 1] || "").trim();
+    var amt = Number(r[G_SHARE_AMOUNT_COLUMN - 1]);
+    var category = String(r[G_CATEGORY_COLUMN - 1] || "").trim();
+    if (!payer || !holder || !isFinite(amt) || amt <= 0) continue;
+    if (payer === holder) continue; // self-share — not a debt
+
+    if (!balances[currency]) balances[currency] = {};
+
+    if (category === "Settlement") {
+      // payer paid holder amt — REDUCE what payer owes holder.
+      _bumpBalance(balances[currency], payer, holder, -amt);
+    } else {
+      // Normal split row: holder owes payer amt.
+      _bumpBalance(balances[currency], holder, payer, amt);
+    }
+  }
+
+  // Collapse: for each unordered pair (a, b), net = balance[a][b] - balance[b][a].
+  // Emit one entry per pair with the signed result.
+  var out = {};
+  for (var ccy in balances) {
+    if (!Object.prototype.hasOwnProperty.call(balances, ccy)) continue;
+    var entries = [];
+    var seen = {};
+    var ledger = balances[ccy];
+    for (var a in ledger) {
+      if (!Object.prototype.hasOwnProperty.call(ledger, a)) continue;
+      for (var b in ledger[a]) {
+        if (!Object.prototype.hasOwnProperty.call(ledger[a], b)) continue;
+        var key = a < b ? a + "|" + b : b + "|" + a;
+        if (seen[key]) continue;
+        seen[key] = true;
+        var ab = (ledger[a] && ledger[a][b]) || 0;
+        var ba = (ledger[b] && ledger[b][a]) || 0;
+        var net = ab - ba;
+        // Round to 2 dp to keep small floating residuals from displaying
+        // (e.g. 99.99999 → 100.00). Drop near-zero pairs entirely.
+        net = Math.round(net * 100) / 100;
+        if (Math.abs(net) < 0.005) continue;
+        if (net > 0) entries.push({ debtor: a, creditor: b, amount: net });
+        else entries.push({ debtor: b, creditor: a, amount: -net });
+      }
+    }
+    if (entries.length) {
+      // Stable-ish ordering: largest amount first; ties by debtor then creditor.
+      entries.sort(function (x, y) {
+        if (y.amount !== x.amount) return y.amount - x.amount;
+        if (x.debtor !== y.debtor) return x.debtor < y.debtor ? -1 : 1;
+        return x.creditor < y.creditor ? -1 : 1;
+      });
+      out[ccy] = entries;
+    }
+  }
+  return out;
+}
+
+function _bumpBalance(ledger, debtor, creditor, delta) {
+  if (!ledger[debtor]) ledger[debtor] = {};
+  ledger[debtor][creditor] = (ledger[debtor][creditor] || 0) + delta;
+}
+
+// Pure formatter. Renders the per-currency pairwise stats text.
+// Inputs:
+//   perCurrency — output of aggregatePairwiseDebts
+//   nameOf      — function(chat_id) → display name
+//   groupName   — string for the header
+function formatGroupStats(perCurrency, nameOf, groupName) {
+  var lines = [];
+  lines.push("📊 *" + escapeMarkdown(groupName || "Group") + "* — who owes whom");
+  var resolveName =
+    nameOf ||
+    function (id) {
+      return String(id);
+    };
+  var currencies = Object.keys(perCurrency || {}).sort();
+  if (!currencies.length) {
+    lines.push("");
+    lines.push("_All settled up — no outstanding balances._");
+    return lines.join("\n");
+  }
+  for (var i = 0; i < currencies.length; i++) {
+    var ccy = currencies[i];
+    lines.push("");
+    lines.push("*" + escapeMarkdown(ccy) + "*");
+    var entries = perCurrency[ccy];
+    for (var j = 0; j < entries.length; j++) {
+      var e = entries[j];
+      var debtorName = resolveName(e.debtor) || e.debtor;
+      var creditorName = resolveName(e.creditor) || e.creditor;
+      lines.push(
+        "• " +
+          escapeMarkdown(debtorName) +
+          " owes " +
+          escapeMarkdown(creditorName) +
+          " " +
+          ccy +
+          " " +
+          e.amount.toFixed(2)
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+// /stats handler in group context. Reads every β row, nets debts per
+// currency, posts the text. No-op (with a friendly nudge) if the group
+// isn't provisioned.
+function handleGroupStatsCommand(update) {
+  var chatId = update.message.chat.id;
+  var group = findGroupTenantByChatId(chatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    sendTelegramMessage(chatId, "👋 This group isn't set up yet. Promote me to admin and run `/start`.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+
+  var sheet = openGroupSheet(group.sheet_id);
+  var lastRow = sheet.getLastRow();
+  var rows = [];
+  if (lastRow > 1) {
+    rows = sheet.getRange(2, 1, lastRow - 1, G_COL_COUNT).getValues();
+  }
+  var perCurrency = aggregatePairwiseDebts(rows);
+
+  var nameOf = function (id) {
+    var t = findTenantByChatId(id);
+    return t && t.name ? t.name : id;
+  };
+  var text = formatGroupStats(perCurrency, nameOf, group.name);
+  sendTelegramMessage(chatId, text, { parse_mode: "Markdown", disable_web_page_preview: true });
 }

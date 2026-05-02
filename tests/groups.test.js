@@ -2108,3 +2108,273 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     expect(ack.payload.text).toContain("Already split");
   });
 });
+
+describe("aggregatePairwiseDebts", () => {
+  function load() {
+    return loadAppsScript(
+      ["Groups.js"],
+      ["aggregatePairwiseDebts"],
+      // β-row column indices match the production constants.
+      {
+        G_CURRENCY_COLUMN: 5,
+        G_PAID_BY_COLUMN: 6,
+        G_SHARE_HOLDER_COLUMN: 7,
+        G_SHARE_AMOUNT_COLUMN: 8,
+        G_TX_ID_COLUMN: 9,
+        G_CATEGORY_COLUMN: 10
+      }
+    );
+  }
+  // Build a 13-col β row. Only the columns the helper reads are populated.
+  function row(currency, payer, holder, share, category) {
+    return ["", "", "", "", currency, payer, holder, share, "tx", category || "Food", "Debit", "msg", "link"];
+  }
+
+  it("empty input → empty object", () => {
+    var { aggregatePairwiseDebts } = load();
+    expect(aggregatePairwiseDebts([])).toEqual({});
+  });
+
+  it("self-share rows (holder === payer) are ignored", () => {
+    var { aggregatePairwiseDebts } = load();
+    // 50/50 split: both members are share holders, but the payer's own share is not a debt.
+    var rows = [row("INR", "111", "111", 300), row("INR", "111", "222", 300)];
+    expect(aggregatePairwiseDebts(rows)).toEqual({
+      INR: [{ debtor: "222", creditor: "111", amount: 300 }]
+    });
+  });
+
+  it("nets opposing splits between the same pair", () => {
+    var { aggregatePairwiseDebts } = load();
+    // Alice paid 300 for Bob; later Bob paid 100 for Alice. Net: Bob owes Alice 200.
+    var rows = [row("INR", "111", "222", 300), row("INR", "222", "111", 100)];
+    expect(aggregatePairwiseDebts(rows)).toEqual({
+      INR: [{ debtor: "222", creditor: "111", amount: 200 }]
+    });
+  });
+
+  it("settlement rows reduce what payer owes recipient", () => {
+    var { aggregatePairwiseDebts } = load();
+    // Alice paid 500 for Bob, then Bob settled 200 to Alice. Net: Bob owes Alice 300.
+    var rows = [
+      row("INR", "111", "222", 500), //
+      row("INR", "222", "111", 200, "Settlement")
+    ];
+    expect(aggregatePairwiseDebts(rows)).toEqual({
+      INR: [{ debtor: "222", creditor: "111", amount: 300 }]
+    });
+  });
+
+  it("settlement that fully cancels the debt drops the pair", () => {
+    var { aggregatePairwiseDebts } = load();
+    var rows = [row("INR", "111", "222", 500), row("INR", "222", "111", 500, "Settlement")];
+    expect(aggregatePairwiseDebts(rows)).toEqual({});
+  });
+
+  it("groups debts by currency", () => {
+    var { aggregatePairwiseDebts } = load();
+    var rows = [row("INR", "111", "222", 300), row("USD", "222", "111", 50)];
+    var out = aggregatePairwiseDebts(rows);
+    expect(out.INR).toEqual([{ debtor: "222", creditor: "111", amount: 300 }]);
+    expect(out.USD).toEqual([{ debtor: "111", creditor: "222", amount: 50 }]);
+  });
+
+  it("orders entries by amount descending then debtor/creditor", () => {
+    var { aggregatePairwiseDebts } = load();
+    var rows = [
+      row("INR", "111", "222", 100), // 222 owes 111: 100
+      row("INR", "111", "333", 500), // 333 owes 111: 500
+      row("INR", "222", "333", 200) // 333 owes 222: 200
+    ];
+    var out = aggregatePairwiseDebts(rows);
+    expect(out.INR.map((e) => e.debtor + "→" + e.creditor + ":" + e.amount)).toEqual([
+      "333→111:500",
+      "333→222:200",
+      "222→111:100"
+    ]);
+  });
+
+  it("ignores rows missing payer/holder/amount/currency", () => {
+    var { aggregatePairwiseDebts } = load();
+    var rows = [
+      row("", "111", "222", 300), // no currency
+      row("INR", "", "222", 300), // no payer
+      row("INR", "111", "", 300), // no holder
+      row("INR", "111", "222", 0), // zero amount
+      row("INR", "111", "222", "abc"), // non-numeric
+      row("INR", "111", "222", 300) // valid
+    ];
+    expect(aggregatePairwiseDebts(rows)).toEqual({
+      INR: [{ debtor: "222", creditor: "111", amount: 300 }]
+    });
+  });
+});
+
+describe("formatGroupStats", () => {
+  function load() {
+    return loadAppsScript(["TelegramUtils.js", "Groups.js"], ["formatGroupStats"], {});
+  }
+
+  it("renders 'all settled up' when no balances remain", () => {
+    var { formatGroupStats } = load();
+    var text = formatGroupStats({}, () => "x", "Pad");
+    expect(text).toContain("Pad");
+    expect(text).toContain("All settled up");
+  });
+
+  it("renders one section per currency with name resolution", () => {
+    var { formatGroupStats } = load();
+    var nameOf = (id) => ({ 111: "Alice", 222: "Bob" })[id] || id;
+    var text = formatGroupStats(
+      {
+        INR: [{ debtor: "222", creditor: "111", amount: 1234.5 }],
+        USD: [{ debtor: "111", creditor: "222", amount: 50 }]
+      },
+      nameOf,
+      "Pad"
+    );
+    expect(text).toContain("*INR*");
+    expect(text).toContain("Bob owes Alice INR 1234.50");
+    expect(text).toContain("*USD*");
+    expect(text).toContain("Alice owes Bob USD 50.00");
+  });
+});
+
+describe("handleGroupStatsCommand", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["handleGroupStatsCommand"],
+      stubs
+    );
+  }
+
+  function setup(tenantRows, groupRows) {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var adminSs = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var tab = adminSs.insertSheet("Tenants");
+    tab.appendRow([
+      "chat_id",
+      "name",
+      "emails",
+      "sheet_id",
+      "status",
+      "created_at",
+      "notes",
+      "last_forward_at",
+      "last_nag_at",
+      "nag_count",
+      "chat_type",
+      "group_members",
+      "primary_currency"
+    ]);
+    tenantRows.forEach((r) => tab.appendRow(r));
+    var grp = SpreadsheetApp.openById("g1").getSheets()[0];
+    // Header row matches G_COL_COUNT=13.
+    grp.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Currency",
+      "Paid By",
+      "Share Holder",
+      "Share Amount",
+      "Tx ID",
+      "Category",
+      "Tx Type",
+      "Message ID",
+      "Email Link"
+    ]);
+    (groupRows || []).forEach((r) => grp.appendRow(r));
+    return SpreadsheetApp;
+  }
+
+  it("posts the netted summary in the group", () => {
+    var sent = [];
+    var SpreadsheetApp = setup(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      [
+        // Alice paid 600, 50/50 → Bob owes Alice 300.
+        ["d", "d", "Swiggy", 600, "INR", "111", "111", 300, "tx1", "Food", "Debit", "1", ""],
+        ["d", "d", "Swiggy", 600, "INR", "111", "222", 300, "tx1", "Food", "Debit", "1", ""],
+        // Bob settled 100. Net: Bob owes Alice 200.
+        ["d", "d", "UPI", 100, "INR", "222", "111", 100, "tx2", "Settlement", "Settlement", "2", ""]
+      ]
+    );
+    var { handleGroupStatsCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4,
+      G_CURRENCY_COLUMN: 5,
+      G_PAID_BY_COLUMN: 6,
+      G_SHARE_HOLDER_COLUMN: 7,
+      G_SHARE_AMOUNT_COLUMN: 8,
+      G_TX_ID_COLUMN: 9,
+      G_CATEGORY_COLUMN: 10,
+      G_COL_COUNT: 13
+    });
+    handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent.length).toBe(1);
+    expect(sent[0].payload.chat_id).toBe(-100);
+    expect(sent[0].payload.text).toContain("Bob owes Alice INR 200.00");
+    expect(sent[0].payload.text).toContain("*Pad*");
+  });
+
+  it("posts 'all settled up' when no balances remain", () => {
+    var sent = [];
+    var SpreadsheetApp = setup(
+      [["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]],
+      [] // empty group sheet
+    );
+    var { handleGroupStatsCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4,
+      G_CURRENCY_COLUMN: 5,
+      G_PAID_BY_COLUMN: 6,
+      G_SHARE_HOLDER_COLUMN: 7,
+      G_SHARE_AMOUNT_COLUMN: 8,
+      G_TX_ID_COLUMN: 9,
+      G_CATEGORY_COLUMN: 10,
+      G_COL_COUNT: 13
+    });
+    handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent[0].payload.text).toContain("All settled up");
+  });
+
+  it("nudges to /start when the group isn't provisioned", () => {
+    var sent = [];
+    var SpreadsheetApp = setup([], []);
+    var { handleGroupStatsCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4,
+      G_CURRENCY_COLUMN: 5,
+      G_PAID_BY_COLUMN: 6,
+      G_SHARE_HOLDER_COLUMN: 7,
+      G_SHARE_AMOUNT_COLUMN: 8,
+      G_TX_ID_COLUMN: 9,
+      G_CATEGORY_COLUMN: 10,
+      G_COL_COUNT: 13
+    });
+    handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent[0].payload.text).toContain("isn't set up yet");
+  });
+});

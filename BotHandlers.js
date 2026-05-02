@@ -103,6 +103,10 @@ function handleMessage(update) {
         handleGroupAccountCommand(update);
         return;
       }
+      if (groupCommand === "/stats") {
+        handleGroupStatsCommand(update);
+        return;
+      }
       // Personal commands run in DM only.
       var PERSONAL_ONLY = ["/register", "/ownsheet", "/backfill", "/ask"];
       if (PERSONAL_ONLY.indexOf(groupCommand) !== -1) {
