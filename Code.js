@@ -36,7 +36,10 @@ function doPost(e) {
       handleBotMembershipChange(update);
       return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
     }
-    // chat_member (other members joining/leaving) handled in step 2b.3.
+    if (update.chat_member) {
+      handleChatMemberChange(update);
+      return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+    }
 
     // Tenant resolution. Set context only for active tenants — pending/disabled
     // chats must NOT fall through to admin defaults (would cross-tenant-leak).

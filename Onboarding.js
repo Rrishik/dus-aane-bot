@@ -391,6 +391,15 @@ function activatePendingTenantForEmail(email) {
   } catch (e) {
     console.error("[activatePendingTenantForEmail] welcome DM failed:", e.message);
   }
+
+  // Retro-add to any groups they were invited to before registering. Best-
+  // effort — failures here don't unwind activation.
+  try {
+    consumePendingGroupInvitesForUser(pending.chat_id, activated.name || pending.name || "");
+  } catch (e) {
+    console.error("[activatePendingTenantForEmail] retro-add failed:", e.message);
+  }
+
   return activated;
 }
 

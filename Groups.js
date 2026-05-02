@@ -273,3 +273,199 @@ function handleBotMembershipChange(update) {
     }
   }
 }
+
+// --- Pending group-invite stash ---
+// When an unregistered user is added to a group, we record the group(s) they
+// were invited to so /register can retro-add them on activation. Stash lives
+// in ScriptProperties keyed by user.id; value is a CSV of group chat_ids.
+// Stays small (4 members × handful of groups) — well within the 9KB-per-key
+// and 500KB-total ScriptProperties limits.
+
+var _PENDING_GROUP_INVITE_PREFIX = "pending_group_invite_";
+
+function _pendingInviteKey(userChatId) {
+  return _PENDING_GROUP_INVITE_PREFIX + String(userChatId);
+}
+
+function addPendingGroupInvite(userChatId, groupChatId) {
+  var props = PropertiesService.getScriptProperties();
+  var key = _pendingInviteKey(userChatId);
+  var existing = props.getProperty(key) || "";
+  var set = existing
+    .split(",")
+    .map(function (s) {
+      return s.trim();
+    })
+    .filter(function (s) {
+      return s.length > 0;
+    });
+  var g = String(groupChatId);
+  if (set.indexOf(g) !== -1) return false;
+  set.push(g);
+  props.setProperty(key, set.join(","));
+  return true;
+}
+
+function getPendingGroupInvites(userChatId) {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(_pendingInviteKey(userChatId)) || "";
+  return raw
+    .split(",")
+    .map(function (s) {
+      return s.trim();
+    })
+    .filter(function (s) {
+      return s.length > 0;
+    });
+}
+
+function clearPendingGroupInvites(userChatId) {
+  PropertiesService.getScriptProperties().deleteProperty(_pendingInviteKey(userChatId));
+}
+
+// Walk every pending invite for this newly-activated user and add them to the
+// corresponding group's member list. Posts a "joined" message in each group.
+// Called from activatePendingTenantForEmail right after activation.
+//
+// Skips groups whose status isn't active (bot was removed, etc.) and groups
+// already at the member cap.
+function consumePendingGroupInvitesForUser(userChatId, displayName) {
+  var pending = getPendingGroupInvites(userChatId);
+  if (!pending.length) return [];
+  var added = [];
+  for (var i = 0; i < pending.length; i++) {
+    var groupId = pending[i];
+    var group = findGroupTenantByChatId(groupId);
+    if (!group || group.status !== TENANT_STATUS.ACTIVE) continue;
+    if (group.group_members.length >= MAX_GROUP_MEMBERS) {
+      // Group filled up while they were registering. Notify the admin.
+      var adminId = getGroupAdminChatId(group);
+      if (adminId) {
+        try {
+          sendTelegramMessage(
+            adminId,
+            "⚠️ *" +
+              escapeMarkdown(displayName || String(userChatId)) +
+              "* finished registering, but *" +
+              escapeMarkdown(group.name || "your group") +
+              "* is already at the " +
+              MAX_GROUP_MEMBERS +
+              "-member cap. Remove someone and ask them to /start in the group again.",
+            { parse_mode: "Markdown" }
+          );
+        } catch (_) {}
+      }
+      continue;
+    }
+    if (addGroupMember(groupId, userChatId)) {
+      added.push(group);
+      try {
+        sendTelegramMessage(
+          groupId,
+          "✅ *" + escapeMarkdown(displayName || String(userChatId)) + "* joined the splits.",
+          { parse_mode: "Markdown" }
+        );
+      } catch (e) {
+        console.error("[consumePendingGroupInvitesForUser] post failed: " + e.message);
+      }
+    }
+  }
+  clearPendingGroupInvites(userChatId);
+  return added;
+}
+
+// chat_member dispatch: another user's membership in a chat we know about
+// changed. Telegram delivers these only when the bot is admin (and we
+// enforced bot-admin at /start), so this is the canonical join/leave signal.
+//
+// Ignores my_chat_member territory (events about ourselves) — those flow
+// through handleBotMembershipChange.
+function handleChatMemberChange(update) {
+  var ev = update.chat_member;
+  if (!ev || !ev.chat) return;
+  var chatType = ev.chat.type;
+  if (chatType !== "group" && chatType !== "supergroup") return;
+
+  var group = findGroupTenantByChatId(ev.chat.id);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) return; // unprovisioned/disabled — ignore
+
+  var user = ev.new_chat_member && ev.new_chat_member.user;
+  if (!user || user.is_bot) return; // skip bots (incl. self)
+
+  var oldStatus = ev.old_chat_member && ev.old_chat_member.status;
+  var newStatus = ev.new_chat_member && ev.new_chat_member.status;
+  var wasIn =
+    oldStatus === "member" || oldStatus === "administrator" || oldStatus === "creator" || oldStatus === "restricted";
+  var isIn =
+    newStatus === "member" || newStatus === "administrator" || newStatus === "creator" || newStatus === "restricted";
+
+  var userChatId = String(user.id);
+  var displayName = user.first_name || user.username || userChatId;
+
+  // Joined: was out, now in.
+  if (!wasIn && isIn) {
+    if (group.group_members.indexOf(userChatId) !== -1) return; // already tracked
+    if (group.group_members.length >= MAX_GROUP_MEMBERS) {
+      // Cap exceeded. DM the admin so they can decide who to remove. Don't
+      // post in the group — avoids embarrassing the new member publicly.
+      var adminCap = getGroupAdminChatId(group);
+      if (adminCap) {
+        try {
+          sendTelegramMessage(
+            adminCap,
+            "⚠️ *" +
+              escapeMarkdown(displayName) +
+              "* joined *" +
+              escapeMarkdown(group.name || "your group") +
+              "* but it's already at the " +
+              MAX_GROUP_MEMBERS +
+              "-member cap. They won't be included in splits until you remove someone.",
+            { parse_mode: "Markdown" }
+          );
+        } catch (_) {}
+      }
+      return;
+    }
+
+    var personal = findTenantByChatId(userChatId);
+    if (personal && personal.status === TENANT_STATUS.ACTIVE && personal.chat_type === TENANT_CHAT_TYPE.PERSONAL) {
+      addGroupMember(ev.chat.id, userChatId);
+      try {
+        sendTelegramMessage(ev.chat.id, "👋 *" + escapeMarkdown(displayName) + "* joined the splits.", {
+          parse_mode: "Markdown"
+        });
+      } catch (_) {}
+    } else {
+      // Unregistered: stash the invite + DM /register prompt. They'll be
+      // retro-added on activation via consumePendingGroupInvitesForUser.
+      addPendingGroupInvite(userChatId, ev.chat.id);
+      try {
+        sendTelegramMessage(
+          userChatId,
+          "👋 You've been added to *" +
+            escapeMarkdown(group.name || "a group") +
+            "* on Dus Aane Bot.\n\n" +
+            "Send me `/register your.email@gmail.com` here in DM to start splitting expenses with the group.",
+          { parse_mode: "Markdown" }
+        );
+      } catch (_) {
+        // User hasn't started a DM with the bot yet — sendMessage 403s.
+        // Nothing actionable; the in-group flow will surface them later.
+      }
+    }
+    return;
+  }
+
+  // Left: was in, now out.
+  if (wasIn && !isIn) {
+    if (removeGroupMember(ev.chat.id, userChatId)) {
+      try {
+        sendTelegramMessage(
+          ev.chat.id,
+          "👋 *" + escapeMarkdown(displayName) + "* left. Their share of past splits stays on record.",
+          { parse_mode: "Markdown" }
+        );
+      } catch (_) {}
+    }
+  }
+}

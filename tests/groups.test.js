@@ -461,3 +461,364 @@ describe("handleBotMembershipChange", () => {
     expect(sent.length).toBe(0);
   });
 });
+
+// In-memory ScriptProperties stub used by the chat_member + retro-add tests.
+function makeProps(initial) {
+  var store = Object.assign({}, initial || {});
+  return {
+    _store: store,
+    getProperty(k) {
+      return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+    },
+    setProperty(k, v) {
+      store[k] = String(v);
+    },
+    deleteProperty(k) {
+      delete store[k];
+    }
+  };
+}
+
+function makeFetch(sent) {
+  return {
+    fetch: vi.fn((url, opts) => {
+      sent.push({ url: url, payload: JSON.parse(opts.payload) });
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ ok: true, result: { message_id: 1 } })
+      };
+    })
+  };
+}
+
+describe("pending group invite stash", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["Groups.js"],
+      ["addPendingGroupInvite", "getPendingGroupInvites", "clearPendingGroupInvites"],
+      stubs
+    );
+  }
+
+  it("dedupes, lists, and clears invites for a user", () => {
+    var props = makeProps();
+    var { addPendingGroupInvite, getPendingGroupInvites, clearPendingGroupInvites } = load({
+      PropertiesService: { getScriptProperties: () => props }
+    });
+    expect(addPendingGroupInvite("111", "-100")).toBe(true);
+    expect(addPendingGroupInvite("111", "-200")).toBe(true);
+    expect(addPendingGroupInvite("111", "-100")).toBe(false); // dedup
+    expect(getPendingGroupInvites("111")).toEqual(["-100", "-200"]);
+    expect(getPendingGroupInvites("999")).toEqual([]);
+    clearPendingGroupInvites("111");
+    expect(getPendingGroupInvites("111")).toEqual([]);
+  });
+});
+
+describe("handleChatMemberChange", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "TenantRegistry.js", "Groups.js"],
+      [
+        "handleChatMemberChange",
+        "findTenantByChatId",
+        "loadTenants",
+        "invalidateTenantCache",
+        "getPendingGroupInvites"
+      ],
+      stubs
+    );
+  }
+
+  it("adds a registered user to group_members and posts in the group", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111", "INR"],
+      ["222", "Bob", "bob@gmail.com", "b-sheet", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { handleChatMemberChange, findTenantByChatId, invalidateTenantCache } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+
+    handleChatMemberChange({
+      chat_member: {
+        chat: { id: -100, type: "group", title: "Pad" },
+        old_chat_member: { status: "left", user: { id: 222 } },
+        new_chat_member: { status: "member", user: { id: 222, first_name: "Bob", is_bot: false } }
+      }
+    });
+
+    invalidateTenantCache();
+    expect(findTenantByChatId("-100").group_members).toEqual(["111", "222"]);
+    var groupPost = sent.find((s) => s.payload.chat_id === -100);
+    expect(groupPost).toBeTruthy();
+    expect(groupPost.payload.text).toContain("Bob");
+    expect(groupPost.payload.text).toContain("joined");
+  });
+
+  it("DMs unregistered joiner with /register prompt and stashes invite", () => {
+    var sent = [];
+    var props = makeProps();
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { handleChatMemberChange, findTenantByChatId, invalidateTenantCache, getPendingGroupInvites } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => props },
+      MAX_GROUP_MEMBERS: 4
+    });
+
+    handleChatMemberChange({
+      chat_member: {
+        chat: { id: -100, type: "group", title: "Pad" },
+        old_chat_member: { status: "left", user: { id: 333 } },
+        new_chat_member: { status: "member", user: { id: 333, first_name: "Charlie", is_bot: false } }
+      }
+    });
+
+    invalidateTenantCache();
+    expect(findTenantByChatId("-100").group_members).toEqual(["111"]); // unchanged
+    expect(getPendingGroupInvites("333")).toEqual(["-100"]);
+    var dm = sent.find((s) => s.payload.chat_id === "333");
+    expect(dm).toBeTruthy();
+    expect(dm.payload.text).toContain("/register");
+  });
+
+  it("removes a leaving member and posts in the group", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleChatMemberChange, findTenantByChatId, invalidateTenantCache } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+
+    handleChatMemberChange({
+      chat_member: {
+        chat: { id: -100, type: "group", title: "Pad" },
+        old_chat_member: { status: "member", user: { id: 222 } },
+        new_chat_member: { status: "left", user: { id: 222, first_name: "Bob", is_bot: false } }
+      }
+    });
+
+    invalidateTenantCache();
+    expect(findTenantByChatId("-100").group_members).toEqual(["111"]);
+    var groupPost = sent.find((s) => s.payload.chat_id === -100);
+    expect(groupPost).toBeTruthy();
+    expect(groupPost.payload.text).toContain("left");
+  });
+
+  it("DMs admin and refuses to add when group is at member cap", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111,222,333,444", "INR"],
+      ["555", "Eve", "eve@gmail.com", "e-sheet", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { handleChatMemberChange, findTenantByChatId, invalidateTenantCache } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+
+    handleChatMemberChange({
+      chat_member: {
+        chat: { id: -100, type: "group", title: "Pad" },
+        old_chat_member: { status: "left", user: { id: 555 } },
+        new_chat_member: { status: "member", user: { id: 555, first_name: "Eve", is_bot: false } }
+      }
+    });
+
+    invalidateTenantCache();
+    expect(findTenantByChatId("-100").group_members).toEqual(["111", "222", "333", "444"]); // unchanged
+    // No public group post; admin DM only.
+    expect(sent.find((s) => s.payload.chat_id === -100)).toBeUndefined();
+    var adminDm = sent.find((s) => s.payload.chat_id === "111");
+    expect(adminDm).toBeTruthy();
+    expect(adminDm.payload.text).toContain("cap");
+  });
+
+  it("ignores events for unprovisioned/disabled groups", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "disabled", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { handleChatMemberChange } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+
+    handleChatMemberChange({
+      chat_member: {
+        chat: { id: -100, type: "group" },
+        old_chat_member: { status: "left", user: { id: 222 } },
+        new_chat_member: { status: "member", user: { id: 222, first_name: "Bob", is_bot: false } }
+      }
+    });
+
+    expect(sent.length).toBe(0);
+  });
+
+  it("ignores bot self-events (handled by my_chat_member)", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { handleChatMemberChange } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+
+    handleChatMemberChange({
+      chat_member: {
+        chat: { id: -100, type: "group" },
+        old_chat_member: { status: "left", user: { id: 999 } },
+        new_chat_member: { status: "member", user: { id: 999, first_name: "Bot", is_bot: true } }
+      }
+    });
+
+    expect(sent.length).toBe(0);
+  });
+});
+
+describe("consumePendingGroupInvitesForUser", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "TenantRegistry.js", "Groups.js"],
+      [
+        "consumePendingGroupInvitesForUser",
+        "addPendingGroupInvite",
+        "getPendingGroupInvites",
+        "findTenantByChatId",
+        "invalidateTenantCache"
+      ],
+      stubs
+    );
+  }
+
+  it("adds the user to every active pending group, posts, and clears the stash", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "s1", "active", "", "admin=111", "", "", 0, "group", "111", "INR"],
+      ["-200", "Trip", "", "s2", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var props = makeProps({ pending_group_invite_222: "-100,-200" });
+    var { consumePendingGroupInvitesForUser, getPendingGroupInvites, findTenantByChatId, invalidateTenantCache } = load(
+      {
+        ...urlStubs(),
+        SpreadsheetApp: SpreadsheetApp,
+        ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+        UrlFetchApp: makeFetch(sent),
+        Utilities: { sleep: () => {} },
+        PropertiesService: { getScriptProperties: () => props },
+        MAX_GROUP_MEMBERS: 4
+      }
+    );
+
+    var added = consumePendingGroupInvitesForUser("222", "Bob");
+    invalidateTenantCache();
+
+    expect(added.length).toBe(2);
+    expect(findTenantByChatId("-100").group_members).toEqual(["111", "222"]);
+    expect(findTenantByChatId("-200").group_members).toEqual(["111", "222"]);
+    expect(getPendingGroupInvites("222")).toEqual([]);
+    var post1 = sent.find((s) => s.payload.chat_id === "-100" || s.payload.chat_id === -100);
+    var post2 = sent.find((s) => s.payload.chat_id === "-200" || s.payload.chat_id === -200);
+    expect(post1.payload.text).toContain("Bob");
+    expect(post2.payload.text).toContain("Bob");
+  });
+
+  it("skips disabled groups but still clears the stash", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "s1", "disabled", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var props = makeProps({ pending_group_invite_222: "-100" });
+    var { consumePendingGroupInvitesForUser, getPendingGroupInvites, findTenantByChatId, invalidateTenantCache } = load(
+      {
+        ...urlStubs(),
+        SpreadsheetApp: SpreadsheetApp,
+        ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+        UrlFetchApp: makeFetch(sent),
+        Utilities: { sleep: () => {} },
+        PropertiesService: { getScriptProperties: () => props },
+        MAX_GROUP_MEMBERS: 4
+      }
+    );
+
+    consumePendingGroupInvitesForUser("222", "Bob");
+    invalidateTenantCache();
+    expect(findTenantByChatId("-100").group_members).toEqual(["111"]); // unchanged
+    expect(getPendingGroupInvites("222")).toEqual([]); // cleared
+  });
+
+  it("DMs admin and skips groups already at the cap", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "s1", "active", "", "admin=111", "", "", 0, "group", "111,222,333,444", "INR"]
+    ]);
+    var props = makeProps({ pending_group_invite_555: "-100" });
+    var { consumePendingGroupInvitesForUser, findTenantByChatId, invalidateTenantCache } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => props },
+      MAX_GROUP_MEMBERS: 4
+    });
+
+    var added = consumePendingGroupInvitesForUser("555", "Eve");
+    invalidateTenantCache();
+    expect(added).toEqual([]);
+    expect(findTenantByChatId("-100").group_members).toEqual(["111", "222", "333", "444"]);
+    var adminDm = sent.find((s) => s.payload.chat_id === "111");
+    expect(adminDm).toBeTruthy();
+    expect(adminDm.payload.text).toContain("cap");
+  });
+
+  it("returns empty array for users with no pending invites", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([]);
+    var { consumePendingGroupInvitesForUser } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+    expect(consumePendingGroupInvitesForUser("999", "Nobody")).toEqual([]);
+    expect(sent.length).toBe(0);
+  });
+});
