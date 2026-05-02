@@ -570,7 +570,15 @@ function decodeGroupCallback(data) {
 function isGroupCallback(data) {
   if (!data) return false;
   var head = String(data).split(":")[0];
-  return head === "gnav" || head === "gsp" || head === "gset" || head === "gst" || head === "gbk" || head === "gun";
+  return (
+    head === "gnav" ||
+    head === "gsp" ||
+    head === "gset" ||
+    head === "gst" ||
+    head === "gbk" ||
+    head === "gun" ||
+    head === "gstats"
+  );
 }
 
 // Build the Level 0 row(s) for a transaction-notification keyboard:
@@ -695,6 +703,41 @@ function handleGroupCallback(update) {
 
   if (decoded.action === "gst") {
     executeGroupSettlement(cb, decoded, callerChatId, chatId, telegramMessageId, bodyText);
+    return;
+  }
+
+  if (decoded.action === "gstats") {
+    // parts: [mode]  mode='s' → simplify, 'd' → detailed
+    var mode = decoded.parts[0] === "s" ? "s" : "d";
+    var groupStats = findGroupTenantByChatId(chatId);
+    if (!groupStats || groupStats.status !== TENANT_STATUS.ACTIVE) {
+      answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+      return;
+    }
+    if (groupStats.group_members.indexOf(callerChatId) === -1) {
+      answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+      return;
+    }
+    var sheetStats = openGroupSheet(groupStats.sheet_id);
+    var lastRowStats = sheetStats.getLastRow();
+    var rowsStats = [];
+    if (lastRowStats > 1) {
+      rowsStats = sheetStats.getRange(2, 1, lastRowStats - 1, G_COL_COUNT).getValues();
+    }
+    var detailed = aggregatePairwiseDebts(rowsStats);
+    var data = mode === "s" ? simplifyDebtsGreedy(detailed) : detailed;
+    var nameOfStats = function (id) {
+      var t = findTenantByChatId(id);
+      return t && t.name ? t.name : id;
+    };
+    var textStats = formatGroupStats(data, nameOfStats, groupStats.name, mode === "s");
+    sendTelegramMessage(chatId, textStats, {
+      parse_mode: "Markdown",
+      disable_web_page_preview: true,
+      message_id: telegramMessageId,
+      reply_markup: buildGroupStatsKeyboard(mode)
+    });
+    answerCallbackQuery(cb.id, "");
     return;
   }
 
@@ -1426,14 +1469,94 @@ function _bumpBalance(ledger, debtor, creditor, delta) {
   ledger[debtor][creditor] = (ledger[debtor][creditor] || 0) + delta;
 }
 
+// Pure helper: collapse the pairwise output of aggregatePairwiseDebts into
+// the minimum-ish set of payments using the greedy heuristic:
+//
+//   1. Per currency, compute net[p] = sum of incoming - sum of outgoing
+//      across all pairwise entries. Sum across the group is exactly 0.
+//   2. While any net is non-zero, pick the largest creditor (max positive)
+//      and the largest debtor (max negative). Settle min(creditor, |debtor|)
+//      between them — emit one payment, subtract from both. At least one
+//      side zeroes out and drops.
+//   3. Stop when all nets are within rounding noise (< 0.005).
+//
+// Produces ≤ N-1 entries per currency. Greedy is optimal whenever no proper
+// subset of the group sums to zero (the common case for ≤4-person groups);
+// the truly minimum-transactions problem is NP-hard but moot at this scale.
+//
+// Output shape matches aggregatePairwiseDebts: { ccy: [{debtor, creditor, amount}] }.
+// Entries within a currency are sorted by amount desc, then by debtor/creditor
+// chat_id for deterministic test output.
+function simplifyDebtsGreedy(perCurrency) {
+  var out = {};
+  var currencies = Object.keys(perCurrency || {});
+  for (var c = 0; c < currencies.length; c++) {
+    var ccy = currencies[c];
+    var entries = perCurrency[ccy] || [];
+    // Build net[p] for this currency.
+    var net = {};
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      var amt = Number(e.amount) || 0;
+      net[e.debtor] = (net[e.debtor] || 0) - amt;
+      net[e.creditor] = (net[e.creditor] || 0) + amt;
+    }
+
+    var simplified = [];
+    // Greedy match — bounded loop guard at N^2 to be defensive against
+    // pathological floating-point residuals slipping past the < 0.005 cutoff.
+    var people = Object.keys(net);
+    var guard = people.length * people.length + 4;
+    while (guard-- > 0) {
+      var maxCreditor = null;
+      var maxDebtor = null;
+      var maxPos = 0;
+      var maxNeg = 0;
+      for (var p in net) {
+        if (!Object.prototype.hasOwnProperty.call(net, p)) continue;
+        if (net[p] > maxPos) {
+          maxPos = net[p];
+          maxCreditor = p;
+        }
+        if (net[p] < maxNeg) {
+          maxNeg = net[p];
+          maxDebtor = p;
+        }
+      }
+      if (!maxCreditor || !maxDebtor) break;
+      if (maxPos < 0.005 && -maxNeg < 0.005) break;
+      var pay = Math.min(maxPos, -maxNeg);
+      pay = Math.round(pay * 100) / 100;
+      if (pay < 0.005) break;
+      simplified.push({ debtor: maxDebtor, creditor: maxCreditor, amount: pay });
+      net[maxCreditor] = Math.round((net[maxCreditor] - pay) * 100) / 100;
+      net[maxDebtor] = Math.round((net[maxDebtor] + pay) * 100) / 100;
+    }
+
+    if (simplified.length) {
+      simplified.sort(function (x, y) {
+        if (y.amount !== x.amount) return y.amount - x.amount;
+        if (x.debtor !== y.debtor) return x.debtor < y.debtor ? -1 : 1;
+        return x.creditor < y.creditor ? -1 : 1;
+      });
+      out[ccy] = simplified;
+    }
+  }
+  return out;
+}
+
 // Pure formatter. Renders the per-currency pairwise stats text.
 // Inputs:
-//   perCurrency — output of aggregatePairwiseDebts
+//   perCurrency — output of aggregatePairwiseDebts (or simplifyDebtsGreedy)
 //   nameOf      — function(chat_id) → display name
 //   groupName   — string for the header
-function formatGroupStats(perCurrency, nameOf, groupName) {
+//   simplified  — when true, header reads "simplified payments" and the
+//                 row arrow uses → instead of "owes" (the entries are
+//                 directed payments, not debt statements)
+function formatGroupStats(perCurrency, nameOf, groupName, simplified) {
   var lines = [];
-  lines.push("📊 *" + escapeMarkdown(groupName || "Group") + "* — who owes whom");
+  var heading = simplified ? "— simplified payments" : "— who owes whom";
+  lines.push("📊 *" + escapeMarkdown(groupName || "Group") + "* " + heading);
   var resolveName =
     nameOf ||
     function (id) {
@@ -1454,15 +1577,9 @@ function formatGroupStats(perCurrency, nameOf, groupName) {
       var e = entries[j];
       var debtorName = resolveName(e.debtor) || e.debtor;
       var creditorName = resolveName(e.creditor) || e.creditor;
+      var verb = simplified ? " → " : " owes ";
       lines.push(
-        "• " +
-          escapeMarkdown(debtorName) +
-          " owes " +
-          escapeMarkdown(creditorName) +
-          " " +
-          ccy +
-          " " +
-          e.amount.toFixed(2)
+        "• " + escapeMarkdown(debtorName) + verb + escapeMarkdown(creditorName) + " " + ccy + " " + e.amount.toFixed(2)
       );
     }
   }
@@ -1495,5 +1612,21 @@ function handleGroupStatsCommand(update) {
     return t && t.name ? t.name : id;
   };
   var text = formatGroupStats(perCurrency, nameOf, group.name);
-  sendTelegramMessage(chatId, text, { parse_mode: "Markdown", disable_web_page_preview: true });
+  var hasDebts = Object.keys(perCurrency).length > 0;
+  var opts = { parse_mode: "Markdown", disable_web_page_preview: true };
+  if (hasDebts) opts.reply_markup = buildGroupStatsKeyboard("d");
+  sendTelegramMessage(chatId, text, opts);
+}
+
+// Inline keyboard for the /stats reply. mode='d' shows the [🔀 Simplify]
+// toggle; mode='s' shows [📋 Detailed] to flip back.
+function buildGroupStatsKeyboard(mode) {
+  if (mode === "s") {
+    return {
+      inline_keyboard: [[{ text: "📋 Detailed", callback_data: encodeGroupCallback("gstats", ["d"]) }]]
+    };
+  }
+  return {
+    inline_keyboard: [[{ text: "🔀 Simplify", callback_data: encodeGroupCallback("gstats", ["s"]) }]]
+  };
 }

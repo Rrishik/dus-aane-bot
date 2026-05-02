@@ -967,6 +967,7 @@ describe("group callback encoder", () => {
     expect(isGroupCallback("gst:abc:-100:1")).toBe(true);
     expect(isGroupCallback("gbk:abc:-100:0")).toBe(true);
     expect(isGroupCallback("gun:abc")).toBe(true);
+    expect(isGroupCallback("gstats:s")).toBe(true);
     // Legacy format passes through.
     expect(isGroupCallback("split_abc")).toBe(false);
     expect(isGroupCallback("stats_monthly")).toBe(false);
@@ -2348,6 +2349,139 @@ describe("formatGroupStats", () => {
     expect(text).toContain("*USD*");
     expect(text).toContain("Alice owes Bob USD 50.00");
   });
+
+  it("uses → arrow + 'simplified payments' header when simplified=true", () => {
+    var { formatGroupStats } = load();
+    var nameOf = (id) => ({ 111: "Alice", 222: "Bob" })[id] || id;
+    var text = formatGroupStats({ INR: [{ debtor: "222", creditor: "111", amount: 200 }] }, nameOf, "Pad", true);
+    expect(text).toContain("simplified payments");
+    expect(text).toContain("Bob → Alice INR 200.00");
+    expect(text).not.toContain("owes");
+  });
+});
+
+describe("simplifyDebtsGreedy", () => {
+  function load() {
+    return loadAppsScript(["Groups.js"], ["simplifyDebtsGreedy"], {});
+  }
+
+  it("returns {} for empty input", () => {
+    var { simplifyDebtsGreedy } = load();
+    expect(simplifyDebtsGreedy({})).toEqual({});
+  });
+
+  it("collapses a 3-cycle to 1 payment", () => {
+    // A→B 100, B→C 100, A→C 50  →  nets: A=-150, B=0, C=+150
+    // Simplified: A→C 150 (one txn instead of three)
+    var { simplifyDebtsGreedy } = load();
+    var out = simplifyDebtsGreedy({
+      INR: [
+        { debtor: "A", creditor: "B", amount: 100 },
+        { debtor: "B", creditor: "C", amount: 100 },
+        { debtor: "A", creditor: "C", amount: 50 }
+      ]
+    });
+    expect(out).toEqual({ INR: [{ debtor: "A", creditor: "C", amount: 150 }] });
+  });
+
+  it("produces ≤ N-1 entries for a 4-person tangle", () => {
+    // Nets: A=-100, B=-50, C=+30, D=+120
+    var { simplifyDebtsGreedy } = load();
+    var out = simplifyDebtsGreedy({
+      INR: [
+        { debtor: "A", creditor: "C", amount: 30 },
+        { debtor: "A", creditor: "D", amount: 70 },
+        { debtor: "B", creditor: "D", amount: 50 }
+      ]
+    });
+    expect(out.INR.length).toBeLessThanOrEqual(3);
+    // Net check: each person's net must match the input nets.
+    var net = { A: 0, B: 0, C: 0, D: 0 };
+    out.INR.forEach((e) => {
+      net[e.debtor] -= e.amount;
+      net[e.creditor] += e.amount;
+    });
+    expect(net.A).toBe(-100);
+    expect(net.B).toBe(-50);
+    expect(net.C).toBe(30);
+    expect(net.D).toBe(120);
+  });
+
+  it("simplifies each currency independently", () => {
+    var { simplifyDebtsGreedy } = load();
+    var out = simplifyDebtsGreedy({
+      INR: [
+        { debtor: "A", creditor: "B", amount: 100 },
+        { debtor: "B", creditor: "C", amount: 100 }
+      ],
+      USD: [{ debtor: "B", creditor: "A", amount: 25 }]
+    });
+    expect(out.INR).toEqual([{ debtor: "A", creditor: "C", amount: 100 }]);
+    expect(out.USD).toEqual([{ debtor: "B", creditor: "A", amount: 25 }]);
+  });
+
+  it("drops a currency entirely when nets cancel out", () => {
+    // A pays B 50, B pays A 50 → both nets 0
+    var { simplifyDebtsGreedy } = load();
+    var out = simplifyDebtsGreedy({
+      INR: [
+        { debtor: "A", creditor: "B", amount: 50 },
+        { debtor: "B", creditor: "A", amount: 50 }
+      ]
+    });
+    expect(out).toEqual({});
+  });
+
+  it("rounds to 2dp and skips sub-cent residuals", () => {
+    var { simplifyDebtsGreedy } = load();
+    var out = simplifyDebtsGreedy({
+      INR: [
+        { debtor: "A", creditor: "B", amount: 33.33 },
+        { debtor: "A", creditor: "C", amount: 33.33 },
+        { debtor: "A", creditor: "D", amount: 33.34 }
+      ]
+    });
+    // A owes 100 spread across B/C/D; greedy should produce 3 payments
+    // matching the nets (one per creditor).
+    var net = { A: 0, B: 0, C: 0, D: 0 };
+    out.INR.forEach((e) => {
+      net[e.debtor] -= e.amount;
+      net[e.creditor] += e.amount;
+    });
+    expect(net.A).toBe(-100);
+    expect(net.B).toBe(33.33);
+    expect(net.C).toBe(33.33);
+    expect(net.D).toBe(33.34);
+  });
+
+  it("sorts entries within a currency by amount desc", () => {
+    var { simplifyDebtsGreedy } = load();
+    var out = simplifyDebtsGreedy({
+      INR: [
+        { debtor: "A", creditor: "C", amount: 10 },
+        { debtor: "B", creditor: "C", amount: 100 }
+      ]
+    });
+    // Greedy yields A→C 10 and B→C 100 (independent pairs). Sort: 100 first.
+    expect(out.INR[0].amount).toBe(100);
+    expect(out.INR[1].amount).toBe(10);
+  });
+});
+
+describe("buildGroupStatsKeyboard", () => {
+  function load() {
+    return loadAppsScript(["Groups.js"], ["buildGroupStatsKeyboard"], {});
+  }
+
+  it("mode='d' offers Simplify; mode='s' offers Detailed", () => {
+    var { buildGroupStatsKeyboard } = load();
+    var kbD = buildGroupStatsKeyboard("d");
+    expect(kbD.inline_keyboard[0][0].text).toBe("🔀 Simplify");
+    expect(kbD.inline_keyboard[0][0].callback_data).toBe("gstats:s");
+    var kbS = buildGroupStatsKeyboard("s");
+    expect(kbS.inline_keyboard[0][0].text).toBe("📋 Detailed");
+    expect(kbS.inline_keyboard[0][0].callback_data).toBe("gstats:d");
+  });
 });
 
 describe("handleGroupStatsCommand", () => {
@@ -2437,6 +2571,9 @@ describe("handleGroupStatsCommand", () => {
     expect(sent[0].payload.chat_id).toBe(-100);
     expect(sent[0].payload.text).toContain("Bob owes Alice INR 200.00");
     expect(sent[0].payload.text).toContain("*Pad*");
+    // Simplify toggle attached when there are debts to display.
+    var kb = JSON.parse(sent[0].payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toBe("\ud83d\udd00 Simplify");
   });
 
   it("posts 'all settled up' when no balances remain", () => {
@@ -2486,5 +2623,203 @@ describe("handleGroupStatsCommand", () => {
     });
     handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
     expect(sent[0].payload.text).toContain("isn't set up yet");
+  });
+});
+
+describe("handleGroupCallback gstats execution (toggle simplified/detailed)", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["handleGroupCallback"],
+      stubs
+    );
+  }
+
+  function setup(tenantRows, groupRows) {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var adminSs = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var tab = adminSs.insertSheet("Tenants");
+    tab.appendRow([
+      "chat_id",
+      "name",
+      "emails",
+      "sheet_id",
+      "status",
+      "created_at",
+      "notes",
+      "last_forward_at",
+      "last_nag_at",
+      "nag_count",
+      "chat_type",
+      "group_members",
+      "primary_currency"
+    ]);
+    tenantRows.forEach((r) => tab.appendRow(r));
+    var grp = SpreadsheetApp.openById("g1").getSheets()[0];
+    grp.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Currency",
+      "Paid By",
+      "Share Holder",
+      "Share Amount",
+      "Tx ID",
+      "Category",
+      "Tx Type",
+      "Message ID",
+      "Email Link"
+    ]);
+    (groupRows || []).forEach((r) => grp.appendRow(r));
+    return SpreadsheetApp;
+  }
+
+  function tangleRows() {
+    // 3-cycle in INR that simplifies dramatically:
+    //   Alice paid 300 split A/B/C → A=+200, B=-100, C=-100
+    //   Bob paid 300 split A/B/C → A=-100, B=+200, C=-100
+    //   Charlie paid 300 split A/B/C → A=-100, B=-100, C=+200
+    // Net all zero — but pairwise produces 0 entries; use asymmetric splits.
+    // Simpler tangle: A→B 100, B→C 100 → simplified: A→C 100.
+    return [
+      ["d", "d", "X", 200, "INR", "111", "111", 100, "tx1", "Food", "Debit", "1", ""],
+      ["d", "d", "X", 200, "INR", "111", "222", 100, "tx1", "Food", "Debit", "1", ""],
+      ["d", "d", "Y", 200, "INR", "222", "222", 100, "tx2", "Food", "Debit", "2", ""],
+      ["d", "d", "Y", 200, "INR", "222", "333", 100, "tx2", "Food", "Debit", "2", ""]
+    ];
+  }
+
+  it("simplifies on first tap and shows the [📋 Detailed] button", () => {
+    var sent = [];
+    var SpreadsheetApp = setup(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["333", "Charlie", "", "s3", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222,333", "INR"]
+      ],
+      tangleRows()
+    );
+    var mod = load({
+      ...urlStubs(),
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4,
+      G_CURRENCY_COLUMN: 5,
+      G_PAID_BY_COLUMN: 6,
+      G_SHARE_HOLDER_COLUMN: 7,
+      G_SHARE_AMOUNT_COLUMN: 8,
+      G_TX_ID_COLUMN: 9,
+      G_CATEGORY_COLUMN: 10,
+      G_COL_COUNT: 13
+    });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gstats:s",
+        message: { chat: { id: -100 }, message_id: 99, text: "📊 stats" }
+      }
+    });
+
+    var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    expect(edit).toBeTruthy();
+    expect(edit.payload.text).toContain("simplified payments");
+    // Tangle: Bob owes Alice 100, Charlie owes Bob 100. Nets: Alice=+100,
+    // Bob=0, Charlie=-100. Simplified: Charlie → Alice 100.
+    expect(edit.payload.text).toContain("Charlie \u2192 Alice INR 100.00");
+    var kb = JSON.parse(edit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toBe("\ud83d\udccb Detailed");
+  });
+
+  it("detailed mode shows full pairwise + the [🔀 Simplify] button", () => {
+    var sent = [];
+    var SpreadsheetApp = setup(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["333", "Charlie", "", "s3", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222,333", "INR"]
+      ],
+      tangleRows()
+    );
+    var mod = load({
+      ...urlStubs(),
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4,
+      G_CURRENCY_COLUMN: 5,
+      G_PAID_BY_COLUMN: 6,
+      G_SHARE_HOLDER_COLUMN: 7,
+      G_SHARE_AMOUNT_COLUMN: 8,
+      G_TX_ID_COLUMN: 9,
+      G_CATEGORY_COLUMN: 10,
+      G_COL_COUNT: 13
+    });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gstats:d",
+        message: { chat: { id: -100 }, message_id: 99, text: "📊 stats" }
+      }
+    });
+
+    var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    expect(edit.payload.text).toContain("who owes whom");
+    expect(edit.payload.text).toContain("Bob owes Alice INR 100.00");
+    expect(edit.payload.text).toContain("Charlie owes Bob INR 100.00");
+    var kb = JSON.parse(edit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toBe("\ud83d\udd00 Simplify");
+  });
+
+  it("rejects callers who aren't members of the group", () => {
+    var sent = [];
+    var SpreadsheetApp = setup(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+      ],
+      []
+    );
+    var mod = load({
+      ...urlStubs(),
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4,
+      G_CURRENCY_COLUMN: 5,
+      G_PAID_BY_COLUMN: 6,
+      G_SHARE_HOLDER_COLUMN: 7,
+      G_SHARE_AMOUNT_COLUMN: 8,
+      G_TX_ID_COLUMN: 9,
+      G_CATEGORY_COLUMN: 10,
+      G_COL_COUNT: 13
+    });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 999 }, // not in group_members
+        data: "gstats:s",
+        message: { chat: { id: -100 }, message_id: 99, text: "📊 stats" }
+      }
+    });
+
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("not a member");
+    var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    expect(edit).toBeFalsy();
   });
 });
