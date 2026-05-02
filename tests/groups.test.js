@@ -1034,6 +1034,34 @@ describe("buildGroupParentButtonRows", () => {
   });
 });
 
+describe("buildTransactionLevel0Keyboard", () => {
+  function load(stubs) {
+    return loadAppsScript(["TenantRegistry.js", "Groups.js"], ["buildTransactionLevel0Keyboard"], stubs);
+  }
+
+  it("zero-group user keeps the legacy ✂️ Split button (their only split path)", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
+    var kb = buildTransactionLevel0Keyboard("111", "msg-X");
+    expect(kb.inline_keyboard.length).toBe(1); // no group rows
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["✂️ Split", "✏️ Category", "🗑️ Delete"]);
+  });
+
+  it("user in ≥1 group drops the legacy Split — group parent button is canonical", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
+    var kb = buildTransactionLevel0Keyboard("111", "msg-X");
+    expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
+    var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(lastRow.map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
+  });
+});
+
 describe("buildSplitLevel1Keyboard", () => {
   function load(stubs) {
     return loadAppsScript(["TenantRegistry.js", "Groups.js"], ["buildSplitLevel1Keyboard"], stubs);
@@ -1256,10 +1284,11 @@ describe("handleGroupCallback dispatch", () => {
 
     var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(edit.payload.reply_markup);
-    // First row should be the group parent button; last row legacy split/category/delete.
+    // First row should be the group parent button; last row is the action
+    // row. Legacy ✂️ Split is dropped when the user has at least one group.
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
     var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(lastRow.map((b) => b.text)).toEqual(["✂️ Split", "✏️ Category", "🗑️ Delete"]);
+    expect(lastRow.map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
   });
 
   it("gbk:1 → returns from Level 2 to Level 1", () => {
@@ -1841,13 +1870,14 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
 
-    // DM keyboard restored to Level 0 (parent + legacy split row).
+    // DM keyboard restored to Level 0 (parent + action row). Legacy ✂️ Split
+    // is dropped because the user is in at least one group.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
     expect(dmEdit).toBeTruthy();
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
     var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(lastRow.map((b) => b.text)).toEqual(["✂️ Split", "✏️ Category", "🗑️ Delete"]);
+    expect(lastRow.map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
 
     // Toast.
     var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);

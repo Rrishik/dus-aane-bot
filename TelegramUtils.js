@@ -288,11 +288,22 @@ function sendTransactionMessage(transaction_details, messageId, user, isNewMerch
   };
 
   if (messageId) {
-    var buttons = [
-      { text: "✂️ Split", callback_data: "split_" + messageId },
-      { text: "✏️ Category", callback_data: "editcat_" + messageId },
-      { text: "🗑️ Delete", callback_data: "del_" + messageId }
-    ];
+    // Legacy ✂️ Split (cycles personal→split→50/50→partner-100) is only useful
+    // for users who are in zero groups. Once the user is in any group, the
+    // 👥 Split with <Group> ▾ parent button is the canonical path — keeping the
+    // legacy split alongside it just clutters the keyboard. ✏️ Category and
+    // 🗑️ Delete still apply to the personal row in either case.
+    var inAnyGroup = buildGroupParentButtonRows(getTenantChatId(), messageId).length > 0;
+    var buttons = inAnyGroup
+      ? [
+          { text: "✏️ Category", callback_data: "editcat_" + messageId },
+          { text: "🗑️ Delete", callback_data: "del_" + messageId }
+        ]
+      : [
+          { text: "✂️ Split", callback_data: "split_" + messageId },
+          { text: "✏️ Category", callback_data: "editcat_" + messageId },
+          { text: "🗑️ Delete", callback_data: "del_" + messageId }
+        ];
     var rows = [buttons];
     // Add "Set Merchant" button if merchant is empty
     if (!transaction_details.merchant) {
@@ -306,10 +317,9 @@ function sendTransactionMessage(transaction_details, messageId, user, isNewMerch
       rows.unshift([{ text: saveLabel, callback_data: "savemerch_" + messageId }]);
     }
     // Group-split parent buttons (one row per group the user belongs to).
-    // Stacked above the legacy split/category/delete row so the per-group
-    // action is the most prominent option for users in groups. When the
-    // user is in zero groups buildGroupParentButtonRows returns []
-    // and we fall back to the legacy ✂️ Split flow unchanged.
+    // Stacked above the action row so the per-group action is the most
+    // prominent option. When the user is in zero groups this is [] and we
+    // fall back to the legacy ✂️ Split flow unchanged (see above).
     var groupRows = buildGroupParentButtonRows(getTenantChatId(), messageId);
     for (var gi = 0; gi < groupRows.length; gi++) {
       rows.unshift(groupRows[groupRows.length - 1 - gi]);

@@ -825,17 +825,27 @@ function buildSplitLevel2Keyboard(group, callerChatId, emailMessageId) {
 }
 
 // Restore the original transaction-notification keyboard (group parent rows
-// + the legacy split/category/delete row). Used by back nav.
+// + the action row). Used by back nav.
 //
+// Mirrors sendTransactionMessage's keyboard rules: the legacy ✂️ Split is
+// dropped when the user has at least one group (the 👥 Split with <Group>
+// parent buttons are the canonical path then; keeping both clutters the UI).
 // Step 3.2 doesn't try to recreate the new-merchant Save / Edit Merchant
 // rows after back nav — those flows aren't entered from the split menu.
 function buildTransactionLevel0Keyboard(callerChatId, emailMessageId) {
   var rows = buildGroupParentButtonRows(callerChatId, emailMessageId);
-  rows.push([
-    { text: "✂️ Split", callback_data: "split_" + emailMessageId },
-    { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
-    { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
-  ]);
+  var actionRow =
+    rows.length > 0
+      ? [
+          { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
+          { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+        ]
+      : [
+          { text: "✂️ Split", callback_data: "split_" + emailMessageId },
+          { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
+          { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+        ];
+  rows.push(actionRow);
   return { inline_keyboard: rows };
 }
 
