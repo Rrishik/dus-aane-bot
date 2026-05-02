@@ -134,6 +134,41 @@ describe("schema", () => {
     expect(s.TENANT_COLS.LAST_FORWARD_AT).toBe(8);
     expect(s.TENANT_COLS.LAST_NAG_AT).toBe(9);
     expect(s.TENANT_COLS.NAG_COUNT).toBe(10);
+    expect(s.TENANT_COLS.CHAT_TYPE).toBe(11);
+    expect(s.TENANT_COLS.GROUP_MEMBERS).toBe(12);
+    expect(s.TENANT_COLS.PRIMARY_CURRENCY).toBe(13);
     expect(s.TENANT_STATUS.DORMANT).toBe("dormant");
+  });
+
+  it("legacy 10-column rows default chat_type=personal, primary_currency=INR, group_members=[]", () => {
+    var s = setup([["111", "Alice", "", "sheet-a", "active", "2026-04-01T00:00:00.000Z", "", "", "", 0]]);
+    var t = s.loadTenants()[0];
+    expect(t.chat_type).toBe("personal");
+    expect(t.primary_currency).toBe("INR");
+    expect(t.group_members).toEqual([]);
+  });
+
+  it("13-column rows surface chat_type, group_members (CSV split), and primary_currency", () => {
+    var s = setup([
+      [
+        "g1",
+        "Bachelor Pad",
+        "",
+        "grp-sheet",
+        "active",
+        "2026-05-01T00:00:00.000Z",
+        "",
+        "",
+        "",
+        0,
+        "group",
+        "111,222,333",
+        "USD"
+      ]
+    ]);
+    var t = s.loadTenants()[0];
+    expect(t.chat_type).toBe("group");
+    expect(t.group_members).toEqual(["111", "222", "333"]);
+    expect(t.primary_currency).toBe("USD");
   });
 });

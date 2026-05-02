@@ -99,3 +99,116 @@ function adminTransferSheetOwnership(sheetId, email) {
     return false;
   }
 }
+
+/**
+ * Migrate every existing sheet to the v2 (Groups-feature) schema. Idempotent.
+ *
+ *   Tenants tab on the admin sheet:
+ *     adds 3 columns: chat_type, group_members, primary_currency
+ *     backfills chat_type=personal and primary_currency=INR for existing rows
+ *
+ *   Each tenant's transactions sheet:
+ *     adds 2 columns: Group Ref, Group Message ID (headers only; rows stay empty)
+ *
+ *   Template sheet (TEMPLATE_SHEET_ID):
+ *     adds the same 2 columns so future tenants get the new schema
+ *
+ * Run once after deploy from the script editor. Safe to re-run; sheets that
+ * are already at v2 are skipped.
+ */
+function adminMigrateSchemaV2() {
+  var summary = { tenantsTab: false, perTenant: 0, perTenantSkipped: 0, template: false, errors: [] };
+
+  // A. Tenants tab on the admin sheet
+  try {
+    var adminSs = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var tab = adminSs.getSheetByName(TENANTS_TAB);
+    if (tab && tab.getLastColumn() < TENANT_COL_COUNT) {
+      tab.getRange(1, 11, 1, 3).setValues([["chat_type", "group_members", "primary_currency"]]);
+      var lastRow = tab.getLastRow();
+      if (lastRow >= 2) {
+        var dataRows = lastRow - 1;
+        // Read existing values so we don't clobber any manual entries.
+        var existing = tab.getRange(2, 11, dataRows, 3).getValues();
+        var backfilled = existing.map(function (r) {
+          return [r[0] || TENANT_CHAT_TYPE.PERSONAL, r[1] || "", r[2] || DEFAULT_PRIMARY_CURRENCY];
+        });
+        tab.getRange(2, 11, dataRows, 3).setValues(backfilled);
+      }
+      invalidateTenantCache();
+      summary.tenantsTab = true;
+      console.log(
+        "[migrate] Tenants tab: extended to " +
+          TENANT_COL_COUNT +
+          " cols, backfilled " +
+          Math.max(0, tab.getLastRow() - 1) +
+          " rows"
+      );
+    } else {
+      console.log("[migrate] Tenants tab: already at v2");
+    }
+  } catch (e) {
+    summary.errors.push("Tenants tab: " + e.message);
+    console.error("[migrate] Tenants tab failed: " + e.message);
+  }
+
+  // B. Each tenant's transactions sheet
+  loadTenants().forEach(function (t) {
+    if (!t.sheet_id) return;
+    try {
+      var ss = SpreadsheetApp.openById(t.sheet_id);
+      var sheet = ss.getSheets()[0];
+      if (sheet.getLastColumn() < GROUP_MESSAGE_ID_COLUMN) {
+        sheet.getRange(1, GROUP_REF_COLUMN, 1, 2).setValues([["Group Ref", "Group Message ID"]]);
+        summary.perTenant++;
+        console.log(
+          "[migrate] Tenant " +
+            (t.name || t.chat_id) +
+            " (" +
+            t.sheet_id +
+            "): added Group Ref + Group Message ID headers"
+        );
+      } else {
+        summary.perTenantSkipped++;
+      }
+    } catch (e) {
+      summary.errors.push("Tenant " + t.chat_id + ": " + e.message);
+      console.error("[migrate] Tenant " + t.chat_id + " (" + t.sheet_id + ") failed: " + e.message);
+    }
+  });
+
+  // C. Template sheet
+  try {
+    if (typeof TEMPLATE_SHEET_ID === "string" && TEMPLATE_SHEET_ID) {
+      var tplSs = SpreadsheetApp.openById(TEMPLATE_SHEET_ID);
+      var tplSheet = tplSs.getSheets()[0];
+      if (tplSheet.getLastColumn() < GROUP_MESSAGE_ID_COLUMN) {
+        tplSheet.getRange(1, GROUP_REF_COLUMN, 1, 2).setValues([["Group Ref", "Group Message ID"]]);
+        summary.template = true;
+        console.log("[migrate] Template sheet (" + TEMPLATE_SHEET_ID + "): added Group Ref + Group Message ID headers");
+      } else {
+        console.log("[migrate] Template sheet: already at v2");
+      }
+    } else {
+      console.log("[migrate] TEMPLATE_SHEET_ID not set; skipping template");
+    }
+  } catch (e) {
+    summary.errors.push("Template: " + e.message);
+    console.error("[migrate] Template sheet failed: " + e.message);
+  }
+
+  console.log(
+    "[migrate] Done. Tenants tab " +
+      (summary.tenantsTab ? "migrated" : "skipped") +
+      ", " +
+      summary.perTenant +
+      " tenant sheets migrated (" +
+      summary.perTenantSkipped +
+      " already at v2), template " +
+      (summary.template ? "migrated" : "skipped") +
+      ", " +
+      summary.errors.length +
+      " errors."
+  );
+  return summary;
+}

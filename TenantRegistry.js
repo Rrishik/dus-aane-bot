@@ -13,6 +13,9 @@
 //   8: last_forward_at   (ISO; updated when a fresh forwarded email is processed)
 //   9: last_nag_at       (ISO; updated when a dormant nudge is sent)
 //  10: nag_count         (integer; count of nudges sent in current dormant run)
+//  11: chat_type         ("personal" | "group"; defaults to personal for legacy rows)
+//  12: group_members     (CSV of member tenant chat_ids; group rows only)
+//  13: primary_currency  (ISO currency code, defaults to INR)
 //
 // A row with status=pending has no sheet_id yet; it's created on first forward.
 // dormant = nag-cap reached without a fresh forward; auto-flips back to active
@@ -32,15 +35,23 @@ var TENANT_COLS = {
   NOTES: 7,
   LAST_FORWARD_AT: 8,
   LAST_NAG_AT: 9,
-  NAG_COUNT: 10
+  NAG_COUNT: 10,
+  CHAT_TYPE: 11,
+  GROUP_MEMBERS: 12,
+  PRIMARY_CURRENCY: 13
 };
-var TENANT_COL_COUNT = 10;
+var TENANT_COL_COUNT = 13;
 var TENANT_STATUS = {
   PENDING: "pending",
   ACTIVE: "active",
   DISABLED: "disabled",
   DORMANT: "dormant"
 };
+var TENANT_CHAT_TYPE = {
+  PERSONAL: "personal",
+  GROUP: "group"
+};
+var DEFAULT_PRIMARY_CURRENCY = "INR";
 
 // chat_id values can arrive as number or string depending on source (Telegram
 // payloads, sheet cells, code constants). Always compare via this helper.
@@ -72,7 +83,10 @@ function _getOrCreateTenantsTab() {
       "notes",
       "last_forward_at",
       "last_nag_at",
-      "nag_count"
+      "nag_count",
+      "chat_type",
+      "group_members",
+      "primary_currency"
     ]);
   }
   return tab;
@@ -96,7 +110,17 @@ function _rowToTenant(row) {
     notes: String(row[TENANT_COLS.NOTES - 1] || ""),
     last_forward_at: row[TENANT_COLS.LAST_FORWARD_AT - 1] || "",
     last_nag_at: row[TENANT_COLS.LAST_NAG_AT - 1] || "",
-    nag_count: parseInt(row[TENANT_COLS.NAG_COUNT - 1], 10) || 0
+    nag_count: parseInt(row[TENANT_COLS.NAG_COUNT - 1], 10) || 0,
+    chat_type: String(row[TENANT_COLS.CHAT_TYPE - 1] || TENANT_CHAT_TYPE.PERSONAL),
+    group_members: String(row[TENANT_COLS.GROUP_MEMBERS - 1] || "")
+      .split(",")
+      .map(function (s) {
+        return s.trim();
+      })
+      .filter(function (s) {
+        return s.length > 0;
+      }),
+    primary_currency: String(row[TENANT_COLS.PRIMARY_CURRENCY - 1] || DEFAULT_PRIMARY_CURRENCY)
   };
 }
 
@@ -108,7 +132,10 @@ function loadTenants() {
     _tenantCache = [];
     return _tenantCache;
   }
-  var data = tab.getRange(2, 1, last - 1, TENANT_COL_COUNT).getValues();
+  // Read up to TENANT_COL_COUNT, but tolerate narrower legacy sheets that
+  // pre-date a column addition. _rowToTenant fills defaults for missing cols.
+  var width = Math.min(TENANT_COL_COUNT, tab.getLastColumn());
+  var data = tab.getRange(2, 1, last - 1, width).getValues();
   _tenantCache = data.map(_rowToTenant);
   return _tenantCache;
 }
@@ -169,7 +196,21 @@ function upsertPendingTenant(chatId, email, name) {
   var rowNum = _findRowIndexByChatId(chatId);
   var now = new Date().toISOString();
   if (rowNum === -1) {
-    tab.appendRow([String(chatId), name || "", email || "", "", TENANT_STATUS.PENDING, now, ""]);
+    tab.appendRow([
+      String(chatId),
+      name || "",
+      email || "",
+      "",
+      TENANT_STATUS.PENDING,
+      now,
+      "",
+      "",
+      "",
+      0,
+      TENANT_CHAT_TYPE.PERSONAL,
+      "",
+      DEFAULT_PRIMARY_CURRENCY
+    ]);
   } else {
     // Merge email into existing emails list (dedup)
     var existing = tab.getRange(rowNum, TENANT_COLS.EMAILS).getValue() || "";
@@ -271,7 +312,13 @@ function adminSeedTenantZero() {
     ADMIN_SHEET_ID,
     TENANT_STATUS.ACTIVE,
     now,
-    "Pre-seeded"
+    "Pre-seeded",
+    "",
+    "",
+    0,
+    TENANT_CHAT_TYPE.PERSONAL,
+    "",
+    DEFAULT_PRIMARY_CURRENCY
   ]);
   invalidateTenantCache();
   console.log("Tenant 0 seeded.");

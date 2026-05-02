@@ -31,6 +31,8 @@ const SPLIT_COLUMN = 8; // Column H
 const MESSAGE_ID_COLUMN = 9; // Column I
 const CURRENCY_COLUMN = 10; // Column J
 const EMAIL_LINK_COLUMN = 11; // Column K
+const GROUP_REF_COLUMN = 12; // Column L — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
+const GROUP_MESSAGE_ID_COLUMN = 13; // Column M — Telegram message id of the group's split notification, else empty
 
 // Split Status Values (enum-like constants)
 const SPLIT_STATUS = {
