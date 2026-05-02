@@ -812,3 +812,104 @@ function buildTransactionLevel0Keyboard(callerChatId, emailMessageId) {
   ]);
   return { inline_keyboard: rows };
 }
+
+// --- Step 4 pure helpers (share computation + notification text) ---
+
+// Compute the share-holder set and per-holder amounts for a split.
+// Pure helper — no I/O, no Telegram, no Sheet. Easy to unit-test.
+//
+// Inputs:
+//   group         — group tenant ({ group_members: [chat_id...] })
+//   callerChatId  — the member who paid (will be Paid By)
+//   mode          — split mode encoded in the callback:
+//                     "50"   2-person 50/50 split (only valid for n=2)
+//                     "p100" 2-person partner-owes-100% (only valid for n=2)
+//                     "all"  every member pays an equal share
+//                     "wK"   every member except group_members[K] pays equally
+//   totalAmount   — the original transaction amount (number)
+//
+// Output: { holders: [chat_id...], shares: [number...] } parallel arrays.
+//   holders[i] holds shares[i]. shares[0] absorbs the rounding remainder so
+//   sum(shares) === totalAmount exactly. Returns null on invalid input
+//   (mode/group mismatch, empty group, etc.) — caller toasts an error.
+function computeSplitShareSet(group, callerChatId, mode, totalAmount) {
+  if (!group || !group.group_members || !group.group_members.length) return null;
+  if (typeof totalAmount !== "number" || isNaN(totalAmount)) return null;
+  var members = group.group_members.slice();
+  var n = members.length;
+  var caller = String(callerChatId);
+
+  var holders = null;
+  if (mode === "50") {
+    if (n !== 2) return null;
+    holders = members.slice(); // both
+  } else if (mode === "p100") {
+    if (n !== 2) return null;
+    // Caller paid; the other member owes 100%. Caller's share is 0 (no row
+    // written for them — only debt-holders appear in the group sheet).
+    holders = members.filter(function (m) {
+      return m !== caller;
+    });
+  } else if (mode === "all") {
+    holders = members.slice();
+  } else if (mode && mode.charAt(0) === "w") {
+    var idx = parseInt(mode.slice(1), 10);
+    if (isNaN(idx) || idx < 0 || idx >= n) return null;
+    var excluded = members[idx];
+    if (excluded === caller) return null; // can't exclude the payer
+    holders = members.filter(function (m) {
+      return m !== excluded;
+    });
+  } else {
+    return null;
+  }
+
+  if (!holders.length) return null;
+
+  // Round to 2 decimal places. Give the residual to holders[0] so the sum
+  // matches totalAmount exactly (settlement math doesn't drift).
+  var k = holders.length;
+  var per = Math.round((totalAmount / k) * 100) / 100;
+  var shares = new Array(k);
+  for (var i = 1; i < k; i++) shares[i] = per;
+  var residual = Math.round((totalAmount - per * (k - 1)) * 100) / 100;
+  shares[0] = residual;
+  return { holders: holders, shares: shares };
+}
+
+// Format the group-chat notification for a recorded split. Pure formatter.
+// Member names come from a lookup function so we don't import findTenantByChatId
+// at test time.
+//
+// Layout:
+//   ✂️ *<merchant> · <currency> <amount>*
+//   👤 Paid by <Caller>
+//   👥 Shared by Alice (₹100), Bob (₹100)
+//   📂 <Category>
+function formatGroupSplitNotification(opts) {
+  var merchant = opts.merchant || "(no merchant)";
+  var amount = opts.amount;
+  var currency = opts.currency || "INR";
+  var category = opts.category || "";
+  var payerName = opts.payerName || String(opts.payerChatId || "");
+  var holders = opts.holders || [];
+  var shares = opts.shares || [];
+  var nameOf =
+    opts.nameOf ||
+    function (id) {
+      return String(id);
+    };
+
+  var sharePieces = [];
+  for (var i = 0; i < holders.length; i++) {
+    var name = nameOf(holders[i]) || String(holders[i]);
+    sharePieces.push(escapeMarkdown(name) + " (" + currency + " " + shares[i] + ")");
+  }
+
+  var lines = [];
+  lines.push("✂️ *" + escapeMarkdown(merchant) + " · " + currency + " " + amount + "*");
+  lines.push("👤 Paid by " + escapeMarkdown(payerName));
+  lines.push("👥 Shared by " + sharePieces.join(", "));
+  if (category) lines.push("📂 " + escapeMarkdown(category));
+  return lines.join("\n");
+}

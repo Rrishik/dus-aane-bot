@@ -1304,3 +1304,142 @@ describe("handleGroupCallback dispatch", () => {
     acks.forEach((a) => expect(a.payload.text).toContain("step 4"));
   });
 });
+
+describe("computeSplitShareSet", () => {
+  function load() {
+    return loadAppsScript(["Groups.js"], ["computeSplitShareSet"], {});
+  }
+
+  it("50/50 splits a 2-person group across both members", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222"] };
+    var out = computeSplitShareSet(group, "111", "50", 100);
+    expect(out.holders).toEqual(["111", "222"]);
+    expect(out.shares).toEqual([50, 50]);
+  });
+
+  it("p100 (partner owes 100%) only includes the other member", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222"] };
+    var out = computeSplitShareSet(group, "111", "p100", 100);
+    expect(out.holders).toEqual(["222"]);
+    expect(out.shares).toEqual([100]);
+  });
+
+  it("p100 is rejected for groups with more than 2 members", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333"] };
+    expect(computeSplitShareSet(group, "111", "p100", 100)).toBeNull();
+  });
+
+  it("'all' splits across every member preserving CSV order", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333"] };
+    var out = computeSplitShareSet(group, "111", "all", 99);
+    expect(out.holders).toEqual(["111", "222", "333"]);
+    expect(out.shares).toEqual([33, 33, 33]);
+  });
+
+  it("'all' absorbs rounding remainder in shares[0] so the sum equals total", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333"] };
+    var out = computeSplitShareSet(group, "111", "all", 100);
+    // 100 / 3 = 33.33 each → residual 0.01 lands on holders[0]
+    expect(out.shares[0]).toBe(33.34);
+    expect(out.shares[1]).toBe(33.33);
+    expect(out.shares[2]).toBe(33.33);
+    expect(out.shares[0] + out.shares[1] + out.shares[2]).toBeCloseTo(100, 5);
+  });
+
+  it("'wK' excludes the member at CSV index K", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333", "444"] };
+    var out = computeSplitShareSet(group, "111", "w2", 90); // exclude "333"
+    expect(out.holders).toEqual(["111", "222", "444"]);
+    expect(out.shares).toEqual([30, 30, 30]);
+  });
+
+  it("'wK' rejects when the excluded index is the caller (would leave them out of their own debt)", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333"] };
+    expect(computeSplitShareSet(group, "111", "w0", 90)).toBeNull();
+  });
+
+  it("rejects unknown modes and out-of-range indices", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333"] };
+    expect(computeSplitShareSet(group, "111", "wQ", 100)).toBeNull();
+    expect(computeSplitShareSet(group, "111", "w99", 100)).toBeNull();
+    expect(computeSplitShareSet(group, "111", "garbage", 100)).toBeNull();
+    expect(computeSplitShareSet(group, "111", "50", "not-a-number")).toBeNull();
+  });
+});
+
+describe("formatGroupSplitNotification", () => {
+  function load() {
+    return loadAppsScript(["TelegramUtils.js", "Groups.js"], ["formatGroupSplitNotification"], {
+      // TelegramUtils references Telegram URL constants we don't exercise here.
+      UrlFetchApp: {},
+      PropertiesService: {}
+    });
+  }
+
+  it("renders payer, holders with per-share amounts, and category", () => {
+    var { formatGroupSplitNotification } = load();
+    var msg = formatGroupSplitNotification({
+      merchant: "Swiggy",
+      amount: 600,
+      currency: "INR",
+      category: "Food",
+      payerChatId: "111",
+      payerName: "Alice",
+      holders: ["111", "222", "333"],
+      shares: [200, 200, 200],
+      nameOf: function (id) {
+        return { 111: "Alice", 222: "Bob", 333: "Charlie" }[id] || id;
+      }
+    });
+    expect(msg).toContain("Swiggy");
+    expect(msg).toContain("INR 600");
+    expect(msg).toContain("Paid by Alice");
+    expect(msg).toContain("Alice (INR 200)");
+    expect(msg).toContain("Bob (INR 200)");
+    expect(msg).toContain("Charlie (INR 200)");
+    expect(msg).toContain("Food");
+  });
+
+  it("escapes Markdown-special characters in merchant and member names", () => {
+    var { formatGroupSplitNotification } = load();
+    var msg = formatGroupSplitNotification({
+      merchant: "Some_Place",
+      amount: 100,
+      currency: "INR",
+      payerChatId: "111",
+      payerName: "Al*ice",
+      holders: ["222"],
+      shares: [100],
+      nameOf: function () {
+        return "B_ob";
+      }
+    });
+    expect(msg).toContain("Some\\_Place");
+    expect(msg).toContain("Al\\*ice");
+    expect(msg).toContain("B\\_ob");
+  });
+
+  it("omits the category line when no category is supplied", () => {
+    var { formatGroupSplitNotification } = load();
+    var msg = formatGroupSplitNotification({
+      merchant: "X",
+      amount: 50,
+      currency: "INR",
+      payerName: "A",
+      holders: ["222"],
+      shares: [50],
+      nameOf: function () {
+        return "B";
+      }
+    });
+    expect(msg).not.toContain("📂");
+  });
+});
