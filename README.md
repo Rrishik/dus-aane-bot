@@ -158,19 +158,31 @@ Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank. Th
 
 ## Data model
 
-Each tenant's spreadsheet has **one** tab — their transactions:
+Each personal tenant's spreadsheet has **one** tab — their transactions:
 
-| Columns                                                                                               | Purpose                 |
-| ----------------------------------------------------------------------------------------------------- | ----------------------- |
-| Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link | One row per transaction |
+| Columns                                                                                                                            | Purpose                 |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link, Group Ref, Group Message ID | One row per transaction |
 
-The admin sheet (pointed at by `PROD_SHEET_ID`) hosts **shared registry + mapping** tabs used across all tenants:
+`Group Ref = "<group_chat_id>:<Tx ID>"` and `Group Message ID = telegram message_id of the group notification` are populated when a transaction is split into a group; both are blank for personal-only rows. The migration script `adminMigrateTenantSchema()` adds these two columns to existing tenant sheets.
 
-| Tab                    | Columns                                                    | Purpose                                                                  |
-| ---------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Tenants**            | chat_id, name, emails, sheet_id, status, created_at, notes | Registry — maps Telegram chat / forwarder gmail → per-tenant spreadsheet |
-| **MerchantResolution** | Raw Pattern, Resolved Name                                 | Raw bank strings (`FLIPKART_MWS_MERCH`) → clean names (`Flipkart`)       |
-| **CategoryOverrides**  | Merchant, Category                                         | Default category per merchant                                            |
+Group tenants get their own spreadsheet with the **per-share β schema** — one row per share, so a 4-way split is 4 rows linked by the same Tx ID:
+
+| Columns                                                                                                                                | Purpose           |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Email Date, Tx Date, Merchant, Amount, Currency, Paid By, Share Holder, Share Amount, Tx ID, Category, Tx Type, Message ID, Email Link | One row per share |
+
+`Tx Type = "Settlement"` (with `Category = "Settlement"`) marks settlement rows that _reduce_ what the payer owes the share-holder, instead of adding to the debt.
+
+The admin sheet (pointed at by `ADMIN_SHEET_ID`) hosts **shared registry + mapping** tabs used across all tenants:
+
+| Tab                    | Columns                                                                                                                                         | Purpose                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Tenants**            | chat_id, name, emails, sheet_id, status, created_at, notes, last_forward_at, last_nag_at, nag_count, chat_type, group_members, primary_currency | Registry — maps Telegram chat / forwarder gmail / group chat → tenant sheet |
+| **MerchantResolution** | Raw Pattern, Resolved Name                                                                                                                      | Raw bank strings (`FLIPKART_MWS_MERCH`) → clean names (`Flipkart`)          |
+| **CategoryOverrides**  | Merchant, Category                                                                                                                              | Default category per merchant                                               |
+
+`chat_type` is one of `personal` or `group`. For groups, `group_members` is a CSV of the member chat_ids (max 4) and `primary_currency` is the default currency for `/settle` and FX display.
 
 **Why `MerchantResolution` and `CategoryOverrides` are shared:** these mappings are universal — every bank sends the same raw patterns to every tenant. Centralising means new tenants inherit a pre-trained bot on day 1 and every tenant's new-merchant taps improve the pool for everyone. Per-transaction category edits (the ✏️ Category button) still write to the tenant's main sheet only — customising your own categorisation doesn't affect anyone else.
 
@@ -245,6 +257,7 @@ The trust model: you set up a one-time Gmail filter that matches a **fixed allow
 ├── TenantRegistry.js       # Tenants tab CRUD, tenant lookup helpers
 ├── Onboarding.js           # /start, /register, /account, /ownsheet, sheet provisioning, setup email
 ├── Dashboard.js            # /dashboard — Looker Studio Linking API URL builder + handler
+├── Groups.js               # group provisioning, member onboarding, split/settle/stats UI + writes
 ├── GroupSheet.js           # group-sheet β-schema headers + open helper
 ├── AdminHelpers.js         # adminCreateTemplateSheet, adminProvisionTenantSheet, seed helpers
 ├── worker/src/index.js     # Cloudflare Worker proxy

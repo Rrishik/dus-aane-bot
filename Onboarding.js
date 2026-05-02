@@ -17,12 +17,13 @@ function handleStartCommand(chatId, username) {
 
   var greeting = username ? "Hey " + username + "! " : "";
   var msg =
-    "👋 " +
+    "✌️ " +
     greeting +
-    "Track your spends by forwarding bank emails — no full-inbox access, no account linking.\n\n" +
-    "Worried about apps like Cred reading your OTPs, statements, and personal mail? This [open-source bot](https://github.com/Rrishik/dus-aane-bot) solves that.\n\n" +
-    "Send `/register your.email@gmail.com` to begin.";
-  sendTelegramMessage(chatId, msg, { parse_mode: "Markdown" });
+    "Track your spends — and split them with friends — by forwarding bank emails. No full-inbox access, no account linking.\n\n" +
+    "Worried about apps like Cred reading your OTPs, statements, and personal mail? This [open-source bot](https://github.com/Rrishik/Dus-Aane-Bot) solves that.\n\n" +
+    "*Solo:* send `/register your.email@gmail.com` to begin.\n" +
+    "*Shared expenses:* register first, then add me to a Telegram group with the people you split with — every transaction notification gains a one-tap _Split with <group>_ button.";
+  sendTelegramMessage(chatId, msg, { parse_mode: "Markdown", disable_web_page_preview: true });
 }
 
 /**

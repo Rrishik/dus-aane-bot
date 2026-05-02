@@ -20,10 +20,13 @@ function setTelegramWebhook() {
 }
 
 function setTelegramCommands() {
-  // Only list commands that work without arguments. Commands like /register
-  // and /ask need args; Telegram's menu auto-sends on tap with no chance to
-  // add an argument, so listing them here just produces usage errors.
-  var commands = [
+  // Only list commands that work without arguments. Commands like /register,
+  // /ask, and /settle need args; Telegram's menu auto-sends on tap with no
+  // chance to add an argument, so listing them here just produces usage errors.
+  //
+  // Commands are scoped: the personal menu shows in DMs only, the group menu
+  // shows in any group/supergroup the bot is in.
+  var personalCommands = [
     { command: "/start", description: "Onboard / show welcome" },
     { command: "/register", description: "Register a Gmail address to forward from" },
     { command: "/account", description: "Account & settings" },
@@ -33,10 +36,21 @@ function setTelegramCommands() {
     { command: "/ownsheet", description: "Transfer Drive ownership of your sheet" },
     { command: "/help", description: "Show available commands" }
   ];
-  var payload = {
-    commands: commands
-  };
-  sendRequest(BOT_SET_COMMANDS_URL, "post", payload);
+  sendRequest(BOT_SET_COMMANDS_URL, "post", {
+    commands: personalCommands,
+    scope: { type: "all_private_chats" }
+  });
+
+  var groupCommands = [
+    { command: "/start", description: "Set up this group / re-sync members" },
+    { command: "/account", description: "Group status, members, sheet link" },
+    { command: "/stats", description: "Who owes whom (per currency)" },
+    { command: "/help", description: "Group commands" }
+  ];
+  sendRequest(BOT_SET_COMMANDS_URL, "post", {
+    commands: groupCommands,
+    scope: { type: "all_group_chats" }
+  });
 }
 
 // Utility to send a Telegram message

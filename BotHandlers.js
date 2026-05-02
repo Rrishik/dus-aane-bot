@@ -183,7 +183,7 @@ function handleMessage(update) {
 // Method to handle the /help command (also handles /start)
 function handleHelpCommand(chatId, username) {
   var message =
-    `*Commands*\n` +
+    `*Personal commands*\n` +
     `• /ask — ask anything about your spending\n` +
     `   _e.g. /ask how much on food last month?_\n` +
     `• /stats — analytics dashboard\n` +
@@ -191,7 +191,14 @@ function handleHelpCommand(chatId, username) {
     `• /recent — recent transactions _(e.g. /recent 10)_\n` +
     `• /account — your account & settings\n` +
     `• /ownsheet — transfer Drive ownership of your sheet to you\n` +
-    `• /help — this message`;
+    `• /help — this message\n\n` +
+    `*Splitting with friends*\n` +
+    `Add me to a Telegram group (max 4 members) and run /start there. Every personal transaction notification gains a 👥 *Split with <group>* button — tap to split equally, leave someone out, or pay 100% on a friend's behalf.\n\n` +
+    `*In the group:*\n` +
+    `• /stats — who owes whom (per currency, with a [🔀 Simplify] toggle)\n` +
+    `• /settle @member <amount> — record a cash settlement\n` +
+    `• /account — group setup, members, sheet link\n` +
+    `• /help — group help`;
 
   var url = sheetUrl(getTenantSheetId());
   sendTelegramMessage(chatId, message, {
