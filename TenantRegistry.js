@@ -157,8 +157,16 @@ function findTenantByEmail(email) {
   if (!email) return null;
   var lc = String(email).toLowerCase();
   var list = loadTenants();
+  // Only personal tenants own forwarder addresses. Group tenants use the
+  // emails column to remember member addresses for sheet-sharing — those
+  // must NOT be matched by forwarded-email routing, otherwise transactions
+  // would be posted in the group chat instead of the member's DM.
   for (var i = 0; i < list.length; i++) {
-    if (list[i].status === TENANT_STATUS.ACTIVE && list[i].emails.indexOf(lc) !== -1) {
+    if (
+      list[i].status === TENANT_STATUS.ACTIVE &&
+      list[i].chat_type === TENANT_CHAT_TYPE.PERSONAL &&
+      list[i].emails.indexOf(lc) !== -1
+    ) {
       return list[i];
     }
   }

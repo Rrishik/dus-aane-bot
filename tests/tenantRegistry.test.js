@@ -33,6 +33,7 @@ function setup(rows) {
       "loadTenants",
       "invalidateTenantCache",
       "findTenantByChatId",
+      "findTenantByEmail",
       "findGroupTenantByChatId",
       "insertGroupTenant",
       "addGroupMember",
@@ -253,5 +254,24 @@ describe("group tenant helpers", () => {
     expect(s.getGroupAdminChatId({ notes: "" })).toBe("");
     expect(s.getGroupAdminChatId({ notes: "some other note" })).toBe("");
     expect(s.getGroupAdminChatId({ notes: "admin=42 extra" })).toBe("42");
+  });
+});
+
+describe("findTenantByEmail", () => {
+  it("only matches PERSONAL tenants — group tenants store member emails for sheet-sharing, not forwarder routing", () => {
+    // Group row first (would have been matched before the chat_type filter).
+    var s = setup([
+      ["-100", "Pad", "alice@x.com,bob@x.com", "grp", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"],
+      ["111", "Alice", "alice@x.com", "sheet-a", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var t = s.findTenantByEmail("alice@x.com");
+    expect(t).not.toBe(null);
+    expect(t.chat_id).toBe("111"); // personal, not the group
+    expect(t.chat_type).toBe("personal");
+  });
+
+  it("returns null when only a group tenant carries the address", () => {
+    var s = setup([["-100", "Pad", "alice@x.com", "grp", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]]);
+    expect(s.findTenantByEmail("alice@x.com")).toBe(null);
   });
 });
