@@ -305,6 +305,15 @@ function sendTransactionMessage(transaction_details, messageId, user, isNewMerch
       rows.unshift([{ text: "🏪 Edit Merchant", callback_data: "editmerchname_" + messageId }]);
       rows.unshift([{ text: saveLabel, callback_data: "savemerch_" + messageId }]);
     }
+    // Group-split parent buttons (one row per group the user belongs to).
+    // Stacked above the legacy split/category/delete row so the per-group
+    // action is the most prominent option for users in groups. When the
+    // user is in zero groups buildGroupParentButtonRows returns []
+    // and we fall back to the legacy ✂️ Split flow unchanged.
+    var groupRows = buildGroupParentButtonRows(getTenantChatId(), messageId);
+    for (var gi = 0; gi < groupRows.length; gi++) {
+      rows.unshift(groupRows[groupRows.length - 1 - gi]);
+    }
     options.reply_markup = buildReplyMarkup(rows);
   }
 

@@ -944,3 +944,92 @@ describe("handleGroupAccountCommand", () => {
     expect(sent[0].payload.text).toContain("isn't set up yet");
   });
 });
+
+describe("group callback encoder", () => {
+  function load() {
+    return loadAppsScript(["Groups.js"], ["encodeGroupCallback", "decodeGroupCallback", "isGroupCallback"], {});
+  }
+
+  it("round-trips action + parts", () => {
+    var { encodeGroupCallback, decodeGroupCallback } = load();
+    var enc = encodeGroupCallback("gsp", ["abc123", "-100", "w1"]);
+    expect(enc).toBe("gsp:abc123:-100:w1");
+    var dec = decodeGroupCallback(enc);
+    expect(dec).toEqual({ action: "gsp", parts: ["abc123", "-100", "w1"] });
+  });
+
+  it("isGroupCallback recognizes our action codes only", () => {
+    var { isGroupCallback } = load();
+    expect(isGroupCallback("gnav:abc:-100")).toBe(true);
+    expect(isGroupCallback("gsp:abc:-100:50")).toBe(true);
+    expect(isGroupCallback("gset:abc:-100")).toBe(true);
+    expect(isGroupCallback("gst:abc:-100:1")).toBe(true);
+    expect(isGroupCallback("gbk:abc:-100:0")).toBe(true);
+    expect(isGroupCallback("gun:abc")).toBe(true);
+    // Legacy format passes through.
+    expect(isGroupCallback("split_abc")).toBe(false);
+    expect(isGroupCallback("stats_monthly")).toBe(false);
+    expect(isGroupCallback("editcat_abc123")).toBe(false);
+    expect(isGroupCallback("")).toBe(false);
+    expect(isGroupCallback(null)).toBe(false);
+  });
+
+  it("worst-case callback fits Telegram's 64-byte limit", () => {
+    var { encodeGroupCallback } = load();
+    // Worst case in our format: gsp:<gmail-id 16 hex>:<-100xxxxxxxxxx 14>:wN
+    var enc = encodeGroupCallback("gsp", ["18f7c9a2b3d4e5f6", "-1009876543210", "w3"]);
+    expect(enc.length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe("buildGroupParentButtonRows", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TenantRegistry.js", "Groups.js"],
+      ["buildGroupParentButtonRows", "invalidateTenantCache"],
+      stubs
+    );
+  }
+
+  it("returns empty array when user is in zero groups", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { buildGroupParentButtonRows } = load({
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID
+    });
+    expect(buildGroupParentButtonRows("111", "msg1")).toEqual([]);
+  });
+
+  it("emits one row per active group containing the user", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Bachelor Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"],
+      ["-200", "Trip", "", "g2", "active", "", "admin=111", "", "", 0, "group", "111", "INR"],
+      ["-300", "OldGroup", "", "g3", "disabled", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { buildGroupParentButtonRows } = load({
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID
+    });
+    var rows = buildGroupParentButtonRows("111", "msg1");
+    expect(rows.length).toBe(2); // disabled OldGroup excluded
+    expect(rows[0][0].text).toContain("Bachelor Pad");
+    expect(rows[0][0].callback_data).toBe("gnav:msg1:-100");
+    expect(rows[1][0].text).toContain("Trip");
+    expect(rows[1][0].callback_data).toBe("gnav:msg1:-200");
+  });
+
+  it("excludes groups the user is not a member of", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { buildGroupParentButtonRows } = load({
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID
+    });
+    expect(buildGroupParentButtonRows("222", "msg1")).toEqual([]);
+  });
+});

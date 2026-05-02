@@ -535,3 +535,78 @@ function handleGroupAccountCommand(update) {
   if (group.sheet_id) lines.push("Sheet: [open](" + sheetUrl(group.sheet_id) + ")");
   sendTelegramMessage(chatId, lines.join("\n"), { parse_mode: "Markdown", disable_web_page_preview: true });
 }
+
+// --- Split-UI callback encoding ---
+// Telegram caps callback_data at 64 bytes. Our format keeps each callback
+// under 50 bytes for the worst case (16-byte gmail message id + 14-byte
+// negative group chat id + 4-byte action + separators).
+//
+// Action codes:
+//   gnav   parent tap, render Level 1 split picker for a group
+//   gsp    leaf, record a split (mode = 50 | all | wN where N is member idx)
+//   gset   render Level 2 settlement picker
+//   gst    leaf, record a settlement (target = member idx)
+//   gbk    back nav (dest = 0 to return to the top-level transaction view)
+//   gun    undo a recorded split, restore Level 0 buttons
+//
+// All multi-arg callbacks use ":" as the separator (vs. the legacy "_") so the
+// existing personal callback dispatch (which splits on the first "_") doesn't
+// fight us.
+
+function encodeGroupCallback(action, parts) {
+  var arr = [action].concat(parts || []);
+  return arr.join(":");
+}
+
+function decodeGroupCallback(data) {
+  if (!data) return null;
+  var bits = String(data).split(":");
+  return { action: bits[0], parts: bits.slice(1) };
+}
+
+// True iff the callback_data starts with one of the group-UI action codes.
+// Used by the legacy callback dispatcher in BotHandlers to bail out early.
+function isGroupCallback(data) {
+  if (!data) return false;
+  var head = String(data).split(":")[0];
+  return head === "gnav" || head === "gsp" || head === "gset" || head === "gst" || head === "gbk" || head === "gun";
+}
+
+// Build the Level 0 row(s) for a transaction-notification keyboard:
+// one parent button per active group the personal tenant belongs to.
+// Returns [] when the user is in zero groups — caller falls back to the
+// legacy ✂️ Split (2-person personal flow).
+function buildGroupParentButtonRows(personalChatId, emailMessageId) {
+  var groups = findGroupsForMember(personalChatId);
+  if (!groups.length) return [];
+  var rows = [];
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    var label = "👥 Split with " + (g.name || "Group") + " ▾";
+    rows.push([{ text: label, callback_data: encodeGroupCallback("gnav", [emailMessageId, g.chat_id]) }]);
+  }
+  return rows;
+}
+
+// Top-level dispatcher for group-UI callbacks. Step 3.1 only handles gnav
+// (the parent tap) with a placeholder toast; the full Level 1/2 menus and
+// leaf handlers land in step 3.2 / step 4.
+function handleGroupCallback(update) {
+  var cb = update.callback_query;
+  if (!cb || !cb.data) return;
+  var decoded = decodeGroupCallback(cb.data);
+  if (!decoded) {
+    answerCallbackQuery(cb.id, "❌ Bad callback", false);
+    return;
+  }
+  if (decoded.action === "gnav") {
+    // parts: [emailMessageId, groupChatId]
+    var groupChatId = decoded.parts[1];
+    var group = findGroupTenantByChatId(groupChatId);
+    var name = group && group.name ? group.name : "the group";
+    answerCallbackQuery(cb.id, "🚧 Split picker for " + name + " — wiring up in step 3.2", true);
+    return;
+  }
+  // Other group actions (gsp, gset, gst, gbk, gun) ship in 3.2 / step 4.
+  answerCallbackQuery(cb.id, "🚧 Coming in step 3.2", true);
+}

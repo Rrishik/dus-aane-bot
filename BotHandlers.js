@@ -217,6 +217,14 @@ function handleCallbackQuery(update) {
       return;
     }
 
+    // Group-split UI callbacks use ":" as separator and a distinct action
+    // namespace (gnav, gsp, ...). Dispatch them before the legacy "_" parser
+    // so we don't have to thread the new format through every handler.
+    if (isGroupCallback(data)) {
+      handleGroupCallback(update);
+      return;
+    }
+
     // Callback data format: "<action>_<payload>" (e.g. "split_abc123", "stats_monthly").
     var separatorIndex = data.indexOf("_");
     if (separatorIndex < 0) {
