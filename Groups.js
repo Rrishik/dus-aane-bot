@@ -720,7 +720,9 @@ function listOtherMembers(group, callerChatId) {
 // Level 1: split picker for one group. Layout depends on member count.
 //   2-person: [👥 50-50 with <other>]   [💝 <other> owes 100%]
 //   3-person: [👥 All 3]                 [➖ Without <X>]    [➖ Without <Y>]
-//   4-person: [👥 All 4]   [➖ Without <X>]   [➖ Without <Y>]   [➖ Without <Z>]
+//   4-person: [👥 All 4]
+//             [➖ Without <X>]   [➖ Without <Y>]   [➖ Without <Z>]
+//             [👥 With <X>]      [👥 With <Y>]      [👥 With <Z>]
 // Plus a [💸 Settlement ▾] row and [← Back] row.
 function buildSplitLevel1Keyboard(group, callerChatId, emailMessageId) {
   var groupChatId = group.chat_id;
@@ -762,6 +764,21 @@ function buildSplitLevel1Keyboard(group, callerChatId, emailMessageId) {
       });
     }
     rows.push(withoutRow);
+    // For n=4 only, add a "With X" row for the 2-person sub-splits that
+    // "Without" can't reach (e.g. just caller + member B in a 4-person
+    // group). 3-person groups don't need this — "Without X" already covers
+    // every 2-person subset that includes the caller.
+    if (n === 4) {
+      var withRow = [];
+      for (var k = 0; k < others.length; k++) {
+        var idxI = group.group_members.indexOf(others[k].chat_id);
+        withRow.push({
+          text: "👥 With " + others[k].label,
+          callback_data: encodeGroupCallback("gsp", [emailMessageId, groupChatId, "i" + idxI])
+        });
+      }
+      rows.push(withRow);
+    }
   }
 
   // Settlement sub-menu
@@ -834,6 +851,9 @@ function buildTransactionLevel0Keyboard(callerChatId, emailMessageId) {
 //                     "p100" 2-person partner-owes-100% (only valid for n=2)
 //                     "all"  every member pays an equal share
 //                     "wK"   every member except group_members[K] pays equally
+//                     "iK"   only caller + group_members[K] pay equally (for
+//                              4-person groups where the user wants a 2-way
+//                              split with one specific other member)
 //   totalAmount   — the original transaction amount (number)
 //
 // Output: { holders: [chat_id...], shares: [number...] } parallel arrays.
@@ -868,6 +888,12 @@ function computeSplitShareSet(group, callerChatId, mode, totalAmount) {
     holders = members.filter(function (m) {
       return m !== excluded;
     });
+  } else if (mode && mode.charAt(0) === "i") {
+    var idxI = parseInt(mode.slice(1), 10);
+    if (isNaN(idxI) || idxI < 0 || idxI >= n) return null;
+    var partner = members[idxI];
+    if (partner === caller) return null; // "just me + me" is a no-op
+    holders = [caller, partner];
   } else {
     return null;
   }

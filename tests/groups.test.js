@@ -1075,19 +1075,37 @@ describe("buildSplitLevel1Keyboard", () => {
     expect(withoutRow[1].callback_data).toBe("gsp:m1:-100:w2");
   });
 
-  it("4-person group: All 4 + 3 without buttons", () => {
+  it("4-person group: All 4 + 3 'Without X' + 3 'With X' buttons", () => {
     var { SpreadsheetApp } = setupRegistry([]);
     var { buildSplitLevel1Keyboard } = load({ SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID });
     var group = { chat_id: "-100", group_members: ["111", "222", "333", "444"] };
     var kb = buildSplitLevel1Keyboard(group, "111", "m1");
     expect(kb.inline_keyboard[0][0].text).toBe("👥 All 4");
-    expect(kb.inline_keyboard[1].length).toBe(3); // 3 "without" buttons
+    expect(kb.inline_keyboard[1].length).toBe(3); // "Without" row
+    expect(kb.inline_keyboard[1][0].text).toBe("➖ Without 222");
+    expect(kb.inline_keyboard[1][0].callback_data).toBe("gsp:m1:-100:w1");
+    expect(kb.inline_keyboard[2].length).toBe(3); // "With" row (2-person sub-splits)
+    expect(kb.inline_keyboard[2][0].text).toBe("👥 With 222");
+    expect(kb.inline_keyboard[2][0].callback_data).toBe("gsp:m1:-100:i1");
+    expect(kb.inline_keyboard[2][2].callback_data).toBe("gsp:m1:-100:i3");
     // No paid-100% in 3+ groups
     var allText = kb.inline_keyboard
       .flat()
       .map((b) => b.text)
       .join("|");
     expect(allText).not.toContain("owes 100%");
+  });
+
+  it("3-person group does NOT add a 'With X' row (Without X already covers 2-person subsets)", () => {
+    var { SpreadsheetApp } = setupRegistry([]);
+    var { buildSplitLevel1Keyboard } = load({ SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID });
+    var group = { chat_id: "-100", group_members: ["111", "222", "333"] };
+    var kb = buildSplitLevel1Keyboard(group, "111", "m1");
+    var allText = kb.inline_keyboard
+      .flat()
+      .map((b) => b.text)
+      .join("|");
+    expect(allText).not.toContain("👥 With");
   });
 });
 
@@ -1332,6 +1350,20 @@ describe("computeSplitShareSet", () => {
     var { computeSplitShareSet } = load();
     var group = { group_members: ["111", "222", "333"] };
     expect(computeSplitShareSet(group, "111", "w0", 90)).toBeNull();
+  });
+
+  it("'iK' splits between caller and only group_members[K] (4-person 2-way sub-split)", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333", "444"] };
+    var out = computeSplitShareSet(group, "111", "i2", 100); // caller + "333"
+    expect(out.holders).toEqual(["111", "333"]);
+    expect(out.shares).toEqual([50, 50]);
+  });
+
+  it("'iK' rejects when K points at the caller (no-op)", () => {
+    var { computeSplitShareSet } = load();
+    var group = { group_members: ["111", "222", "333", "444"] };
+    expect(computeSplitShareSet(group, "111", "i0", 100)).toBeNull();
   });
 
   it("rejects unknown modes and out-of-range indices", () => {
