@@ -107,6 +107,10 @@ function handleMessage(update) {
         handleGroupStatsCommand(update);
         return;
       }
+      if (groupCommand === "/settle") {
+        handleGroupSettleCommand(update);
+        return;
+      }
       // Personal commands run in DM only.
       var PERSONAL_ONLY = ["/register", "/ownsheet", "/backfill", "/ask"];
       if (PERSONAL_ONLY.indexOf(groupCommand) !== -1) {

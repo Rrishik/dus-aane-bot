@@ -2823,3 +2823,264 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
     expect(edit).toBeFalsy();
   });
 });
+
+describe("parseSettleCommand", () => {
+  function load() {
+    return loadAppsScript(["Groups.js"], ["parseSettleCommand"], {});
+  }
+
+  it("parses '/settle @alice 500' into { mention: 'alice', amount: 500 }", () => {
+    var { parseSettleCommand } = load();
+    expect(parseSettleCommand("/settle @alice 500")).toEqual({ mention: "alice", amount: 500 });
+  });
+
+  it("parses '/settle alice 500' (no @) the same way", () => {
+    var { parseSettleCommand } = load();
+    expect(parseSettleCommand("/settle alice 500")).toEqual({ mention: "alice", amount: 500 });
+  });
+
+  it("strips the @bot suffix that group messages sometimes carry", () => {
+    var { parseSettleCommand } = load();
+    expect(parseSettleCommand("/settle@DusAaneBot @alice 500")).toEqual({ mention: "alice", amount: 500 });
+  });
+
+  it("accepts decimals and comma-separated thousands", () => {
+    var { parseSettleCommand } = load();
+    expect(parseSettleCommand("/settle @alice 1,234.50")).toEqual({ mention: "alice", amount: 1234.5 });
+  });
+
+  it("returns syntax error when the mention or amount is missing", () => {
+    var { parseSettleCommand } = load();
+    expect(parseSettleCommand("/settle").error).toBe("syntax");
+    expect(parseSettleCommand("/settle @alice").error).toBe("syntax");
+    expect(parseSettleCommand("").error).toBe("syntax");
+  });
+
+  it("returns amount error for non-numeric or non-positive amounts", () => {
+    var { parseSettleCommand } = load();
+    expect(parseSettleCommand("/settle @alice -50").error).toBe("amount");
+    expect(parseSettleCommand("/settle @alice 0").error).toBe("amount");
+    expect(parseSettleCommand("/settle @alice abc").error).toBe("amount");
+  });
+});
+
+describe("resolveMemberByMention", () => {
+  function load() {
+    return loadAppsScript(["Groups.js"], ["resolveMemberByMention"], {});
+  }
+
+  it("returns the unique chat_id whose names contain the mention (case-insensitive)", () => {
+    var { resolveMemberByMention } = load();
+    var group = { group_members: ["111", "222", "333"] };
+    var candidatesOf = (id) => ({ 222: ["Alice"], 333: ["Bob"] })[id];
+    expect(resolveMemberByMention(group, "alice", "111", candidatesOf)).toEqual({ chat_id: "222" });
+    expect(resolveMemberByMention(group, "ALICE", "111", candidatesOf)).toEqual({ chat_id: "222" });
+  });
+
+  it("matches against any candidate name (e.g. tenant.name OR Telegram username)", () => {
+    var { resolveMemberByMention } = load();
+    var group = { group_members: ["111", "222"] };
+    var candidatesOf = (id) => (id === "222" ? ["Alice Smith", "alice_handle"] : []);
+    expect(resolveMemberByMention(group, "alice_handle", "111", candidatesOf)).toEqual({ chat_id: "222" });
+  });
+
+  it("returns not_found when nothing matches", () => {
+    var { resolveMemberByMention } = load();
+    var group = { group_members: ["111", "222"] };
+    var candidatesOf = (id) => (id === "222" ? ["Bob"] : []);
+    expect(resolveMemberByMention(group, "alice", "111", candidatesOf).error).toBe("not_found");
+  });
+
+  it("returns ambiguous when 2+ members share a candidate name", () => {
+    var { resolveMemberByMention } = load();
+    var group = { group_members: ["111", "222", "333"] };
+    var candidatesOf = () => ["Alice"];
+    expect(resolveMemberByMention(group, "alice", "111", candidatesOf).error).toBe("ambiguous");
+  });
+
+  it("excludes the caller from the candidate set", () => {
+    var { resolveMemberByMention } = load();
+    var group = { group_members: ["111", "222"] };
+    var candidatesOf = (id) => (id === "111" ? ["Alice"] : ["Bob"]);
+    // Caller is 111 ("Alice"); mention "alice" should not match the caller.
+    expect(resolveMemberByMention(group, "alice", "111", candidatesOf).error).toBe("not_found");
+  });
+});
+
+describe("handleGroupSettleCommand", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["handleGroupSettleCommand"],
+      stubs
+    );
+  }
+
+  function setup(tenantRows) {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var adminSs = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var tab = adminSs.insertSheet("Tenants");
+    tab.appendRow([
+      "chat_id",
+      "name",
+      "emails",
+      "sheet_id",
+      "status",
+      "created_at",
+      "notes",
+      "last_forward_at",
+      "last_nag_at",
+      "nag_count",
+      "chat_type",
+      "group_members",
+      "primary_currency"
+    ]);
+    tenantRows.forEach((r) => tab.appendRow(r));
+    var grp = SpreadsheetApp.openById("g1").getSheets()[0];
+    grp.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Currency",
+      "Paid By",
+      "Share Holder",
+      "Share Amount",
+      "Tx ID",
+      "Category",
+      "Tx Type",
+      "Message ID",
+      "Email Link"
+    ]);
+    return SpreadsheetApp;
+  }
+
+  function commonStubs(SpreadsheetApp, sent) {
+    return {
+      ...urlStubs(),
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {}, getUuid: () => "tx-settle-cash" },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4,
+      G_COL_COUNT: 13
+    };
+  }
+
+  function makeUpdate(callerId, text) {
+    return {
+      message: {
+        chat: { id: -100, type: "group" },
+        from: { id: callerId },
+        text: text
+      }
+    };
+  }
+
+  it("happy path: writes a Settlement row, posts notification, no personal write", () => {
+    var sent = [];
+    var SpreadsheetApp = setup([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupSettleCommand } = load(commonStubs(SpreadsheetApp, sent));
+    handleGroupSettleCommand(makeUpdate(111, "/settle @bob 500"));
+
+    // Group notification posted.
+    var notif = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
+    expect(notif).toBeTruthy();
+    expect(notif.payload.text).toContain("settled INR 500.00");
+    expect(notif.payload.text).toContain("Alice");
+    expect(notif.payload.text).toContain("Bob");
+
+    // Group sheet row written.
+    var grpSheet = SpreadsheetApp.openById("g1").getSheets()[0];
+    expect(grpSheet.getLastRow()).toBe(2);
+    var row = grpSheet.getRange(2, 1, 1, 13).getValues()[0];
+    expect(row[3]).toBe(500); // amount
+    expect(row[4]).toBe("INR"); // currency
+    expect(row[5]).toBe("111"); // paid by (caller)
+    expect(row[6]).toBe("222"); // share holder (target)
+    expect(row[7]).toBe(500); // share amount
+    expect(row[8]).toBe("tx-settle-cash"); // tx id
+    expect(row[9]).toBe("Settlement"); // category
+    expect(row[10]).toBe("Settlement"); // tx type
+    expect(row[11]).toBe("1"); // group msg id (default makeFetch reply)
+  });
+
+  it("rejects callers who aren't members of the group", () => {
+    var sent = [];
+    var SpreadsheetApp = setup([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { handleGroupSettleCommand } = load(commonStubs(SpreadsheetApp, sent));
+    handleGroupSettleCommand(makeUpdate(999, "/settle @alice 500"));
+
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
+    expect(reply).toBeTruthy();
+    expect(reply.payload.text).toContain("not a member");
+    expect(SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(1); // header only
+  });
+
+  it("rejects missing mention or amount with a usage hint", () => {
+    var sent = [];
+    var SpreadsheetApp = setup([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { handleGroupSettleCommand } = load(commonStubs(SpreadsheetApp, sent));
+    handleGroupSettleCommand(makeUpdate(111, "/settle"));
+
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
+    expect(reply.payload.text).toContain("Usage:");
+    expect(SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(1);
+  });
+
+  it("rejects negative or non-numeric amounts", () => {
+    var sent = [];
+    var SpreadsheetApp = setup([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupSettleCommand } = load(commonStubs(SpreadsheetApp, sent));
+    handleGroupSettleCommand(makeUpdate(111, "/settle @bob -50"));
+
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
+    expect(reply.payload.text).toContain("positive number");
+  });
+
+  it("rejects unknown mentions", () => {
+    var sent = [];
+    var SpreadsheetApp = setup([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupSettleCommand } = load(commonStubs(SpreadsheetApp, sent));
+    handleGroupSettleCommand(makeUpdate(111, "/settle @charlie 500"));
+
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
+    expect(reply.payload.text).toContain("No group member matches");
+    expect(SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(1);
+  });
+
+  it("uses the group's primary_currency", () => {
+    var sent = [];
+    var SpreadsheetApp = setup([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "USD"]
+    ]);
+    var { handleGroupSettleCommand } = load(commonStubs(SpreadsheetApp, sent));
+    handleGroupSettleCommand(makeUpdate(111, "/settle @bob 50"));
+
+    var notif = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
+    expect(notif.payload.text).toContain("USD 50.00");
+    var row = SpreadsheetApp.openById("g1").getSheets()[0].getRange(2, 1, 1, 13).getValues()[0];
+    expect(row[4]).toBe("USD");
+  });
+});

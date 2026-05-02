@@ -110,35 +110,40 @@ function getTelegramChatAdministrators(chat_id) {
   }
 }
 
-// Best-effort lookup of one user's display name within a chat. Returns the
-// user's first_name (preferred), then username, then "" — NEVER throws and
-// NEVER returns a chat_id (caller decides the final fallback). Used by the
-// split-UI keyboards when a member's personal tenant is missing or has an
-// empty name column, so we don't render raw chat_ids on buttons.
-//
-// Per-execution memo (Apps Script clears globals between runs) keeps repeat
-// renders within the same callback dispatch from re-hitting Telegram.
-var _CHAT_MEMBER_NAME_CACHE = {};
-function getTelegramChatMemberName(chat_id, user_chat_id) {
+// Best-effort lookup of one user's profile within a chat. Returns
+// { name, username } where:
+//   - name = first_name (preferred), then username, then ""
+//   - username = the @-handle without the @, or ""
+// NEVER throws. Per-execution memo (Apps Script clears globals between
+// runs) keeps repeat renders within one callback dispatch from re-hitting
+// Telegram.
+var _CHAT_MEMBER_INFO_CACHE = {};
+function getTelegramChatMemberInfo(chat_id, user_chat_id) {
   var key = String(chat_id) + ":" + String(user_chat_id);
-  if (Object.prototype.hasOwnProperty.call(_CHAT_MEMBER_NAME_CACHE, key)) {
-    return _CHAT_MEMBER_NAME_CACHE[key];
+  if (Object.prototype.hasOwnProperty.call(_CHAT_MEMBER_INFO_CACHE, key)) {
+    return _CHAT_MEMBER_INFO_CACHE[key];
   }
-  var name = "";
+  var info = { name: "", username: "" };
   try {
     var resp = sendRequest(BOT_GET_CHAT_MEMBER_URL, "post", { chat_id: chat_id, user_id: user_chat_id });
     if (resp) {
       var body = JSON.parse(resp.getContentText());
       if (body && body.ok && body.result && body.result.user) {
         var u = body.result.user;
-        name = u.first_name || u.username || "";
+        info.username = u.username || "";
+        info.name = u.first_name || u.username || "";
       }
     }
   } catch (e) {
-    console.error("getTelegramChatMemberName error: " + e);
+    console.error("getTelegramChatMemberInfo error: " + e);
   }
-  _CHAT_MEMBER_NAME_CACHE[key] = name;
-  return name;
+  _CHAT_MEMBER_INFO_CACHE[key] = info;
+  return info;
+}
+
+// Backwards-compatible name-only accessor used by the split-UI keyboards.
+function getTelegramChatMemberName(chat_id, user_chat_id) {
+  return getTelegramChatMemberInfo(chat_id, user_chat_id).name;
 }
 
 // Returns the bot's own User object (id, username, ...). Cached in

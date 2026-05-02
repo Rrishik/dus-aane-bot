@@ -489,8 +489,9 @@ function handleGroupHelpCommand(update) {
     "• `/start` — re-sync the member list from this chat\n" +
     "• `/account` — show this group's setup\n" +
     "• `/stats` — who owes whom (per currency)\n" +
+    "• `/settle @member <amount>` — record a cash payment to a member\n" +
     "• `/help` — this message\n\n" +
-    "_Settlements: forward the UPI confirmation email in DM, tap_ 👥 *Split with <group>* _→_ 💸 *Settlement* _→ recipient._";
+    "_Email-based settlements: forward the UPI confirmation in DM, tap_ 👥 *Split with <group>* _→_ 💸 *Settlement* _→ recipient._";
   var opts = { parse_mode: "Markdown" };
   if (group.sheet_id) {
     opts.reply_markup = {
@@ -1629,4 +1630,182 @@ function buildGroupStatsKeyboard(mode) {
   return {
     inline_keyboard: [[{ text: "🔀 Simplify", callback_data: encodeGroupCallback("gstats", ["s"]) }]]
   };
+}
+
+// --- /settle shortcut command (group context) ---
+
+// Pure parser. Accepts message text like "/settle @alice 500" or "/settle@bot @alice 500".
+// Returns { mention, amount } on success, or { error: "syntax" | "amount" }.
+// Mention may include or omit the leading @; amount must be a positive number
+// (commas allowed as thousands separators).
+function parseSettleCommand(text) {
+  if (!text) return { error: "syntax" };
+  // Strip the leading /settle and any optional @bot suffix (group commands
+  // sometimes arrive as "/settle@DusAaneBot @alice 500").
+  var stripped = String(text)
+    .replace(/^\/settle(@\w+)?\s*/i, "")
+    .trim();
+  if (!stripped) return { error: "syntax" };
+  var parts = stripped.split(/\s+/);
+  if (parts.length < 2) return { error: "syntax" };
+  var mentionTok = parts[0];
+  // Allow letters, digits, dots and underscores (Telegram usernames + most
+  // first-name forms). Strip a leading @ if present.
+  if (!/^@?[A-Za-z0-9_.]+$/.test(mentionTok)) return { error: "syntax" };
+  var mention = mentionTok.replace(/^@/, "");
+  var rawAmt = parts[1].replace(/,/g, "");
+  var amt = Number(rawAmt);
+  if (!isFinite(amt) || amt <= 0) return { error: "amount" };
+  amt = Math.round(amt * 100) / 100;
+  return { mention: mention, amount: amt };
+}
+
+// Pure resolver. Walks group_members (excluding caller), asks `candidatesOf`
+// for each member's known names (tenant.name + Telegram first_name + Telegram
+// username — caller decides), and returns the unique chat_id whose candidate
+// list contains the mention (case-insensitive exact match).
+//
+// Returns { chat_id } on unique match, or { error: "not_found" | "ambiguous" }.
+function resolveMemberByMention(group, mention, callerChatId, candidatesOf) {
+  var needle = String(mention || "")
+    .trim()
+    .toLowerCase();
+  if (!needle) return { error: "not_found" };
+  var hits = [];
+  for (var i = 0; i < group.group_members.length; i++) {
+    var m = group.group_members[i];
+    if (m === String(callerChatId)) continue;
+    var cands = candidatesOf(m) || [];
+    var matched = false;
+    for (var j = 0; j < cands.length && !matched; j++) {
+      var c = cands[j];
+      if (c && String(c).toLowerCase() === needle) matched = true;
+    }
+    if (matched && hits.indexOf(m) === -1) hits.push(m);
+  }
+  if (hits.length === 0) return { error: "not_found" };
+  if (hits.length > 1) return { error: "ambiguous" };
+  return { chat_id: hits[0] };
+}
+
+// /settle handler in group context. `/settle @alice 500` records a cash
+// payment from the caller to @alice in the group sheet only — no personal
+// sheet is touched (this is a manual entry, not derived from an email).
+//
+// The Settlement row reduces what caller owes target in subsequent /stats.
+function handleGroupSettleCommand(update) {
+  var chatId = update.message.chat.id;
+  var messageText = (update.message && update.message.text) || "";
+  var callerChatId = String(update.message.from && update.message.from.id);
+
+  var group = findGroupTenantByChatId(chatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    sendTelegramMessage(chatId, "👋 This group isn't set up yet. Promote me to admin and run `/start`.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  if (group.group_members.indexOf(callerChatId) === -1) {
+    sendTelegramMessage(chatId, "❌ You're not a member of this group.");
+    return;
+  }
+
+  var parsed = parseSettleCommand(messageText);
+  if (parsed.error === "syntax") {
+    sendTelegramMessage(chatId, "Usage: `/settle @member <amount>`\nExample: `/settle @alice 500`", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  if (parsed.error === "amount") {
+    sendTelegramMessage(chatId, "❌ Amount must be a positive number.");
+    return;
+  }
+
+  var nameOf = function (id) {
+    var t = findTenantByChatId(id);
+    return t && t.name ? t.name : "";
+  };
+  var candidatesOf = function (memberId) {
+    var cands = [];
+    var n = nameOf(memberId);
+    if (n) cands.push(n);
+    if (typeof getTelegramChatMemberInfo === "function") {
+      var info = getTelegramChatMemberInfo(group.chat_id, memberId);
+      if (info) {
+        if (info.name) cands.push(info.name);
+        if (info.username) cands.push(info.username);
+      }
+    }
+    return cands;
+  };
+  var resolution = resolveMemberByMention(group, parsed.mention, callerChatId, candidatesOf);
+  if (resolution.error === "not_found") {
+    sendTelegramMessage(chatId, "❌ No group member matches `@" + escapeMarkdown(parsed.mention) + "`.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  if (resolution.error === "ambiguous") {
+    sendTelegramMessage(
+      chatId,
+      "❌ `@" + escapeMarkdown(parsed.mention) + "` matches multiple members — try the exact first name.",
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+  var targetChatId = resolution.chat_id;
+
+  // All checks passed — write Settlement row + post notification.
+  var currency = group.primary_currency || "INR";
+  var amount = parsed.amount;
+  var txId = Utilities.getUuid();
+  var now = new Date();
+
+  var payerName = nameOf(callerChatId) || callerChatId;
+  var targetName = nameOf(targetChatId) || targetChatId;
+
+  var notificationText =
+    "💸 *" +
+    escapeMarkdown(payerName) +
+    "* settled " +
+    currency +
+    " " +
+    amount.toFixed(2) +
+    " with *" +
+    escapeMarkdown(targetName) +
+    "* _(cash)_";
+
+  var sendResp = sendTelegramMessage(group.chat_id, notificationText, {
+    parse_mode: "Markdown",
+    disable_web_page_preview: true
+  });
+  var groupMsgId = "";
+  try {
+    var parsedResp = JSON.parse(sendResp || "{}");
+    if (parsedResp && parsedResp.result && parsedResp.result.message_id) {
+      groupMsgId = String(parsedResp.result.message_id);
+    }
+  } catch (_) {}
+  if (!groupMsgId) {
+    sendTelegramMessage(chatId, "❌ Couldn't post the settlement.");
+    return;
+  }
+
+  var groupSheet = openGroupSheet(group.sheet_id);
+  groupSheet.appendRow([
+    now, // Email Date
+    now, // Tx Date
+    "Cash settlement", // Merchant
+    amount, // Amount
+    currency, // Currency
+    callerChatId, // Paid By
+    targetChatId, // Share Holder
+    amount, // Share Amount
+    txId, // Tx ID
+    "Settlement", // Category
+    "Settlement", // Tx Type
+    groupMsgId, // Message ID
+    "" // Email Link
+  ]);
 }
