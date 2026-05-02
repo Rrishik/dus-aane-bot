@@ -595,18 +595,220 @@ function handleGroupCallback(update) {
   var cb = update.callback_query;
   if (!cb || !cb.data) return;
   var decoded = decodeGroupCallback(cb.data);
-  if (!decoded) {
+  if (!decoded || !decoded.action) {
     answerCallbackQuery(cb.id, "❌ Bad callback", false);
     return;
   }
+
+  var callerChatId = String(cb.from && cb.from.id);
+  var chatId = cb.message && cb.message.chat && cb.message.chat.id;
+  var telegramMessageId = cb.message && cb.message.message_id;
+  var bodyText = (cb.message && cb.message.text) || "";
+
   if (decoded.action === "gnav") {
-    // parts: [emailMessageId, groupChatId]
+    // parts: [emailMessageId, groupChatId] → render Level 1 split picker.
+    var emailMessageId = decoded.parts[0];
     var groupChatId = decoded.parts[1];
     var group = findGroupTenantByChatId(groupChatId);
-    var name = group && group.name ? group.name : "the group";
-    answerCallbackQuery(cb.id, "🚧 Split picker for " + name + " — wiring up in step 3.2", true);
+    if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+      answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+      return;
+    }
+    if (group.group_members.indexOf(callerChatId) === -1) {
+      answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+      return;
+    }
+    var kb = buildSplitLevel1Keyboard(group, callerChatId, emailMessageId);
+    sendTelegramMessage(chatId, bodyText, {
+      parse_mode: "Markdown",
+      message_id: telegramMessageId,
+      reply_markup: kb
+    });
+    answerCallbackQuery(cb.id, "");
     return;
   }
-  // Other group actions (gsp, gset, gst, gbk, gun) ship in 3.2 / step 4.
-  answerCallbackQuery(cb.id, "🚧 Coming in step 3.2", true);
+
+  if (decoded.action === "gset") {
+    // parts: [emailMessageId, groupChatId] → render Level 2 settlement picker.
+    var emailMessageIdSet = decoded.parts[0];
+    var groupChatIdSet = decoded.parts[1];
+    var groupSet = findGroupTenantByChatId(groupChatIdSet);
+    if (!groupSet || groupSet.status !== TENANT_STATUS.ACTIVE) {
+      answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+      return;
+    }
+    if (groupSet.group_members.indexOf(callerChatId) === -1) {
+      answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+      return;
+    }
+    var kbSet = buildSplitLevel2Keyboard(groupSet, callerChatId, emailMessageIdSet);
+    sendTelegramMessage(chatId, bodyText, {
+      parse_mode: "Markdown",
+      message_id: telegramMessageId,
+      reply_markup: kbSet
+    });
+    answerCallbackQuery(cb.id, "");
+    return;
+  }
+
+  if (decoded.action === "gbk") {
+    // parts: [emailMessageId, groupChatId, destLevel]
+    //   destLevel = "0" → restore the top-level transaction keyboard.
+    //   destLevel = "1" → return from Level 2 (settlement) to Level 1.
+    var emailMessageIdBk = decoded.parts[0];
+    var groupChatIdBk = decoded.parts[1];
+    var destLevel = decoded.parts[2];
+    if (destLevel === "1") {
+      var groupBk = findGroupTenantByChatId(groupChatIdBk);
+      if (!groupBk) {
+        answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+        return;
+      }
+      var kbBack1 = buildSplitLevel1Keyboard(groupBk, callerChatId, emailMessageIdBk);
+      sendTelegramMessage(chatId, bodyText, {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId,
+        reply_markup: kbBack1
+      });
+    } else {
+      var kbBack0 = buildTransactionLevel0Keyboard(callerChatId, emailMessageIdBk);
+      sendTelegramMessage(chatId, bodyText, {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId,
+        reply_markup: kbBack0
+      });
+    }
+    answerCallbackQuery(cb.id, "");
+    return;
+  }
+
+  // Leaf taps — actual sheet writes land in step 4. Acknowledge with a toast
+  // so the menu visibly responds without leaving the user wondering.
+  if (decoded.action === "gsp" || decoded.action === "gst" || decoded.action === "gun") {
+    answerCallbackQuery(cb.id, "🚧 Recording lands in step 4", true);
+    return;
+  }
+
+  answerCallbackQuery(cb.id, "❌ Unknown action", false);
+}
+
+// --- Split menu keyboards (UI only — writes ship in step 4) ---
+
+// Pure helper: list other members (excluding the caller), preserving the
+// CSV/insertion order from group_members. Each entry: { chat_id, label }.
+// label = personal tenant's name when available, else the chat_id.
+function listOtherMembers(group, callerChatId) {
+  var others = [];
+  for (var i = 0; i < group.group_members.length; i++) {
+    var m = group.group_members[i];
+    if (m === String(callerChatId)) continue;
+    var t = findTenantByChatId(m);
+    var label = t && t.name ? t.name : m;
+    others.push({ chat_id: m, label: label });
+  }
+  return others;
+}
+
+// Level 1: split picker for one group. Layout depends on member count.
+//   2-person: [👥 50-50 with <other>]   [💝 <other> paid 100%]
+//   3-person: [👥 All 3]                 [➖ Without <X>]    [➖ Without <Y>]
+//   4-person: [👥 All 4]   [➖ Without <X>]   [➖ Without <Y>]   [➖ Without <Z>]
+// Plus a [💸 Settlement ▾] row and [← Back] row.
+function buildSplitLevel1Keyboard(group, callerChatId, emailMessageId) {
+  var groupChatId = group.chat_id;
+  var others = listOtherMembers(group, callerChatId);
+  var n = others.length + 1; // total participants including caller
+  var rows = [];
+
+  if (n === 2) {
+    var other = others[0];
+    rows.push([
+      {
+        text: "👥 50-50 with " + other.label,
+        callback_data: encodeGroupCallback("gsp", [emailMessageId, groupChatId, "50"])
+      }
+    ]);
+    rows.push([
+      {
+        text: "💝 " + other.label + " paid 100%",
+        callback_data: encodeGroupCallback("gsp", [emailMessageId, groupChatId, "p100"])
+      }
+    ]);
+  } else if (n >= 3) {
+    rows.push([
+      {
+        text: "👥 All " + n,
+        callback_data: encodeGroupCallback("gsp", [emailMessageId, groupChatId, "all"])
+      }
+    ]);
+    // "Without X" buttons — one row of up to 3, indexed by position in
+    // group_members (so step 4 can resolve back to a chat_id deterministically).
+    var withoutRow = [];
+    for (var j = 0; j < others.length; j++) {
+      // Index in group_members (CSV order). Step 4 uses this to compute the
+      // share holder set.
+      var idx = group.group_members.indexOf(others[j].chat_id);
+      withoutRow.push({
+        text: "➖ Without " + others[j].label,
+        callback_data: encodeGroupCallback("gsp", [emailMessageId, groupChatId, "w" + idx])
+      });
+    }
+    rows.push(withoutRow);
+  }
+
+  // Settlement sub-menu
+  rows.push([
+    {
+      text: "💸 Settlement ▾",
+      callback_data: encodeGroupCallback("gset", [emailMessageId, groupChatId])
+    }
+  ]);
+
+  // Back to top-level
+  rows.push([
+    {
+      text: "← Back",
+      callback_data: encodeGroupCallback("gbk", [emailMessageId, groupChatId, "0"])
+    }
+  ]);
+
+  return { inline_keyboard: rows };
+}
+
+// Level 2: settlement picker — one button per other member.
+function buildSplitLevel2Keyboard(group, callerChatId, emailMessageId) {
+  var groupChatId = group.chat_id;
+  var others = listOtherMembers(group, callerChatId);
+  var rows = [];
+  for (var i = 0; i < others.length; i++) {
+    var idx = group.group_members.indexOf(others[i].chat_id);
+    rows.push([
+      {
+        text: "💸 To " + others[i].label,
+        callback_data: encodeGroupCallback("gst", [emailMessageId, groupChatId, String(idx)])
+      }
+    ]);
+  }
+  rows.push([
+    {
+      text: "← Back",
+      callback_data: encodeGroupCallback("gbk", [emailMessageId, groupChatId, "1"])
+    }
+  ]);
+  return { inline_keyboard: rows };
+}
+
+// Restore the original transaction-notification keyboard (group parent rows
+// + the legacy split/category/delete row). Used by back nav.
+//
+// Step 3.2 doesn't try to recreate the new-merchant Save / Edit Merchant
+// rows after back nav — those flows aren't entered from the split menu.
+function buildTransactionLevel0Keyboard(callerChatId, emailMessageId) {
+  var rows = buildGroupParentButtonRows(callerChatId, emailMessageId);
+  rows.push([
+    { text: "✂️ Split", callback_data: "split_" + emailMessageId },
+    { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
+    { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+  ]);
+  return { inline_keyboard: rows };
 }

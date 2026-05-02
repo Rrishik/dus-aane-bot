@@ -1033,3 +1033,274 @@ describe("buildGroupParentButtonRows", () => {
     expect(buildGroupParentButtonRows("222", "msg1")).toEqual([]);
   });
 });
+
+describe("buildSplitLevel1Keyboard", () => {
+  function load(stubs) {
+    return loadAppsScript(["TenantRegistry.js", "Groups.js"], ["buildSplitLevel1Keyboard"], stubs);
+  }
+
+  it("2-person group: 50-50 + paid-100% buttons", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { buildSplitLevel1Keyboard } = load({ SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID });
+    var group = { chat_id: "-100", group_members: ["111", "222"] };
+    var kb = buildSplitLevel1Keyboard(group, "111", "m1");
+    var labels = kb.inline_keyboard.map((r) => r.map((b) => b.text));
+    expect(labels[0][0]).toBe("👥 50-50 with Bob");
+    expect(labels[1][0]).toBe("💝 Bob paid 100%");
+    expect(labels[2][0]).toBe("💸 Settlement ▾");
+    expect(labels[3][0]).toBe("← Back");
+    // Callback for 50-50 encodes mode "50"; back returns to level 0.
+    expect(kb.inline_keyboard[0][0].callback_data).toBe("gsp:m1:-100:50");
+    expect(kb.inline_keyboard[1][0].callback_data).toBe("gsp:m1:-100:p100");
+    expect(kb.inline_keyboard[3][0].callback_data).toBe("gbk:m1:-100:0");
+  });
+
+  it("3-person group: All 3 + Without X/Y buttons in CSV order", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["333", "Charlie", "", "s3", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { buildSplitLevel1Keyboard } = load({ SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID });
+    var group = { chat_id: "-100", group_members: ["111", "222", "333"] };
+    var kb = buildSplitLevel1Keyboard(group, "111", "m1");
+    expect(kb.inline_keyboard[0][0].text).toBe("👥 All 3");
+    expect(kb.inline_keyboard[0][0].callback_data).toBe("gsp:m1:-100:all");
+    var withoutRow = kb.inline_keyboard[1];
+    expect(withoutRow.length).toBe(2);
+    expect(withoutRow[0].text).toBe("➖ Without Bob");
+    expect(withoutRow[0].callback_data).toBe("gsp:m1:-100:w1"); // idx 1 in group_members
+    expect(withoutRow[1].text).toBe("➖ Without Charlie");
+    expect(withoutRow[1].callback_data).toBe("gsp:m1:-100:w2");
+  });
+
+  it("4-person group: All 4 + 3 without buttons", () => {
+    var { SpreadsheetApp } = setupRegistry([]);
+    var { buildSplitLevel1Keyboard } = load({ SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID });
+    var group = { chat_id: "-100", group_members: ["111", "222", "333", "444"] };
+    var kb = buildSplitLevel1Keyboard(group, "111", "m1");
+    expect(kb.inline_keyboard[0][0].text).toBe("👥 All 4");
+    expect(kb.inline_keyboard[1].length).toBe(3); // 3 "without" buttons
+    // No paid-100% in 3+ groups
+    var allText = kb.inline_keyboard
+      .flat()
+      .map((b) => b.text)
+      .join("|");
+    expect(allText).not.toContain("paid 100%");
+  });
+});
+
+describe("buildSplitLevel2Keyboard", () => {
+  function load(stubs) {
+    return loadAppsScript(["TenantRegistry.js", "Groups.js"], ["buildSplitLevel2Keyboard"], stubs);
+  }
+
+  it("renders one settlement target per other member + Back", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["333", "Charlie", "", "s3", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { buildSplitLevel2Keyboard } = load({ SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID });
+    var group = { chat_id: "-100", group_members: ["111", "222", "333"] };
+    var kb = buildSplitLevel2Keyboard(group, "111", "m1");
+    expect(kb.inline_keyboard.length).toBe(3); // 2 targets + Back
+    expect(kb.inline_keyboard[0][0].text).toBe("💸 To Bob");
+    expect(kb.inline_keyboard[0][0].callback_data).toBe("gst:m1:-100:1");
+    expect(kb.inline_keyboard[1][0].text).toBe("💸 To Charlie");
+    expect(kb.inline_keyboard[1][0].callback_data).toBe("gst:m1:-100:2");
+    // Back returns to Level 1.
+    expect(kb.inline_keyboard[2][0].callback_data).toBe("gbk:m1:-100:1");
+  });
+});
+
+describe("handleGroupCallback dispatch", () => {
+  function load(stubs) {
+    return loadAppsScript(["TelegramUtils.js", "TenantRegistry.js", "Groups.js"], ["handleGroupCallback"], stubs);
+  }
+
+  it("gnav → edits message with Level 1 keyboard for a group the caller belongs to", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupCallback } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() }
+    });
+
+    handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gnav:m1:-100",
+        message: { chat: { id: 111 }, message_id: 42, text: "💸 INR 100 ..." }
+      }
+    });
+
+    var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    expect(edit).toBeTruthy();
+    expect(edit.payload.message_id).toBe(42);
+    var kb = JSON.parse(edit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toContain("50-50 with Bob");
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack).toBeTruthy();
+  });
+
+  it("gnav → rejects when caller is not a member", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["999", "Eve", "", "se", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupCallback } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() }
+    });
+
+    handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 999 },
+        data: "gnav:m1:-100",
+        message: { chat: { id: 999 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    expect(sent.find((s) => s.url.indexOf("/editMessageText") !== -1)).toBeUndefined();
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("not a member");
+  });
+
+  it("gset → edits to Level 2 settlement picker", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupCallback } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() }
+    });
+
+    handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gset:m1:-100",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    var kb = JSON.parse(edit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toContain("To Bob");
+  });
+
+  it("gbk:0 → restores Level 0 keyboard with parent button", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupCallback } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() }
+    });
+
+    handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gbk:m1:-100:0",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    var kb = JSON.parse(edit.payload.reply_markup);
+    // First row should be the group parent button; last row legacy split/category/delete.
+    expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
+    var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(lastRow.map((b) => b.text)).toEqual(["✂️ Split", "✏️ Category", "🗑️ Delete"]);
+  });
+
+  it("gbk:1 → returns from Level 2 to Level 1", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupCallback } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() }
+    });
+
+    handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gbk:m1:-100:1",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    var kb = JSON.parse(edit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toContain("50-50 with Bob");
+  });
+
+  it("gsp/gst/gun → 'Coming in step 4' toast, no edit", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+    ]);
+    var { handleGroupCallback } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() }
+    });
+
+    ["gsp:m1:-100:50", "gst:m1:-100:1", "gun:m1"].forEach((data) => {
+      handleGroupCallback({
+        callback_query: {
+          id: "cb",
+          from: { id: 111 },
+          data: data,
+          message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+        }
+      });
+    });
+
+    expect(sent.filter((s) => s.url.indexOf("/editMessageText") !== -1).length).toBe(0);
+    var acks = sent.filter((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(acks.length).toBe(3);
+    acks.forEach((a) => expect(a.payload.text).toContain("step 4"));
+  });
+});
