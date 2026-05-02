@@ -822,3 +822,125 @@ describe("consumePendingGroupInvitesForUser", () => {
     expect(sent.length).toBe(0);
   });
 });
+
+describe("handleGroupHelpCommand", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "Groups.js"],
+      ["handleGroupHelpCommand"],
+      stubs
+    );
+  }
+
+  it("posts the group help message with sheet button when group is active", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { handleGroupHelpCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+    handleGroupHelpCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent.length).toBe(1);
+    expect(sent[0].payload.text).toContain("Group commands");
+    expect(sent[0].payload.text).toContain("/start");
+    expect(sent[0].payload.text).toContain("/account");
+    var mk = JSON.parse(sent[0].payload.reply_markup);
+    expect(mk.inline_keyboard[0][0].text).toContain("Open group sheet");
+  });
+
+  it("nudges to /start when the group isn't provisioned", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([]);
+    var { handleGroupHelpCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+    handleGroupHelpCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent.length).toBe(1);
+    expect(sent[0].payload.text).toContain("isn't set up yet");
+  });
+});
+
+describe("handleGroupAccountCommand", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "Groups.js"],
+      ["handleGroupAccountCommand"],
+      stubs
+    );
+  }
+
+  it("renders name, status, currency, members, admin, and sheet link", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Bachelor Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"],
+      ["111", "Alice", "alice@x", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "bob@x", "s2", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { handleGroupAccountCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+    handleGroupAccountCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent.length).toBe(1);
+    var t = sent[0].payload.text;
+    expect(t).toContain("Bachelor Pad");
+    expect(t).toContain("Alice");
+    expect(t).toContain("Bob");
+    expect(t).toContain("Members (2/4)");
+    expect(t).toContain("Admin: Alice");
+    expect(t).toContain("INR");
+    expect(t).toContain("[open]"); // sheet link
+  });
+
+  it("falls back to chat_id label for unregistered members", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([
+      ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    var { handleGroupAccountCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+    handleGroupAccountCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent[0].payload.text).toContain("`111`"); // raw chat id when no tenant.name
+  });
+
+  it("nudges to /start when not provisioned", () => {
+    var sent = [];
+    var { SpreadsheetApp } = setupRegistry([]);
+    var { handleGroupAccountCommand } = load({
+      ...urlStubs(),
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {} },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      MAX_GROUP_MEMBERS: 4
+    });
+    handleGroupAccountCommand({ message: { chat: { id: -100, type: "group" } } });
+    expect(sent[0].payload.text).toContain("isn't set up yet");
+  });
+});

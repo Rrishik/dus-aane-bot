@@ -469,3 +469,69 @@ function handleChatMemberChange(update) {
     }
   }
 }
+
+// --- Group-context commands ---
+
+// /help in a group: show only the commands that are meaningful in groups.
+// /split (the inline split UI) lands in step 3; until then this lists only
+// what's wired up.
+function handleGroupHelpCommand(update) {
+  var chatId = update.message.chat.id;
+  var group = findGroupTenantByChatId(chatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    sendTelegramMessage(chatId, "👋 This group isn't set up yet. Promote me to admin and run `/start`.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  var msg =
+    "*Group commands*\n" +
+    "• `/start` — re-sync the member list from this chat\n" +
+    "• `/account` — show this group's setup\n" +
+    "• `/help` — this message\n\n" +
+    "_Splitting expenses, settlements, and group analytics arrive in upcoming releases._";
+  var opts = { parse_mode: "Markdown" };
+  if (group.sheet_id) {
+    opts.reply_markup = {
+      inline_keyboard: [[{ text: "📋 Open group sheet", url: sheetUrl(group.sheet_id) }]]
+    };
+  }
+  sendTelegramMessage(chatId, msg, opts);
+}
+
+// /account in a group: show the group tenant's status — name, sheet link,
+// member roster (registered + pending invites), admin, currency.
+function handleGroupAccountCommand(update) {
+  var chatId = update.message.chat.id;
+  var group = findGroupTenantByChatId(chatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    sendTelegramMessage(chatId, "👋 This group isn't set up yet. Promote me to admin and run `/start`.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  var lines = [];
+  lines.push("*" + escapeMarkdown(group.name || "Group") + "*");
+  lines.push("Status: `" + group.status + "`");
+  lines.push("Currency: `" + group.primary_currency + "`");
+  var memberLabels = group.group_members.map(function (m) {
+    var t = findTenantByChatId(m);
+    return t && t.name ? escapeMarkdown(t.name) : "`" + m + "`";
+  });
+  lines.push(
+    "Members (" +
+      group.group_members.length +
+      "/" +
+      MAX_GROUP_MEMBERS +
+      "): " +
+      (memberLabels.length ? memberLabels.join(", ") : "_none yet_")
+  );
+  var adminId = getGroupAdminChatId(group);
+  if (adminId) {
+    var adminTenant = findTenantByChatId(adminId);
+    var adminLabel = adminTenant && adminTenant.name ? escapeMarkdown(adminTenant.name) : "`" + adminId + "`";
+    lines.push("Admin: " + adminLabel);
+  }
+  if (group.sheet_id) lines.push("Sheet: [open](" + sheetUrl(group.sheet_id) + ")");
+  sendTelegramMessage(chatId, lines.join("\n"), { parse_mode: "Markdown", disable_web_page_preview: true });
+}
