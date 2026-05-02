@@ -46,6 +46,7 @@ function urlStubs() {
     BOT_ANSWER_CALLBACK_QUERY_URL: "https://api.telegram.test/bot/answerCallbackQuery",
     BOT_GET_CHAT_URL: "https://api.telegram.test/bot/getChat",
     BOT_GET_CHAT_ADMINISTRATORS_URL: "https://api.telegram.test/bot/getChatAdministrators",
+    BOT_GET_CHAT_MEMBER_URL: "https://api.telegram.test/bot/getChatMember",
     BOT_GET_ME_URL: "https://api.telegram.test/bot/getMe",
     BOT_SET_WEBHOOK_URL: "https://api.telegram.test/bot/setWebhook",
     BOT_DELETE_WEBHOOK_URL: "https://api.telegram.test/bot/deleteWebhook",
@@ -1062,10 +1063,89 @@ describe("buildTransactionLevel0Keyboard", () => {
   });
 });
 
+describe("listOtherMembers", () => {
+  function load(stubs) {
+    return loadAppsScript(["TenantRegistry.js", "Groups.js"], ["listOtherMembers"], stubs);
+  }
+
+  it("uses tenant.name when present", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { listOtherMembers } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
+    var out = listOtherMembers({ chat_id: "-100", group_members: ["111", "222"] }, "111");
+    expect(out).toEqual([{ chat_id: "222", label: "Bob" }]);
+  });
+
+  it("falls back to Telegram first_name when the tenant row is missing", () => {
+    var { SpreadsheetApp } = setupRegistry([]);
+    var calls = [];
+    var { listOtherMembers } = load({
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      getTelegramChatMemberName: (chat_id, uid) => {
+        calls.push([chat_id, uid]);
+        return uid === "222" ? "Aishwarya" : "";
+      }
+    });
+    var out = listOtherMembers({ chat_id: "-100", group_members: ["111", "222"] }, "111");
+    expect(out).toEqual([{ chat_id: "222", label: "Aishwarya" }]);
+    expect(calls).toEqual([["-100", "222"]]);
+  });
+
+  it("falls back to Telegram first_name when the tenant row exists but name is empty", () => {
+    var { SpreadsheetApp } = setupRegistry([["222", "", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"]]);
+    var { listOtherMembers } = load({
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      getTelegramChatMemberName: () => "Aishwarya"
+    });
+    var out = listOtherMembers({ chat_id: "-100", group_members: ["111", "222"] }, "111");
+    expect(out).toEqual([{ chat_id: "222", label: "Aishwarya" }]);
+  });
+
+  it("uses raw chat_id only when both tenant lookup and Telegram fallback fail", () => {
+    var { SpreadsheetApp } = setupRegistry([]);
+    var { listOtherMembers } = load({
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      getTelegramChatMemberName: () => ""
+    });
+    var out = listOtherMembers({ chat_id: "-100", group_members: ["111", "222"] }, "111");
+    expect(out).toEqual([{ chat_id: "222", label: "222" }]);
+  });
+
+  it("excludes the caller and preserves CSV order for the rest", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["333", "Charlie", "", "s3", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["444", "Dave", "", "s4", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { listOtherMembers } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
+    var out = listOtherMembers({ chat_id: "-100", group_members: ["111", "222", "333", "444"] }, "333");
+    expect(out.map((o) => o.chat_id)).toEqual(["111", "222", "444"]);
+    expect(out.map((o) => o.label)).toEqual(["111", "Bob", "Dave"]);
+  });
+});
+
 describe("buildSplitLevel1Keyboard", () => {
   function load(stubs) {
     return loadAppsScript(["TenantRegistry.js", "Groups.js"], ["buildSplitLevel1Keyboard"], stubs);
   }
+
+  it("uses Telegram first_name on buttons when tenant row is missing", () => {
+    var { SpreadsheetApp } = setupRegistry([]);
+    var { buildSplitLevel1Keyboard } = load({
+      SpreadsheetApp,
+      ADMIN_SHEET_ID,
+      getTelegramChatMemberName: (chat_id, uid) => (uid === "222" ? "Aishwarya" : "")
+    });
+    var group = { chat_id: "-100", group_members: ["111", "222"] };
+    var kb = buildSplitLevel1Keyboard(group, "111", "m1");
+    var labels = kb.inline_keyboard.map((r) => r.map((b) => b.text));
+    expect(labels[0][0]).toBe("👥 50-50 with Aishwarya");
+    expect(labels[1][0]).toBe("💝 Aishwarya owes 100%");
+  });
 
   it("2-person group: 50-50 + paid-100% buttons", () => {
     var { SpreadsheetApp } = setupRegistry([

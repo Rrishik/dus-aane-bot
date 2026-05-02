@@ -706,13 +706,27 @@ function handleGroupCallback(update) {
 // Pure helper: list other members (excluding the caller), preserving the
 // CSV/insertion order from group_members. Each entry: { chat_id, label }.
 // label = personal tenant's name when available, else the chat_id.
+// Pure helper: list other members (excluding the caller), preserving the
+// CSV/insertion order from group_members. Each entry: { chat_id, label }.
+//
+// Label resolution chain (first non-empty wins):
+//   1. personal tenant's `name` column (set at /register time)
+//   2. Telegram getChatMember.first_name / username (covers members who
+//      haven't registered yet, or whose tenant row has an empty name)
+//   3. raw chat_id (last-resort fallback so buttons never break)
 function listOtherMembers(group, callerChatId) {
   var others = [];
   for (var i = 0; i < group.group_members.length; i++) {
     var m = group.group_members[i];
     if (m === String(callerChatId)) continue;
     var t = findTenantByChatId(m);
-    var label = t && t.name ? t.name : m;
+    var label = (t && t.name) || "";
+    if (!label && typeof getTelegramChatMemberName === "function") {
+      // Tenant missing or unnamed — ask Telegram who this user is in the
+      // group. Best-effort; falls back to chat_id if the API call fails.
+      label = getTelegramChatMemberName(group.chat_id, m);
+    }
+    if (!label) label = m;
     others.push({ chat_id: m, label: label });
   }
   return others;

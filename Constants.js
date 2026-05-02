@@ -7,6 +7,7 @@ const BOT_DELETE_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteW
 const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
 const BOT_GET_CHAT_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChat`;
 const BOT_GET_CHAT_ADMINISTRATORS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChatAdministrators`;
+const BOT_GET_CHAT_MEMBER_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChatMember`;
 const BOT_GET_ME_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getMe`;
 
 // Public email address that tenants forward their bank emails to.
