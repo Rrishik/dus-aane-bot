@@ -34,6 +34,26 @@ const EMAIL_LINK_COLUMN = 11; // Column K
 const GROUP_REF_COLUMN = 12; // Column L — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
 const GROUP_MESSAGE_ID_COLUMN = 13; // Column M — Telegram message id of the group's split notification, else empty
 
+// --- Group-sheet schema (β: one row per share) ---
+// Group sheets have a different column layout than personal sheets — they
+// store splits as N rows per transaction (one per share holder). The column
+// positions intentionally differ from personal sheets; never mix the two
+// constant blocks. Helpers in GroupSheet.js are the only readers/writers.
+const G_EMAIL_DATE_COLUMN = 1;
+const G_TRANSACTION_DATE_COLUMN = 2;
+const G_MERCHANT_COLUMN = 3;
+const G_AMOUNT_COLUMN = 4;
+const G_CURRENCY_COLUMN = 5;
+const G_PAID_BY_COLUMN = 6; // chat_id of the member who paid
+const G_SHARE_HOLDER_COLUMN = 7; // chat_id of the member whose share this row records
+const G_SHARE_AMOUNT_COLUMN = 8;
+const G_TX_ID_COLUMN = 9; // shared across all share rows of one transaction; unique within the sheet
+const G_CATEGORY_COLUMN = 10;
+const G_TRANSACTION_TYPE_COLUMN = 11;
+const G_MESSAGE_ID_COLUMN = 12;
+const G_EMAIL_LINK_COLUMN = 13;
+const G_COL_COUNT = 13;
+
 // Split Status Values (enum-like constants)
 const SPLIT_STATUS = {
   PERSONAL: "Personal", // 100% mine

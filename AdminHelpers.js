@@ -212,3 +212,59 @@ function adminMigrateSchemaV2() {
   );
   return summary;
 }
+
+/**
+ * Create a blank group-sheet template. Run once from the script editor.
+ * Save the returned ID as GROUP_TEMPLATE_SHEET_ID in AConfig.js + GitHub
+ * secret. Future group provisioning copies this template.
+ *
+ * Owned by the bot's Google account. Not shared with anyone yet — group
+ * sheets get shared with members at provisioning time.
+ *
+ * Re-running creates a new copy each time; clean up extras via Drive UI.
+ */
+function adminCreateGroupTemplateSheet() {
+  var TEMPLATE_NAME = "Dus Aane — Group Template";
+  var ss = SpreadsheetApp.create(TEMPLATE_NAME);
+  // Default tab is "Sheet1"; rename for clarity. The runtime always reads
+  // getSheets()[0] so the name is cosmetic.
+  ss.getSheets()[0].setName("Splits");
+  ensureGroupSheetHeaders(ss.getId());
+  console.log("Group template created. ID: " + ss.getId());
+  console.log("URL: " + ss.getUrl());
+  console.log("");
+  console.log("Next steps:");
+  console.log("1. Save this ID as GROUP_TEMPLATE_SHEET_ID in AConfig.js and GitHub secret");
+  console.log("2. Redeploy so AConfig.js picks up the new constant");
+  return ss.getId();
+}
+
+/**
+ * Provision a new group's sheet by copying GROUP_TEMPLATE_SHEET_ID.
+ * Returns the new sheet's ID. Caller (group /start handler in 2b) is
+ * responsible for registering the group tenant.
+ *
+ * Optional shareWithEmails: list of member emails to add as editors.
+ * Ownership stays with the bot account (no per-group /ownsheet in v1 —
+ * see groups-feature design doc).
+ */
+function adminProvisionGroupSheet(displayName, shareWithEmails) {
+  if (typeof GROUP_TEMPLATE_SHEET_ID !== "string" || !GROUP_TEMPLATE_SHEET_ID) {
+    throw new Error("GROUP_TEMPLATE_SHEET_ID not set. Run adminCreateGroupTemplateSheet() first.");
+  }
+  var name = "Dus Aane — " + (displayName || "Group");
+  var copy = DriveApp.getFileById(GROUP_TEMPLATE_SHEET_ID).makeCopy(name);
+  (shareWithEmails || []).forEach(function (email) {
+    if (!email) return;
+    try {
+      copy.addEditor(email);
+    } catch (e) {
+      console.error("[adminProvisionGroupSheet] addEditor failed for " + email + ": " + e.message);
+    }
+  });
+  // Belt-and-suspenders: the template was created with headers, but if anyone
+  // accidentally cleared row 1 in the template, repopulate them on the copy.
+  ensureGroupSheetHeaders(copy.getId());
+  console.log("Provisioned group sheet: " + copy.getId() + " (" + name + ")");
+  return copy.getId();
+}
