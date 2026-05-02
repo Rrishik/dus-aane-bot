@@ -78,10 +78,34 @@ function handleMerchantInput(chatId, userId, messageText) {
 function handleMessage(update) {
   if (update.message) {
     var chatId = update.message.chat.id;
+    var chatType = update.message.chat.type;
     var messageText = update.message.text;
     var username = update.message.from.first_name || update.message.from.username;
 
     if (!messageText) return; // photos, joins, etc.
+
+    // Group-chat dispatch. For step 2b.2 only /start is wired up; full group
+    // command set lands in 2b.4. Personal-only commands get a polite reject
+    // so users aren't left wondering why nothing happens.
+    if (chatType === "group" || chatType === "supergroup") {
+      if (!messageText.startsWith("/")) return; // ignore non-command chatter
+      var groupCommand = messageText.split(" ")[0].split("@")[0].toLowerCase();
+      if (groupCommand === "/start") {
+        handleGroupStartCommand(update);
+        return;
+      }
+      // Personal commands run in DM only.
+      var PERSONAL_ONLY = ["/register", "/account", "/ownsheet", "/backfill", "/ask"];
+      if (PERSONAL_ONLY.indexOf(groupCommand) !== -1) {
+        sendTelegramMessage(chatId, "📬 `" + groupCommand + "` is a personal command — DM me to use it.", {
+          parse_mode: "Markdown"
+        });
+        return;
+      }
+      // Other commands (/help, /recent, /stats, /dashboard) — group versions
+      // arrive in 2b.4 / step 4. Stay silent for now to avoid noise.
+      return;
+    }
 
     if (messageText.startsWith("/")) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();

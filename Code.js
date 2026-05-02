@@ -29,6 +29,15 @@ function doPost(e) {
       incomingChatId = update.callback_query.message.chat.id;
     }
 
+    // Group lifecycle events. These don't carry a tenant context (the bot
+    // may not even know about the chat yet), so dispatch before tenant
+    // resolution and return.
+    if (update.my_chat_member) {
+      handleBotMembershipChange(update);
+      return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+    }
+    // chat_member (other members joining/leaving) handled in step 2b.3.
+
     // Tenant resolution. Set context only for active tenants — pending/disabled
     // chats must NOT fall through to admin defaults (would cross-tenant-leak).
     var incomingTenant = incomingChatId != null ? findTenantByChatId(incomingChatId) : null;
