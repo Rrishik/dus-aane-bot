@@ -710,7 +710,7 @@ function listOtherMembers(group, callerChatId) {
 }
 
 // Level 1: split picker for one group. Layout depends on member count.
-//   2-person: [👥 50-50 with <other>]   [💝 <other> paid 100%]
+//   2-person: [👥 50-50 with <other>]   [💝 <other> owes 100%]
 //   3-person: [👥 All 3]                 [➖ Without <X>]    [➖ Without <Y>]
 //   4-person: [👥 All 4]   [➖ Without <X>]   [➖ Without <Y>]   [➖ Without <Z>]
 // Plus a [💸 Settlement ▾] row and [← Back] row.
@@ -730,7 +730,7 @@ function buildSplitLevel1Keyboard(group, callerChatId, emailMessageId) {
     ]);
     rows.push([
       {
-        text: "💝 " + other.label + " paid 100%",
+        text: "💝 " + other.label + " owes 100%",
         callback_data: encodeGroupCallback("gsp", [emailMessageId, groupChatId, "p100"])
       }
     ]);

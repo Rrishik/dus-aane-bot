@@ -1048,7 +1048,7 @@ describe("buildSplitLevel1Keyboard", () => {
     var kb = buildSplitLevel1Keyboard(group, "111", "m1");
     var labels = kb.inline_keyboard.map((r) => r.map((b) => b.text));
     expect(labels[0][0]).toBe("👥 50-50 with Bob");
-    expect(labels[1][0]).toBe("💝 Bob paid 100%");
+    expect(labels[1][0]).toBe("💝 Bob owes 100%");
     expect(labels[2][0]).toBe("💸 Settlement ▾");
     expect(labels[3][0]).toBe("← Back");
     // Callback for 50-50 encodes mode "50"; back returns to level 0.
@@ -1087,7 +1087,7 @@ describe("buildSplitLevel1Keyboard", () => {
       .flat()
       .map((b) => b.text)
       .join("|");
-    expect(allText).not.toContain("paid 100%");
+    expect(allText).not.toContain("owes 100%");
   });
 });
 
