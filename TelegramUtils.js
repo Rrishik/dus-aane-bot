@@ -8,7 +8,12 @@ function setTelegramWebhook() {
   // First delete any existing webhook
   deleteWebhook();
   var payload = {
-    url: WORKER_PROXY_URL
+    url: WORKER_PROXY_URL,
+    // chat_member + my_chat_member don't ship by default — we need them so the
+    // bot can detect being added to a group and members joining/leaving.
+    // For chat_member to fire reliably the bot must be a group admin (per
+    // Telegram docs); we enforce that at /start time.
+    allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "chat_member"]
   };
 
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
@@ -71,6 +76,60 @@ function deleteTelegramMessage(chat_id, message_id) {
     message_id: message_id
   };
   sendRequest(BOT_DELETE_MESSAGE_URL, "post", payload);
+}
+
+// --- Group-lifecycle read helpers ---
+// Thin wrappers around Telegram's read APIs. All return the parsed `result`
+// payload on success, or null on any error/non-ok response. Callers must
+// tolerate null (network failures, bot kicked, privacy mode, etc.).
+
+function getTelegramChat(chat_id) {
+  try {
+    var resp = sendRequest(BOT_GET_CHAT_URL, "post", { chat_id: chat_id });
+    if (!resp) return null;
+    var body = JSON.parse(resp.getContentText());
+    return body && body.ok ? body.result : null;
+  } catch (e) {
+    console.error("getTelegramChat error: " + e);
+    return null;
+  }
+}
+
+// Returns array of ChatMember objects for the chat's owner + admins. Works
+// without the bot being an admin itself. Used during /start to seed the
+// initial member list (regular non-admin members aren't enumerable via API).
+function getTelegramChatAdministrators(chat_id) {
+  try {
+    var resp = sendRequest(BOT_GET_CHAT_ADMINISTRATORS_URL, "post", { chat_id: chat_id });
+    if (!resp) return null;
+    var body = JSON.parse(resp.getContentText());
+    return body && body.ok ? body.result : null;
+  } catch (e) {
+    console.error("getTelegramChatAdministrators error: " + e);
+    return null;
+  }
+}
+
+// Returns the bot's own User object (id, username, ...). Cached in
+// ScriptProperties because it never changes for a given BOT_TOKEN — used in
+// every my_chat_member / chat_member event to detect "is this about us".
+function getTelegramBotUserId() {
+  var props = PropertiesService.getScriptProperties();
+  var cached = props.getProperty("bot_user_id");
+  if (cached) return cached;
+  try {
+    var resp = sendRequest(BOT_GET_ME_URL, "post", {});
+    if (!resp) return null;
+    var body = JSON.parse(resp.getContentText());
+    if (body && body.ok && body.result && body.result.id) {
+      var id = String(body.result.id);
+      props.setProperty("bot_user_id", id);
+      return id;
+    }
+  } catch (e) {
+    console.error("getTelegramBotUserId error: " + e);
+  }
+  return null;
 }
 
 function sendRequest(url, method, payload) {

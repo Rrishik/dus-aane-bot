@@ -5,6 +5,9 @@ const BOT_ANSWER_CALLBACK_QUERY_URL = `https://api.telegram.org/bot${BOT_TOKEN}/
 const BOT_SET_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setMyCommands`;
 const BOT_DELETE_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`;
 const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
+const BOT_GET_CHAT_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChat`;
+const BOT_GET_CHAT_ADMINISTRATORS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChatAdministrators`;
+const BOT_GET_ME_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getMe`;
 
 // Public email address that tenants forward their bank emails to.
 // Displayed in /start and /register onboarding copy.
@@ -53,6 +56,10 @@ const G_TRANSACTION_TYPE_COLUMN = 11;
 const G_MESSAGE_ID_COLUMN = 12;
 const G_EMAIL_LINK_COLUMN = 13;
 const G_COL_COUNT = 13;
+
+// Hard cap on group size. Telegram supports far more, but the split UI fans out
+// quadratically with members and the small-flat-share use case rarely exceeds 4.
+const MAX_GROUP_MEMBERS = 4;
 
 // Split Status Values (enum-like constants)
 const SPLIT_STATUS = {

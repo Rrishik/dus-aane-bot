@@ -27,7 +27,23 @@ function setup(rows) {
   });
   return loadAppsScript(
     ["TenantRegistry.js"],
-    ["stampLastForward", "reactivateIfDormant", "loadTenants", "invalidateTenantCache", "TENANT_STATUS", "TENANT_COLS"],
+    [
+      "stampLastForward",
+      "reactivateIfDormant",
+      "loadTenants",
+      "invalidateTenantCache",
+      "findTenantByChatId",
+      "findGroupTenantByChatId",
+      "insertGroupTenant",
+      "addGroupMember",
+      "removeGroupMember",
+      "setGroupMembers",
+      "findGroupsForMember",
+      "getGroupAdminChatId",
+      "TENANT_STATUS",
+      "TENANT_COLS",
+      "TENANT_CHAT_TYPE"
+    ],
     { SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }
   );
 }
@@ -170,5 +186,72 @@ describe("schema", () => {
     expect(t.chat_type).toBe("group");
     expect(t.group_members).toEqual(["111", "222", "333"]);
     expect(t.primary_currency).toBe("USD");
+  });
+});
+
+describe("group tenant helpers", () => {
+  it("insertGroupTenant writes an active group row with admin in notes", () => {
+    var s = setup([]);
+    s.insertGroupTenant("g1", "Bachelor Pad", "grp-sheet", ["111", "222"], "111");
+    s.invalidateTenantCache();
+    var t = s.loadTenants()[0];
+    expect(t.chat_id).toBe("g1");
+    expect(t.chat_type).toBe("group");
+    expect(t.status).toBe("active");
+    expect(t.sheet_id).toBe("grp-sheet");
+    expect(t.group_members).toEqual(["111", "222"]);
+    expect(s.getGroupAdminChatId(t)).toBe("111");
+  });
+
+  it("findGroupTenantByChatId returns null for personal tenants", () => {
+    var s = setup([
+      ["111", "Alice", "", "sheet-a", "active", "", "", "", "", 0, "personal", "", "INR"],
+      ["g1", "Pad", "", "grp", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
+    ]);
+    expect(s.findGroupTenantByChatId("111")).toBe(null);
+    expect(s.findGroupTenantByChatId("g1").chat_id).toBe("g1");
+  });
+
+  it("addGroupMember dedups and removeGroupMember strips", () => {
+    var s = setup([["g1", "Pad", "", "grp", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]]);
+    expect(s.addGroupMember("g1", "222")).toBe(true);
+    expect(s.addGroupMember("g1", "222")).toBe(false); // dedup
+    s.invalidateTenantCache();
+    expect(s.findTenantByChatId("g1").group_members).toEqual(["111", "222"]);
+    expect(s.removeGroupMember("g1", "111")).toBe(true);
+    expect(s.removeGroupMember("g1", "111")).toBe(false); // already gone
+    s.invalidateTenantCache();
+    expect(s.findTenantByChatId("g1").group_members).toEqual(["222"]);
+  });
+
+  it("addGroupMember refuses on a personal tenant", () => {
+    var s = setup([["111", "Alice", "", "sheet-a", "active", "", "", "", "", 0, "personal", "", "INR"]]);
+    expect(s.addGroupMember("111", "222")).toBe(false);
+  });
+
+  it("setGroupMembers overwrites the CSV", () => {
+    var s = setup([["g1", "Pad", "", "grp", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]]);
+    expect(s.setGroupMembers("g1", ["333", "444"])).toBe(true);
+    s.invalidateTenantCache();
+    expect(s.findTenantByChatId("g1").group_members).toEqual(["333", "444"]);
+  });
+
+  it("findGroupsForMember enumerates active groups containing the member", () => {
+    var s = setup([
+      ["g1", "Pad", "", "s1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"],
+      ["g2", "Trip", "", "s2", "active", "", "admin=111", "", "", 0, "group", "111,333", "INR"],
+      ["g3", "Old", "", "s3", "disabled", "", "admin=111", "", "", 0, "group", "111", "INR"],
+      ["111", "Alice", "", "sa", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var groups = s.findGroupsForMember("111");
+    expect(groups.map((g) => g.chat_id).sort()).toEqual(["g1", "g2"]); // g3 is disabled
+    expect(s.findGroupsForMember("999")).toEqual([]);
+  });
+
+  it("getGroupAdminChatId returns '' when notes lacks admin marker", () => {
+    var s = setup([]);
+    expect(s.getGroupAdminChatId({ notes: "" })).toBe("");
+    expect(s.getGroupAdminChatId({ notes: "some other note" })).toBe("");
+    expect(s.getGroupAdminChatId({ notes: "admin=42 extra" })).toBe("42");
   });
 });

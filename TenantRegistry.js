@@ -239,6 +239,111 @@ function activateTenant(chatId, sheetId) {
   return true;
 }
 
+// --- Group tenant helpers ---
+// Group rows have chat_type=group, sheet_id=<provisioned group sheet>, and
+// group_members as a CSV of personal-tenant chat_ids. The notes field stores
+// admin metadata as `admin=<chat_id>` so we don't need a 14th column.
+
+function findGroupTenantByChatId(chatId) {
+  var t = findTenantByChatId(chatId);
+  return t && t.chat_type === TENANT_CHAT_TYPE.GROUP ? t : null;
+}
+
+// Insert a fresh active group tenant. Caller must ensure the chat_id isn't
+// already registered (idempotency lives one layer up, in the /start handler).
+function insertGroupTenant(chatId, name, sheetId, members, adminChatId) {
+  var tab = _getOrCreateTenantsTab();
+  var now = new Date().toISOString();
+  var membersCsv = (members || [])
+    .map(function (m) {
+      return String(m).trim();
+    })
+    .filter(function (s) {
+      return s.length > 0;
+    })
+    .join(",");
+  tab.appendRow([
+    String(chatId),
+    name || "",
+    "",
+    sheetId || "",
+    TENANT_STATUS.ACTIVE,
+    now,
+    adminChatId ? "admin=" + String(adminChatId) : "",
+    "",
+    "",
+    0,
+    TENANT_CHAT_TYPE.GROUP,
+    membersCsv,
+    DEFAULT_PRIMARY_CURRENCY
+  ]);
+  invalidateTenantCache();
+}
+
+// Replace the entire group_members CSV. Used by /start re-sync.
+function setGroupMembers(groupChatId, members) {
+  var rowNum = _findRowIndexByChatId(groupChatId);
+  if (rowNum === -1) return false;
+  var tab = _getOrCreateTenantsTab();
+  var csv = (members || [])
+    .map(function (m) {
+      return String(m).trim();
+    })
+    .filter(function (s) {
+      return s.length > 0;
+    })
+    .join(",");
+  tab.getRange(rowNum, TENANT_COLS.GROUP_MEMBERS).setValue(csv);
+  invalidateTenantCache();
+  return true;
+}
+
+// Add one member to the CSV (no-op if already present). Returns true iff added.
+function addGroupMember(groupChatId, memberChatId) {
+  var t = findTenantByChatId(groupChatId);
+  if (!t || t.chat_type !== TENANT_CHAT_TYPE.GROUP) return false;
+  var key = String(memberChatId);
+  for (var i = 0; i < t.group_members.length; i++) {
+    if (t.group_members[i] === key) return false;
+  }
+  var next = t.group_members.concat([key]);
+  return setGroupMembers(groupChatId, next);
+}
+
+// Remove one member from the CSV. Returns true iff something was removed.
+function removeGroupMember(groupChatId, memberChatId) {
+  var t = findTenantByChatId(groupChatId);
+  if (!t || t.chat_type !== TENANT_CHAT_TYPE.GROUP) return false;
+  var key = String(memberChatId);
+  var next = t.group_members.filter(function (m) {
+    return m !== key;
+  });
+  if (next.length === t.group_members.length) return false;
+  return setGroupMembers(groupChatId, next);
+}
+
+// Enumerate every active group tenant that contains memberChatId. Used by the
+// DM split UI (step 3) and by retro-add on /register completion (step 2b.3).
+function findGroupsForMember(memberChatId) {
+  var key = String(memberChatId);
+  var list = loadTenants();
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var t = list[i];
+    if (t.chat_type !== TENANT_CHAT_TYPE.GROUP) continue;
+    if (t.status !== TENANT_STATUS.ACTIVE) continue;
+    if (t.group_members.indexOf(key) !== -1) out.push(t);
+  }
+  return out;
+}
+
+// Pull the admin chat_id out of the notes field. Returns "" if not set.
+function getGroupAdminChatId(groupTenant) {
+  if (!groupTenant || !groupTenant.notes) return "";
+  var m = String(groupTenant.notes).match(/admin=(\S+)/);
+  return m ? m[1] : "";
+}
+
 // Stamp last_forward_at on a tenant. Called from extractTransactions after a
 // successful live forward (not from backfill — backfill is operator action on
 // historical mail, not fresh activity).
