@@ -1273,7 +1273,7 @@ describe("handleGroupCallback dispatch", () => {
     expect(kb.inline_keyboard[0][0].text).toContain("50-50 with Bob");
   });
 
-  it("gsp/gst/gun → 'Coming in step 4' toast, no edit", () => {
+  it("gst/gun → 'Coming in step 4' toast, no edit", () => {
     var sent = [];
     var { SpreadsheetApp } = setupRegistry([
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
@@ -1287,7 +1287,7 @@ describe("handleGroupCallback dispatch", () => {
       PropertiesService: { getScriptProperties: () => makeProps() }
     });
 
-    ["gsp:m1:-100:50", "gst:m1:-100:1", "gun:m1"].forEach((data) => {
+    ["gst:m1:-100:1", "gun:m1"].forEach((data) => {
       handleGroupCallback({
         callback_query: {
           id: "cb",
@@ -1300,7 +1300,7 @@ describe("handleGroupCallback dispatch", () => {
 
     expect(sent.filter((s) => s.url.indexOf("/editMessageText") !== -1).length).toBe(0);
     var acks = sent.filter((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(acks.length).toBe(3);
+    expect(acks.length).toBe(2);
     acks.forEach((a) => expect(a.payload.text).toContain("step 4"));
   });
 });
@@ -1441,5 +1441,288 @@ describe("formatGroupSplitNotification", () => {
       }
     });
     expect(msg).not.toContain("📂");
+  });
+});
+
+// Personal-sheet column constants used by executeGroupSplit. Mirrors Constants.js
+// (which isn't loadable in this sandbox because it depends on BOT_TOKEN).
+var PERSONAL_COL_STUBS = {
+  EMAIL_DATE_COLUMN: 1,
+  TRANSACTION_DATE_COLUMN: 2,
+  MERCHANT_COLUMN: 3,
+  AMOUNT_COLUMN: 4,
+  CATEGORY_COLUMN: 5,
+  TRANSACTION_TYPE_COLUMN: 6,
+  USER_COLUMN: 7,
+  SPLIT_COLUMN: 8,
+  MESSAGE_ID_COLUMN: 9,
+  CURRENCY_COLUMN: 10,
+  EMAIL_LINK_COLUMN: 11,
+  GROUP_REF_COLUMN: 12,
+  GROUP_MESSAGE_ID_COLUMN: 13
+};
+
+// Build a SpreadsheetApp mock with: admin Tenants tab + one personal sheet
+// for the caller (sheet id "s1") seeded with one transaction row + an empty
+// group sheet (sheet id "g1"). Returns the mock and direct handles.
+function setupSplitFixture(tenantRows, txn) {
+  var SpreadsheetApp = makeSpreadsheetApp();
+  // Admin Tenants tab.
+  var adminSs = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var tab = adminSs.insertSheet("Tenants");
+  tab.appendRow([
+    "chat_id",
+    "name",
+    "emails",
+    "sheet_id",
+    "status",
+    "created_at",
+    "notes",
+    "last_forward_at",
+    "last_nag_at",
+    "nag_count",
+    "chat_type",
+    "group_members",
+    "primary_currency"
+  ]);
+  tenantRows.forEach(function (r) {
+    tab.appendRow(r);
+  });
+  // Personal sheet for caller.
+  var personalSs = SpreadsheetApp.openById("s1");
+  var personalSheet = personalSs.getSheets()[0];
+  personalSheet.appendRow([
+    "Email Date",
+    "Transaction Date",
+    "Merchant",
+    "Amount",
+    "Category",
+    "Transaction Type",
+    "User",
+    "Split",
+    "Message ID",
+    "Currency",
+    "Email Link",
+    "Group Ref",
+    "Group Message ID"
+  ]);
+  personalSheet.appendRow([
+    txn.emailDate || "2026-05-01",
+    txn.txDate || "2026-05-01",
+    txn.merchant || "Swiggy",
+    txn.amount,
+    txn.category || "Food",
+    txn.txType || "Debit",
+    txn.user || "Alice",
+    txn.split || "Personal",
+    txn.messageId,
+    txn.currency || "INR",
+    txn.emailLink || "https://mail.google.com/x",
+    txn.groupRef || "",
+    txn.groupMessageId || ""
+  ]);
+  // Group sheet (for the appendRow targets). Pre-create so openGroupSheet works.
+  SpreadsheetApp.openById("g1");
+  return { SpreadsheetApp: SpreadsheetApp, personalSheet: personalSheet };
+}
+
+describe("handleGroupCallback gsp execution", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["handleGroupCallback", "setCurrentTenant", "findTenantByChatId"],
+      stubs
+    );
+  }
+
+  function makeStubs(SpreadsheetApp, sent) {
+    return {
+      ...urlStubs(),
+      ...PERSONAL_COL_STUBS,
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {}, getUuid: () => "tx-uuid-1" },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      Logger: { log: () => {} }
+    };
+  }
+
+  it("happy path: writes N share rows, posts notification, stamps personal row, swaps DM keyboard", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gsp:msg-X:-100:50",
+        message: { chat: { id: 111 }, message_id: 42, text: "💸 INR 600 Debited\n🏪 Merchant: Swiggy" }
+      }
+    });
+
+    // Group sheet got 2 rows (50/50 → both members are share holders).
+    var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
+    expect(groupSheet.getLastRow()).toBe(2);
+    var r1 = groupSheet.getRange(1, 1, 1, 13).getValues()[0];
+    expect(r1[2]).toBe("Swiggy"); // merchant
+    expect(r1[3]).toBe(600); // amount
+    expect(r1[5]).toBe("111"); // paid by
+    expect([r1[6], groupSheet.getRange(2, 7).getValue()].sort()).toEqual(["111", "222"]); // share holders
+    expect(r1[7]).toBe(300); // share amount
+    expect(r1[8]).toBe("tx-uuid-1"); // tx id
+    expect(r1[11]).toBe("1"); // group msg id (from makeFetch stub)
+
+    // Personal row was stamped with group ref + group message id.
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:tx-uuid-1");
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("1");
+
+    // Group chat received the notification.
+    var groupSend = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === "-100");
+    expect(groupSend).toBeTruthy();
+    expect(groupSend.payload.text).toContain("Swiggy");
+    expect(groupSend.payload.text).toContain("Paid by Alice");
+    expect(groupSend.payload.text).toContain("Bob");
+
+    // DM keyboard was swapped via editMessageText.
+    var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
+    var kb = JSON.parse(dmEdit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].text).toContain("Make personal again");
+    expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
+    expect(kb.inline_keyboard[1].map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
+
+    // Toast acknowledges.
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Split recorded");
+  });
+
+  it("rejects re-split when GROUP_REF is already set, makes no writes", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600, groupRef: "-100:old-tx", groupMessageId: "99" }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gsp:msg-X:-100:50",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+    // Personal row's GROUP_REF unchanged.
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:old-tx");
+    expect(sent.find((s) => s.url.indexOf("/editMessageText") !== -1)).toBeUndefined();
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Already split");
+  });
+
+  it("rejects when caller is not a member of the group", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["999", "Eve", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "999", sheet_id: "s1", name: "Eve", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 999 },
+        data: "gsp:msg-X:-100:50",
+        message: { chat: { id: 999 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("not a member");
+  });
+
+  it("3-person 'all' split writes 3 rows with rounding remainder absorbed in shares[0]", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["333", "Charlie", "", "s3", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222,333", "INR"]
+      ],
+      { messageId: "msg-X", amount: 100 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gsp:msg-X:-100:all",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
+    expect(groupSheet.getLastRow()).toBe(3);
+    var shares = [
+      groupSheet.getRange(1, 8).getValue(),
+      groupSheet.getRange(2, 8).getValue(),
+      groupSheet.getRange(3, 8).getValue()
+    ];
+    expect(shares[0]).toBe(33.34); // residual
+    expect(shares[1]).toBe(33.33);
+    expect(shares[2]).toBe(33.33);
+  });
+
+  it("p100 in 2-person group writes a single share row charging the partner", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gsp:msg-X:-100:p100",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
+    expect(groupSheet.getLastRow()).toBe(1);
+    var row = groupSheet.getRange(1, 1, 1, 13).getValues()[0];
+    expect(row[5]).toBe("111"); // paid by
+    expect(row[6]).toBe("222"); // share holder = the partner
+    expect(row[7]).toBe(600); // share amount = full
   });
 });

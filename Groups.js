@@ -682,9 +682,14 @@ function handleGroupCallback(update) {
     return;
   }
 
-  // Leaf taps — actual sheet writes land in step 4. Acknowledge with a toast
-  // so the menu visibly responds without leaving the user wondering.
-  if (decoded.action === "gsp" || decoded.action === "gst" || decoded.action === "gun") {
+  if (decoded.action === "gsp") {
+    executeGroupSplit(cb, decoded, callerChatId, chatId, telegramMessageId, bodyText);
+    return;
+  }
+
+  // Remaining leaf taps (gst, gun) — wired in step 4.3 / 4.4. Acknowledge
+  // with a toast so the menu visibly responds.
+  if (decoded.action === "gst" || decoded.action === "gun") {
     answerCallbackQuery(cb.id, "🚧 Recording lands in step 4", true);
     return;
   }
@@ -912,4 +917,136 @@ function formatGroupSplitNotification(opts) {
   lines.push("👥 Shared by " + sharePieces.join(", "));
   if (category) lines.push("📂 " + escapeMarkdown(category));
   return lines.join("\n");
+}
+
+// gsp executor — record a split. Writes N share rows to the group sheet,
+// posts a notification in the group chat, stamps the personal row with
+// group_ref + group_message_id, and swaps the DM keyboard to a single
+// "↩️ Make personal again" button (preserving Category / Delete).
+//
+// The caller's tenant context (their personal sheet) is set by doPost before
+// the callback is dispatched; tests must call setCurrentTenant beforehand.
+function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
+  var emailMessageId = decoded.parts[0];
+  var groupChatId = decoded.parts[1];
+  var mode = decoded.parts[2];
+
+  var group = findGroupTenantByChatId(groupChatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+    return;
+  }
+  if (group.group_members.indexOf(callerChatId) === -1) {
+    answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+    return;
+  }
+
+  var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
+  if (rowNumber < 0) {
+    answerCallbackQuery(cb.id, "❌ Transaction not found", true);
+    return;
+  }
+  // Read the row at the full 13-column width directly. getRowData() only
+  // reaches EMAIL_LINK_COLUMN (col 11) so it can't see GROUP_REF / GROUP_MESSAGE_ID.
+  var personalSheet = getSpreadsheet().getSheets()[0];
+  var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
+  // Re-split guard. Caller must undo before splitting again.
+  if (rowData[GROUP_REF_COLUMN - 1]) {
+    answerCallbackQuery(cb.id, "ℹ️ Already split — undo first", true);
+    return;
+  }
+
+  var amount = Number(rowData[AMOUNT_COLUMN - 1]);
+  var shareSet = computeSplitShareSet(group, callerChatId, mode, amount);
+  if (!shareSet) {
+    answerCallbackQuery(cb.id, "❌ Invalid split for this group", true);
+    return;
+  }
+
+  var emailDate = rowData[EMAIL_DATE_COLUMN - 1];
+  var txDate = rowData[TRANSACTION_DATE_COLUMN - 1];
+  var merchant = rowData[MERCHANT_COLUMN - 1];
+  var currency = rowData[CURRENCY_COLUMN - 1] || group.primary_currency || "INR";
+  var category = rowData[CATEGORY_COLUMN - 1];
+  var txType = rowData[TRANSACTION_TYPE_COLUMN - 1];
+  var emailLink = rowData[EMAIL_LINK_COLUMN - 1];
+
+  var txId = Utilities.getUuid();
+
+  var nameOf = function (id) {
+    var t = findTenantByChatId(id);
+    return t && t.name ? t.name : id;
+  };
+  var notificationText = formatGroupSplitNotification({
+    merchant: merchant,
+    amount: amount,
+    currency: currency,
+    category: category,
+    payerChatId: callerChatId,
+    payerName: nameOf(callerChatId),
+    holders: shareSet.holders,
+    shares: shareSet.shares,
+    nameOf: nameOf
+  });
+
+  // Post to the group chat first so we have a message_id to stamp on every
+  // group sheet row. Failure here aborts before we write — keeps state
+  // consistent (no orphan group rows pointing at a missing message).
+  var sendResp = sendTelegramMessage(group.chat_id, notificationText, {
+    parse_mode: "Markdown",
+    disable_web_page_preview: true
+  });
+  var groupMsgId = "";
+  try {
+    var parsed = JSON.parse(sendResp || "{}");
+    if (parsed && parsed.result && parsed.result.message_id) {
+      groupMsgId = String(parsed.result.message_id);
+    }
+  } catch (_) {}
+  if (!groupMsgId) {
+    answerCallbackQuery(cb.id, "❌ Couldn't post in the group", true);
+    return;
+  }
+
+  var groupSheet = openGroupSheet(group.sheet_id);
+  for (var i = 0; i < shareSet.holders.length; i++) {
+    groupSheet.appendRow([
+      emailDate,
+      txDate,
+      merchant,
+      amount,
+      currency,
+      callerChatId,
+      shareSet.holders[i],
+      shareSet.shares[i],
+      txId,
+      category,
+      txType,
+      groupMsgId,
+      emailLink
+    ]);
+  }
+
+  // Stamp the personal row so /undo + future re-splits see the linkage.
+  personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue(group.chat_id + ":" + txId);
+  personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
+
+  // Replace the DM keyboard. Group parent buttons are gone (would re-split);
+  // ✏️ Category and 🗑️ Delete still apply to the personal row.
+  var newKb = {
+    inline_keyboard: [
+      [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
+      [
+        { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
+        { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+      ]
+    ]
+  };
+  sendTelegramMessage(dmChatId, bodyText, {
+    parse_mode: "Markdown",
+    message_id: telegramMessageId,
+    reply_markup: newKb
+  });
+
+  answerCallbackQuery(cb.id, "✅ Split recorded");
 }
