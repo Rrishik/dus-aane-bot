@@ -1272,34 +1272,6 @@ describe("handleGroupCallback dispatch", () => {
     var kb = JSON.parse(edit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("50-50 with Bob");
   });
-
-  it("gst → 'Coming in step 4' toast, no edit", () => {
-    var sent = [];
-    var { SpreadsheetApp } = setupRegistry([
-      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
-    ]);
-    var { handleGroupCallback } = load({
-      ...urlStubs(),
-      SpreadsheetApp: SpreadsheetApp,
-      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
-      UrlFetchApp: makeFetch(sent),
-      Utilities: { sleep: () => {} },
-      PropertiesService: { getScriptProperties: () => makeProps() }
-    });
-
-    handleGroupCallback({
-      callback_query: {
-        id: "cb",
-        from: { id: 111 },
-        data: "gst:m1:-100:1",
-        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
-      }
-    });
-
-    expect(sent.filter((s) => s.url.indexOf("/editMessageText") !== -1).length).toBe(0);
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("step 4");
-  });
 });
 
 describe("computeSplitShareSet", () => {
@@ -1949,5 +1921,158 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
     var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
     expect(ack.payload.text).toContain("no longer exists");
+  });
+});
+
+describe("handleGroupCallback gst execution (settlement)", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["handleGroupCallback", "setCurrentTenant"],
+      stubs
+    );
+  }
+
+  function makeStubs(SpreadsheetApp, sent) {
+    return {
+      ...urlStubs(),
+      ...PERSONAL_COL_STUBS,
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {}, getUuid: () => "tx-settle-1" },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      Logger: { log: () => {} }
+    };
+  }
+
+  it("happy path: writes a single Settlement row, posts notification, stamps personal row, swaps keyboard", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["333", "Charlie", "", "s3", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222,333", "INR"]
+      ],
+      { messageId: "msg-X", amount: 500 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    // Caller (111=Alice) settles with member at index 1 (222=Bob).
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gst:msg-X:-100:1",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn body" }
+      }
+    });
+
+    var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
+    expect(groupSheet.getLastRow()).toBe(1); // exactly one row, no per-member fan-out
+    var row = groupSheet.getRange(1, 1, 1, 13).getValues()[0];
+    expect(row[5]).toBe("111"); // paid by
+    expect(row[6]).toBe("222"); // share holder = settlement target
+    expect(row[7]).toBe(500); // share amount = full
+    expect(row[9]).toBe("Settlement"); // category
+    expect(row[10]).toBe("Settlement"); // tx type
+
+    var groupSend = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === "-100");
+    expect(groupSend).toBeTruthy();
+    expect(groupSend.payload.text).toContain("Alice");
+    expect(groupSend.payload.text).toContain("settled");
+    expect(groupSend.payload.text).toContain("INR 500");
+    expect(groupSend.payload.text).toContain("Bob");
+
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:tx-settle-1");
+
+    // DM keyboard same shape as gsp's post-split keyboard.
+    var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
+    var kb = JSON.parse(dmEdit.payload.reply_markup);
+    expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
+
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Settlement recorded");
+  });
+
+  it("rejects when target index points at the caller (can't settle with self)", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 500 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gst:msg-X:-100:0", // index 0 = caller
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("yourself");
+  });
+
+  it("rejects an out-of-range target index without writing", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 500 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gst:msg-X:-100:9",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Invalid settlement target");
+  });
+
+  it("rejects re-split when the row already has a GROUP_REF", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 500, groupRef: "-100:old", groupMessageId: "55" }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gst:msg-X:-100:1",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
+    expect(ack.payload.text).toContain("Already split");
   });
 });

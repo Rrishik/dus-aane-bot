@@ -692,10 +692,8 @@ function handleGroupCallback(update) {
     return;
   }
 
-  // Remaining leaf taps (gst) — wired in step 4.4. Acknowledge with a toast
-  // so the menu visibly responds.
   if (decoded.action === "gst") {
-    answerCallbackQuery(cb.id, "🚧 Recording lands in step 4", true);
+    executeGroupSettlement(cb, decoded, callerChatId, chatId, telegramMessageId, bodyText);
     return;
   }
 
@@ -1151,4 +1149,136 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
 function escapeHtml(s) {
   if (s == null) return "";
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// gst executor — record a settlement (one-way payment from caller to a
+// specific other member). Writes a single Category=Settlement / TxType=
+// Settlement row to the group sheet and posts a settlement notification.
+//
+// Mirrors executeGroupSplit's external contract (post group msg first, then
+// write rows, then stamp the personal row, then swap the DM keyboard) so
+// gun undoes a settlement the same way it undoes a split.
+function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
+  var emailMessageId = decoded.parts[0];
+  var groupChatId = decoded.parts[1];
+  var targetIdxRaw = decoded.parts[2];
+
+  var group = findGroupTenantByChatId(groupChatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+    return;
+  }
+  if (group.group_members.indexOf(callerChatId) === -1) {
+    answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+    return;
+  }
+
+  var targetIdx = parseInt(targetIdxRaw, 10);
+  if (isNaN(targetIdx) || targetIdx < 0 || targetIdx >= group.group_members.length) {
+    answerCallbackQuery(cb.id, "❌ Invalid settlement target", true);
+    return;
+  }
+  var targetChatId = group.group_members[targetIdx];
+  if (targetChatId === callerChatId) {
+    answerCallbackQuery(cb.id, "❌ Can't settle with yourself", true);
+    return;
+  }
+
+  var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
+  if (rowNumber < 0) {
+    answerCallbackQuery(cb.id, "❌ Transaction not found", true);
+    return;
+  }
+  var personalSheet = getSpreadsheet().getSheets()[0];
+  var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
+  if (rowData[GROUP_REF_COLUMN - 1]) {
+    answerCallbackQuery(cb.id, "ℹ️ Already split — undo first", true);
+    return;
+  }
+
+  var amount = Number(rowData[AMOUNT_COLUMN - 1]);
+  if (isNaN(amount) || amount <= 0) {
+    answerCallbackQuery(cb.id, "❌ Invalid transaction amount", true);
+    return;
+  }
+
+  var emailDate = rowData[EMAIL_DATE_COLUMN - 1];
+  var txDate = rowData[TRANSACTION_DATE_COLUMN - 1];
+  var merchant = rowData[MERCHANT_COLUMN - 1];
+  var currency = rowData[CURRENCY_COLUMN - 1] || group.primary_currency || "INR";
+  var emailLink = rowData[EMAIL_LINK_COLUMN - 1];
+
+  var txId = Utilities.getUuid();
+
+  var nameOf = function (id) {
+    var t = findTenantByChatId(id);
+    return t && t.name ? t.name : id;
+  };
+  var payerName = nameOf(callerChatId);
+  var targetName = nameOf(targetChatId);
+
+  var notificationText =
+    "💸 *" +
+    escapeMarkdown(payerName) +
+    "* settled " +
+    currency +
+    " " +
+    amount +
+    " with *" +
+    escapeMarkdown(targetName) +
+    "*";
+
+  var sendResp = sendTelegramMessage(group.chat_id, notificationText, {
+    parse_mode: "Markdown",
+    disable_web_page_preview: true
+  });
+  var groupMsgId = "";
+  try {
+    var parsed = JSON.parse(sendResp || "{}");
+    if (parsed && parsed.result && parsed.result.message_id) {
+      groupMsgId = String(parsed.result.message_id);
+    }
+  } catch (_) {}
+  if (!groupMsgId) {
+    answerCallbackQuery(cb.id, "❌ Couldn't post in the group", true);
+    return;
+  }
+
+  var groupSheet = openGroupSheet(group.sheet_id);
+  groupSheet.appendRow([
+    emailDate,
+    txDate,
+    merchant,
+    amount,
+    currency,
+    callerChatId,
+    targetChatId,
+    amount,
+    txId,
+    "Settlement",
+    "Settlement",
+    groupMsgId,
+    emailLink
+  ]);
+
+  personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue(group.chat_id + ":" + txId);
+  personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
+
+  // Same DM keyboard as gsp — undo wires through the same gun path.
+  var newKb = {
+    inline_keyboard: [
+      [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
+      [
+        { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
+        { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+      ]
+    ]
+  };
+  sendTelegramMessage(dmChatId, bodyText, {
+    parse_mode: "Markdown",
+    message_id: telegramMessageId,
+    reply_markup: newKb
+  });
+
+  answerCallbackQuery(cb.id, "✅ Settlement recorded");
 }
