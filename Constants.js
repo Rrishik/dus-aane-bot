@@ -155,6 +155,7 @@ const TRANSACTION_SENDERS = [
   "AlertsfromAmericanExpress@americanexpress.com",
   "AmericanExpress@welcome.americanexpress.com",
   "transaction-alerts@idfcfirstbank.com",
+  "transaction.alerts@idfcfirstbank.com",
   "noreply@idfcfirstbank.com",
   "alerts@kotak.com",
   "donotreply@kotak.com",
