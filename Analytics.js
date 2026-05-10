@@ -148,14 +148,7 @@ function formatMonthlyMessage(year, month, data, numMonths) {
   if (data.topTransactions && data.topTransactions.length > 0) {
     msg += "\n💳 *Top Transactions:*\n";
     data.topTransactions.forEach(function (t, i) {
-      msg +=
-        i +
-        1 +
-        ". " +
-        escapeMarkdown(t.merchant || "Unknown") +
-        "  ₹" +
-        formatAmount(t.amount) +
-        "\n";
+      msg += i + 1 + ". " + escapeMarkdown(t.merchant || "Unknown") + "  ₹" + formatAmount(t.amount) + "\n";
     });
   }
 
@@ -513,7 +506,15 @@ function formatTrendsMessage(months) {
       deltas.forEach(function (d) {
         var emoji = CATEGORY_EMOJIS[d.category] || "•";
         var arrow = d.delta > 0 ? "↑" : "↓";
-        msg += emoji + " " + escapeMarkdown(shortCategoryName(d.category)) + " " + arrow + " ₹" + formatAmount(Math.abs(d.delta)) + "\n";
+        msg +=
+          emoji +
+          " " +
+          escapeMarkdown(shortCategoryName(d.category)) +
+          " " +
+          arrow +
+          " ₹" +
+          formatAmount(Math.abs(d.delta)) +
+          "\n";
       });
     }
   }

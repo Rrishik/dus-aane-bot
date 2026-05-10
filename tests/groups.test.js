@@ -1243,7 +1243,11 @@ describe("buildSplitLevel2Keyboard", () => {
 
 describe("handleGroupCallback dispatch", () => {
   function load(stubs) {
-    return loadAppsScript(["TelegramUtils.js", "TenantRegistry.js", "Analytics.js", "Groups.js"], ["handleGroupCallback"], stubs);
+    return loadAppsScript(
+      ["TelegramUtils.js", "TenantRegistry.js", "Analytics.js", "Groups.js"],
+      ["handleGroupCallback"],
+      stubs
+    );
   }
 
   it("gnav → edits message with Level 1 keyboard for a group the caller belongs to", () => {
@@ -2027,9 +2031,7 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(groupSheet.getLastRow()).toBe(3);
     // Personal row's group ref unchanged.
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:tx-uuid-1");
-    var reply = sent.find(
-      (s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === 111
-    );
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === 111);
     expect(reply.payload.text).toContain("Couldn't edit the group message");
   });
 

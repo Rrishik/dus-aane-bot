@@ -1205,10 +1205,7 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
     editOk = false;
   }
   if (!editOk) {
-    sendTelegramMessage(
-      dmChatId,
-      "⚠️ *Couldn't edit the group message (older than 48h?). Edit your sheet manually.*"
-    );
+    sendTelegramMessage(dmChatId, "⚠️ *Couldn't edit the group message (older than 48h?). Edit your sheet manually.*");
     return;
   }
 
@@ -1577,7 +1574,14 @@ function formatGroupStats(perCurrency, nameOf, groupName, simplified) {
       var creditorName = resolveName(e.creditor) || e.creditor;
       var verb = simplified ? " → " : " owes ";
       lines.push(
-        "• " + escapeMarkdown(debtorName) + verb + escapeMarkdown(creditorName) + " " + ccy + " " + formatAmount(e.amount)
+        "• " +
+          escapeMarkdown(debtorName) +
+          verb +
+          escapeMarkdown(creditorName) +
+          " " +
+          ccy +
+          " " +
+          formatAmount(e.amount)
       );
     }
   }
