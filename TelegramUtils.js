@@ -32,8 +32,6 @@ function setTelegramCommands() {
     { command: "/account", description: "Account & settings" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
-    { command: "/dashboard", description: "Open your Looker Studio dashboard" },
-    { command: "/ownsheet", description: "Transfer Drive ownership of your sheet" },
     { command: "/help", description: "Show available commands" }
   ];
   sendRequest(BOT_SET_COMMANDS_URL, "post", {
@@ -307,27 +305,39 @@ function escapeMarkdown(text) {
 
 // --- Merged from MessageUtils.js ---
 
+// Compact, label-free transaction notification. Replaces a 5-line "field: value"
+// layout where every line was prefixed with an emoji that just relabelled what
+// the value already showed (🗓 *Date:* …, 🏪 *Merchant:* …). Today: 3 lines max.
+//
+// Headline merges merchant + amount so the most-scanned facts are line 1.
+// 💸 / 💰 alone signal debit vs credit — the "Debited" verb is gone.
+// Date moves onto the category line (one inline icon, no "Date:" label).
 function getTransactionMessageAsString(transaction_details, user) {
-  var amount = escapeMarkdown(transaction_details.amount);
   var rawDate = transaction_details.email_date || transaction_details.transaction_date;
   var date = escapeMarkdown(
     rawDate instanceof Date
       ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
       : rawDate || "Unknown Date"
   );
-  var merchant = transaction_details.merchant ? escapeMarkdown(transaction_details.merchant) : "—";
-  var category = escapeMarkdown(transaction_details.category);
+  var merchant = transaction_details.merchant;
+  var category = transaction_details.category;
   var currency = transaction_details.currency || "INR";
-  user = escapeMarkdown(user);
+  var rawAmount = Number(transaction_details.amount) || 0;
+  var money = (currency === "INR" ? "₹" : currency + " ") + formatAmount(rawAmount);
 
-  var emoji = transaction_details.transaction_type === "Debit" ? "💸" : "💰";
-  var message =
-    `${emoji} *${currency} ${amount} ${transaction_details.transaction_type}ed*\n` +
-    `🗓 *Date:* ${date}\n` +
-    `🏪 *Merchant:* ${merchant}\n` +
-    (category ? `📂 *Category:* ${category}\n` : "") +
-    `👤 *By:* ${user}`;
-  return message;
+  var typeEmoji = transaction_details.transaction_type === "Debit" ? "💸" : "💰";
+  var header = merchant
+    ? typeEmoji + " *" + escapeMarkdown(merchant) + "* — " + money
+    : typeEmoji + " *" + money + " " + transaction_details.transaction_type + "ed*";
+
+  var lines = [header];
+  if (category) {
+    lines.push("📂 " + escapeMarkdown(shortCategoryName(category)) + " · " + date);
+  } else {
+    lines.push("🗓 " + date);
+  }
+  if (user) lines.push("👤 " + escapeMarkdown(user));
+  return lines.join("\n");
 }
 
 function sendTransactionMessage(transaction_details, messageId, user, isNewMerchant) {

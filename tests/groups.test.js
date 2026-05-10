@@ -1243,7 +1243,7 @@ describe("buildSplitLevel2Keyboard", () => {
 
 describe("handleGroupCallback dispatch", () => {
   function load(stubs) {
-    return loadAppsScript(["TelegramUtils.js", "TenantRegistry.js", "Groups.js"], ["handleGroupCallback"], stubs);
+    return loadAppsScript(["TelegramUtils.js", "TenantRegistry.js", "Analytics.js", "Groups.js"], ["handleGroupCallback"], stubs);
   }
 
   it("gnav → edits message with Level 1 keyboard for a group the caller belongs to", () => {
@@ -1305,8 +1305,8 @@ describe("handleGroupCallback dispatch", () => {
     });
 
     expect(sent.find((s) => s.url.indexOf("/editMessageText") !== -1)).toBeUndefined();
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("not a member");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("not a member");
   });
 
   it("gset → edits to Level 2 settlement picker", () => {
@@ -1488,7 +1488,7 @@ describe("computeSplitShareSet", () => {
 
 describe("formatGroupSplitNotification", () => {
   function load() {
-    return loadAppsScript(["TelegramUtils.js", "Groups.js"], ["formatGroupSplitNotification"], {
+    return loadAppsScript(["TelegramUtils.js", "Analytics.js", "Groups.js"], ["formatGroupSplitNotification"], {
       // TelegramUtils references Telegram URL constants we don't exercise here.
       UrlFetchApp: {},
       PropertiesService: {}
@@ -1641,7 +1641,7 @@ function setupSplitFixture(tenantRows, txn) {
 describe("handleGroupCallback gsp execution", () => {
   function load(stubs) {
     return loadAppsScript(
-      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Analytics.js", "Groups.js"],
       ["handleGroupCallback", "setCurrentTenant", "findTenantByChatId"],
       stubs
     );
@@ -1711,10 +1711,6 @@ describe("handleGroupCallback gsp execution", () => {
     expect(kb.inline_keyboard[0][0].text).toContain("Make personal again");
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
     expect(kb.inline_keyboard[1].map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
-
-    // Toast acknowledges.
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Split recorded");
   });
 
   it("rejects re-split when GROUP_REF is already set, makes no writes", () => {
@@ -1743,8 +1739,8 @@ describe("handleGroupCallback gsp execution", () => {
     // Personal row's GROUP_REF unchanged.
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:old-tx");
     expect(sent.find((s) => s.url.indexOf("/editMessageText") !== -1)).toBeUndefined();
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Already split");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("Already split");
   });
 
   it("rejects when caller is not a member of the group", () => {
@@ -1769,8 +1765,8 @@ describe("handleGroupCallback gsp execution", () => {
     });
 
     expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("not a member");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("not a member");
   });
 
   it("3-person 'all' split writes 3 rows with rounding remainder absorbed in shares[0]", () => {
@@ -1883,7 +1879,7 @@ function seedGroupShareRows(SpreadsheetApp, sheetId, txId, holders, sharePerHold
 describe("handleGroupCallback gun execution (undo)", () => {
   function load(stubs) {
     return loadAppsScript(
-      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Analytics.js", "Groups.js"],
       ["handleGroupCallback", "setCurrentTenant"],
       stubs
     );
@@ -1959,10 +1955,6 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
     var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
     expect(lastRow.map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
-
-    // Toast.
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Made personal again");
   });
 
   it("rejects when GROUP_REF is empty (row was never split)", () => {
@@ -1987,8 +1979,8 @@ describe("handleGroupCallback gun execution (undo)", () => {
     });
 
     expect(sent.find((s) => s.url.indexOf("/editMessageText") !== -1)).toBeUndefined();
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Not a group split");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("Not a group split");
   });
 
   it("aborts when group editMessageText fails (>48h cutoff), keeps group rows and personal cells", () => {
@@ -2035,8 +2027,10 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(groupSheet.getLastRow()).toBe(3);
     // Personal row's group ref unchanged.
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:tx-uuid-1");
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Couldn't edit the group message");
+    var reply = sent.find(
+      (s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === 111
+    );
+    expect(reply.payload.text).toContain("Couldn't edit the group message");
   });
 
   it("clears local refs when the group tenant has been deleted from the registry", () => {
@@ -2062,15 +2056,15 @@ describe("handleGroupCallback gun execution (undo)", () => {
 
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("no longer exists");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("no longer exists");
   });
 });
 
 describe("handleGroupCallback gst execution (settlement)", () => {
   function load(stubs) {
     return loadAppsScript(
-      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Analytics.js", "Groups.js"],
       ["handleGroupCallback", "setCurrentTenant"],
       stubs
     );
@@ -2135,9 +2129,6 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
-
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Settlement recorded");
   });
 
   it("rejects when target index points at the caller (can't settle with self)", () => {
@@ -2162,8 +2153,8 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     });
 
     expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("yourself");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("yourself");
   });
 
   it("rejects an out-of-range target index without writing", () => {
@@ -2188,8 +2179,8 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     });
 
     expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Invalid settlement target");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("Invalid settlement target");
   });
 
   it("rejects re-split when the row already has a GROUP_REF", () => {
@@ -2215,8 +2206,8 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     });
 
     expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("Already split");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("Already split");
   });
 });
 
@@ -2323,7 +2314,7 @@ describe("aggregatePairwiseDebts", () => {
 
 describe("formatGroupStats", () => {
   function load() {
-    return loadAppsScript(["TelegramUtils.js", "Groups.js"], ["formatGroupStats"], {});
+    return loadAppsScript(["TelegramUtils.js", "Analytics.js", "Groups.js"], ["formatGroupStats"], {});
   }
 
   it("renders 'all settled up' when no balances remain", () => {
@@ -2345,9 +2336,9 @@ describe("formatGroupStats", () => {
       "Pad"
     );
     expect(text).toContain("*INR*");
-    expect(text).toContain("Bob owes Alice INR 1234.50");
+    expect(text).toContain("Bob owes Alice INR 1,234.50");
     expect(text).toContain("*USD*");
-    expect(text).toContain("Alice owes Bob USD 50.00");
+    expect(text).toContain("Alice owes Bob USD 50");
   });
 
   it("uses → arrow + 'simplified payments' header when simplified=true", () => {
@@ -2355,7 +2346,7 @@ describe("formatGroupStats", () => {
     var nameOf = (id) => ({ 111: "Alice", 222: "Bob" })[id] || id;
     var text = formatGroupStats({ INR: [{ debtor: "222", creditor: "111", amount: 200 }] }, nameOf, "Pad", true);
     expect(text).toContain("simplified payments");
-    expect(text).toContain("Bob → Alice INR 200.00");
+    expect(text).toContain("Bob → Alice INR 200");
     expect(text).not.toContain("owes");
   });
 });
@@ -2487,7 +2478,7 @@ describe("buildGroupStatsKeyboard", () => {
 describe("handleGroupStatsCommand", () => {
   function load(stubs) {
     return loadAppsScript(
-      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Analytics.js", "Groups.js"],
       ["handleGroupStatsCommand"],
       stubs
     );
@@ -2569,7 +2560,7 @@ describe("handleGroupStatsCommand", () => {
     handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
     expect(sent.length).toBe(1);
     expect(sent[0].payload.chat_id).toBe(-100);
-    expect(sent[0].payload.text).toContain("Bob owes Alice INR 200.00");
+    expect(sent[0].payload.text).toContain("Bob owes Alice INR 200");
     expect(sent[0].payload.text).toContain("*Pad*");
     // Simplify toggle attached when there are debts to display.
     var kb = JSON.parse(sent[0].payload.reply_markup);
@@ -2629,7 +2620,7 @@ describe("handleGroupStatsCommand", () => {
 describe("handleGroupCallback gstats execution (toggle simplified/detailed)", () => {
   function load(stubs) {
     return loadAppsScript(
-      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Analytics.js", "Groups.js"],
       ["handleGroupCallback"],
       stubs
     );
@@ -2732,7 +2723,7 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
     expect(edit.payload.text).toContain("simplified payments");
     // Tangle: Bob owes Alice 100, Charlie owes Bob 100. Nets: Alice=+100,
     // Bob=0, Charlie=-100. Simplified: Charlie → Alice 100.
-    expect(edit.payload.text).toContain("Charlie \u2192 Alice INR 100.00");
+    expect(edit.payload.text).toContain("Charlie \u2192 Alice INR 100");
     var kb = JSON.parse(edit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toBe("\ud83d\udccb Detailed");
   });
@@ -2776,8 +2767,8 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
 
     var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     expect(edit.payload.text).toContain("who owes whom");
-    expect(edit.payload.text).toContain("Bob owes Alice INR 100.00");
-    expect(edit.payload.text).toContain("Charlie owes Bob INR 100.00");
+    expect(edit.payload.text).toContain("Bob owes Alice INR 100");
+    expect(edit.payload.text).toContain("Charlie owes Bob INR 100");
     var kb = JSON.parse(edit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toBe("\ud83d\udd00 Simplify");
   });
@@ -2817,8 +2808,8 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
       }
     });
 
-    var ack = sent.find((s) => s.url.indexOf("/answerCallbackQuery") !== -1);
-    expect(ack.payload.text).toContain("not a member");
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
+    expect(reply.payload.text).toContain("not a member");
     var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     expect(edit).toBeFalsy();
   });
@@ -2910,7 +2901,7 @@ describe("resolveMemberByMention", () => {
 describe("handleGroupSettleCommand", () => {
   function load(stubs) {
     return loadAppsScript(
-      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Groups.js"],
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Analytics.js", "Groups.js"],
       ["handleGroupSettleCommand"],
       stubs
     );
@@ -2991,7 +2982,7 @@ describe("handleGroupSettleCommand", () => {
     // Group notification posted.
     var notif = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
     expect(notif).toBeTruthy();
-    expect(notif.payload.text).toContain("settled INR 500.00");
+    expect(notif.payload.text).toContain("settled INR 500");
     expect(notif.payload.text).toContain("Alice");
     expect(notif.payload.text).toContain("Bob");
 
@@ -3079,7 +3070,7 @@ describe("handleGroupSettleCommand", () => {
     handleGroupSettleCommand(makeUpdate(111, "/settle @bob 50"));
 
     var notif = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && String(s.payload.chat_id) === "-100");
-    expect(notif.payload.text).toContain("USD 50.00");
+    expect(notif.payload.text).toContain("USD 50");
     var row = SpreadsheetApp.openById("g1").getSheets()[0].getRange(2, 1, 1, 13).getValues()[0];
     expect(row[4]).toBe("USD");
   });

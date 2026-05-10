@@ -126,72 +126,43 @@ function formatMonthlyMessage(year, month, data, numMonths) {
     return data.categorySpend[b] - data.categorySpend[a];
   });
 
-  var maxCatNameLen = 0;
-  sortedCats.slice(0, 5).forEach(function (catKey) {
-    var catName = catKey.split("|||")[0];
-    if (catName.length > maxCatNameLen) maxCatNameLen = catName.length;
-  });
-
   var topCats = sortedCats.slice(0, 5);
-  var restAmount = 0;
-  var restCount = 0;
-  sortedCats.slice(5).forEach(function (catKey) {
-    restAmount += data.categorySpend[catKey];
-    restCount++;
+  var maxCatNameLen = 0;
+  topCats.forEach(function (catKey) {
+    var catName = shortCategoryName(catKey.split("|||")[0]);
+    if (catName.length > maxCatNameLen) maxCatNameLen = catName.length;
   });
 
   topCats.forEach(function (catKey) {
     var parts = catKey.split("|||");
     var cat = parts[0];
-    var cur = parts[1];
     var amount = data.categorySpend[catKey];
     var emoji = CATEGORY_EMOJIS[cat] || "•";
-    var padded = cat + " ".repeat(Math.max(0, maxCatNameLen - cat.length));
+    var shortName = shortCategoryName(cat);
+    var padded = shortName + " ".repeat(Math.max(0, maxCatNameLen - shortName.length));
 
-    // Delta vs previous month
-    var delta = "";
-    if (data.prevCategorySpend && numMonths === 1) {
-      var prevAmt = data.prevCategorySpend[catKey] || 0;
-      var diff = amount - prevAmt;
-      if (diff > 0) delta = "  ↑" + formatAmount(diff);
-      else if (diff < 0) delta = "  ↓" + formatAmount(Math.abs(diff));
-    }
-
-    msg += emoji + " `" + padded + "  ₹" + formatAmount(amount) + "`" + delta + "\n";
+    msg += emoji + " `" + padded + "  ₹" + formatAmount(amount) + "`\n";
   });
-
-  if (restCount > 0) {
-    msg +=
-      "   `\\+" +
-      restCount +
-      " more" +
-      " ".repeat(Math.max(0, maxCatNameLen - 6)) +
-      "  ₹" +
-      formatAmount(restAmount) +
-      "`\n";
-  }
 
   // Top 5 transactions by amount
   if (data.topTransactions && data.topTransactions.length > 0) {
     msg += "\n💳 *Top Transactions:*\n";
     data.topTransactions.forEach(function (t, i) {
-      var dateStr = t.date instanceof Date ? Utilities.formatDate(t.date, tz, "MMM dd") : t.date;
       msg +=
         i +
         1 +
-        "\\. " +
+        ". " +
         escapeMarkdown(t.merchant || "Unknown") +
         "  ₹" +
         formatAmount(t.amount) +
-        "  " +
-        dateStr +
         "\n";
     });
   }
 
-  // Per-user total spend
+  // Per-user total spend. Skipped in solo personal sheets (1 user) since the
+  // total is already in the header line and the username adds no info.
   var users = Object.keys(data.userSpend);
-  if (users.length > 0) {
+  if (users.length > 1) {
     msg += "\n";
     users.forEach(function (user) {
       var perCur = data.userSpend[user];
@@ -200,10 +171,11 @@ function formatMonthlyMessage(year, month, data, numMonths) {
     });
   }
 
-  // Split + Partner settlement
+  // Split + Partner settlement. Only meaningful with 2+ users on the sheet.
+  // Group splits live in their own group sheet and don't surface here.
   var s = data.settlement;
   var sharedCount = s ? (s.splitCount || 0) + (s.partnerCount || 0) : 0;
-  if (s && sharedCount > 0) {
+  if (s && sharedCount > 0 && users.length > 1) {
     var splitInr = (s.splitTotal && s.splitTotal["INR"]) || 0;
     var partnerInr = (s.partnerTotal && s.partnerTotal["INR"]) || 0;
     msg += "\n✂️ *Shared Total:* ₹" + formatAmount(splitInr + partnerInr);
@@ -541,7 +513,7 @@ function formatTrendsMessage(months) {
       deltas.forEach(function (d) {
         var emoji = CATEGORY_EMOJIS[d.category] || "•";
         var arrow = d.delta > 0 ? "↑" : "↓";
-        msg += emoji + " " + escapeMarkdown(d.category) + " " + arrow + " ₹" + formatAmount(Math.abs(d.delta)) + "\n";
+        msg += emoji + " " + escapeMarkdown(shortCategoryName(d.category)) + " " + arrow + " ₹" + formatAmount(Math.abs(d.delta)) + "\n";
       });
     }
   }
@@ -631,8 +603,32 @@ function formatWhoOwesMessage(year, month, data) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
+// Format a numeric amount for display. Drops the trailing `.00` when the value
+// rounds to a whole number ("₹549" not "₹549.00") and keeps 2 decimals when
+// the fractional part matters ("₹12.50"). Uses Indian grouping (1,00,000).
 function formatAmount(num) {
-  return num.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  var rounded = Math.round(num * 100) / 100;
+  var isWhole = Math.abs(rounded - Math.round(rounded)) < 0.005;
+  return rounded.toLocaleString("en-IN", {
+    minimumFractionDigits: isWhole ? 0 : 2,
+    maximumFractionDigits: 2
+  });
+}
+
+// Display-only short labels for the category list. Keeps the analytics message
+// narrow on phones where long names like "Health & Wellness" wrap. Unknown
+// categories (custom ones the user may add) fall through to the original.
+var CATEGORY_SHORT_NAMES = {
+  "Food & Dining": "Food",
+  "Bills & Utilities": "Bills",
+  "CC Bill Payment": "CC Bill",
+  "Interest/Dividend": "Interest",
+  Reimbursement: "Reimburse",
+  "Transfer In": "Transfer"
+};
+
+function shortCategoryName(cat) {
+  return CATEGORY_SHORT_NAMES[cat] || cat;
 }
 
 function makeBar(value, months, type) {

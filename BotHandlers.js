@@ -1,134 +1,30 @@
-// Look up the sheet row for a callback's email message id. If not found, answer
-// the callback with the standard "not found" toast and return -1 so the caller
-// can early-out. Centralizes the most-duplicated guard in the callback dispatch.
-function requireRowForCallback(callbackQueryId, emailMessageId) {
+// Look up the sheet row for a callback's email message id. If not found, send
+// a chat message explaining and return -1 so the caller can early-out. The
+// callback ack itself is handled by handleCallbackQuery up-front.
+function requireRowForCallback(chatId, emailMessageId) {
   var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
   if (rowNumber < 0) {
-    answerCallbackQuery(callbackQueryId, "❌ Transaction not found", false);
+    sendTelegramMessage(chatId, "❌ *Transaction not found in your sheet.*");
     return -1;
   }
   return rowNumber;
 }
 
-// Show the category picker for a transaction row. Uses the right list (debit vs
-// credit) for the row's transaction type. `displayName` is shown in the prompt.
-function promptCategoryPicker(chatId, rowNumber, emailMessageId, displayName) {
-  var sheet = getSpreadsheet().getSheets()[0];
-  var txnType = sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue();
-  sendTelegramMessage(chatId, "📂 *Pick a category for " + escapeMarkdown(displayName) + ":*", {
-    parse_mode: "Markdown",
-    reply_markup: buildCategoryKeyboard(emailMessageId, getCategoryListForType(txnType), "mapcat")
-  });
-}
-
-// Single entry point for the typed-merchant-name reply, used by both the empty-
-// merchant Set Merchant flow and the new-merchant Edit Merchant flow. Returns
-// true if the message was consumed.
-//
-// If the typed name already has a category in the resolution table, auto-apply
-// it (no picker). Otherwise stash the name keyed by emailMessageId and show the
-// picker; the `mapcat` callback completes the mapping when the user picks.
-function handleMerchantInput(chatId, userId, messageText) {
-  var props = PropertiesService.getScriptProperties();
-  var emailMessageId = props.getProperty("pending_merchant_input_" + userId);
-  if (!emailMessageId) return false;
-  props.deleteProperty("pending_merchant_input_" + userId);
-
-  var typedName = (messageText || "").trim();
-  if (!typedName) {
-    sendTelegramMessage(chatId, "❌ Empty name, edit cancelled");
-    return true;
-  }
-  var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
-  if (rowNumber < 0) {
-    sendTelegramMessage(chatId, "❌ Transaction not found");
-    return true;
-  }
-
-  addNewMerchantIfNeeded(typedName);
-  var resolutions = getMerchantResolutions();
-  var resolved = lookupMerchantCategory(typedName, resolutions);
-
-  // Auto-apply shortcut: typed name already maps to a category — skip the picker.
-  if (resolved && resolved.category) {
-    var rowData = getRowData(rowNumber);
-    var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
-    if (rawMerchant && rawMerchant.toLowerCase() !== typedName.toLowerCase()) {
-      setMerchantResolution(rawMerchant, typedName);
-    }
-    setCategoryOverride(typedName, resolved.category);
-    if (rawMerchant !== typedName) {
-      updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, typedName, rawMerchant);
-    }
-    updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, rowData[CATEGORY_COLUMN - 1]);
-    sendTelegramMessage(
-      chatId,
-      "✅ *Mapping saved:* " + escapeMarkdown(typedName) + " → " + escapeMarkdown(resolved.category),
-      { parse_mode: "Markdown" }
-    );
-    return true;
-  }
-
-  // No known category: stash the typed name for `mapcat` to consume, then show picker.
-  props.setProperty("editmerch_newname_" + emailMessageId, typedName);
-  promptCategoryPicker(chatId, rowNumber, emailMessageId, typedName);
-  return true;
-}
-
+// Method to handle messages sent to the Telegram bot.
 function handleMessage(update) {
   if (update.message) {
     var chatId = update.message.chat.id;
-    var chatType = update.message.chat.type;
     var messageText = update.message.text;
     var username = update.message.from.first_name || update.message.from.username;
 
-    if (!messageText) return; // photos, joins, etc.
+    if (!messageText) return; // Ignore non-text messages (photos, joins, etc.)
 
-    // Group-chat dispatch. /start provisions; /help and /account are read-only
-    // group introspection. Personal-only commands get a polite "DM me" reject
-    // so users aren't left wondering why nothing happens. Splitting + group
-    // analytics arrive in step 3 / step 4.
-    if (chatType === "group" || chatType === "supergroup") {
-      if (!messageText.startsWith("/")) return; // ignore non-command chatter
-      var groupCommand = messageText.split(" ")[0].split("@")[0].toLowerCase();
-      if (groupCommand === "/start") {
-        handleGroupStartCommand(update);
-        return;
-      }
-      if (groupCommand === "/help") {
-        handleGroupHelpCommand(update);
-        return;
-      }
-      if (groupCommand === "/account") {
-        handleGroupAccountCommand(update);
-        return;
-      }
-      if (groupCommand === "/stats") {
-        handleGroupStatsCommand(update);
-        return;
-      }
-      if (groupCommand === "/settle") {
-        handleGroupSettleCommand(update);
-        return;
-      }
-      // Personal commands run in DM only.
-      var PERSONAL_ONLY = ["/register", "/ownsheet", "/backfill", "/ask"];
-      if (PERSONAL_ONLY.indexOf(groupCommand) !== -1) {
-        sendTelegramMessage(chatId, "📬 `" + groupCommand + "` is a personal command — DM me to use it.", {
-          parse_mode: "Markdown"
-        });
-        return;
-      }
-      // Other commands (/recent, /stats, /dashboard) — group versions arrive
-      // in step 4. Stay silent for now to avoid noise.
-      return;
-    }
-
+    // Handle commands
     if (messageText.startsWith("/")) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();
 
       // Onboarding commands always allowed (they're how tenants are created).
-      var ONBOARDING = ["/start", "/register", "/account"];
+      var ONBOARDING = ["/start", "/register", "/myinfo"];
       if (ONBOARDING.indexOf(command) === -1) {
         if (!gateTenantForCommand(chatId)) return;
       }
@@ -140,11 +36,8 @@ function handleMessage(update) {
         case "/register":
           handleRegisterCommand(chatId, username, messageText);
           break;
-        case "/account":
-          handleAccountCommand(chatId);
-          break;
-        case "/ownsheet":
-          handleOwnSheetCommand(chatId);
+        case "/myinfo":
+          handleMyInfoCommand(chatId);
           break;
         case "/help":
           handleHelpCommand(chatId, username);
@@ -154,9 +47,6 @@ function handleMessage(update) {
           break;
         case "/stats":
           handleStatsCommand(chatId);
-          break;
-        case "/dashboard":
-          handleDashboardCommand(chatId);
           break;
         case "/ask":
           handleAskCommand(chatId, messageText);
@@ -172,10 +62,60 @@ function handleMessage(update) {
     else if (messageText === " Recent Transactions") {
       showRecentTransactions(chatId, "/recent");
     } else {
-      // Pending /register email prompt takes priority over merchant input.
-      if (handleRegisterEmailReply(chatId, username, messageText)) return;
+      // Check for pending merchant input
       var userId = update.message.from.id;
-      if (handleMerchantInput(chatId, userId, messageText)) return;
+      var props = PropertiesService.getScriptProperties();
+      var pendingEditMsgId = props.getProperty("pending_editmerch_" + userId);
+      if (pendingEditMsgId) {
+        // User is editing the merchant name as part of the new-merchant flow.
+        // Capture the typed name, then prompt them to pick a category for the mapping.
+        props.deleteProperty("pending_editmerch_" + userId);
+        var newName = messageText.trim();
+        if (!newName) {
+          sendTelegramMessage(chatId, "❌ Empty name, edit cancelled");
+          return;
+        }
+        var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, pendingEditMsgId);
+        if (rowNumber < 0) {
+          sendTelegramMessage(chatId, "❌ Transaction not found");
+          return;
+        }
+        // Stash the new name keyed by the email message id so whoever picks the category completes the mapping.
+        props.setProperty("editmerch_newname_" + pendingEditMsgId, newName);
+
+        var sheet = getSpreadsheet().getSheets()[0];
+        var txnType = sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue();
+        sendTelegramMessage(chatId, "📂 *Pick a category for " + escapeMarkdown(newName) + ":*", {
+          parse_mode: "Markdown",
+          reply_markup: buildCategoryKeyboard(pendingEditMsgId, getCategoryListForType(txnType), "mapcat")
+        });
+        return;
+      }
+
+      var pendingEmailId = props.getProperty("pending_merchant_" + userId);
+      if (pendingEmailId) {
+        // Clear pending state
+        props.deleteProperty("pending_merchant_" + userId);
+        var merchantName = messageText.trim();
+        var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, pendingEmailId);
+        if (rowNumber < 0) {
+          sendTelegramMessage(chatId, "❌ Transaction not found");
+          return;
+        }
+        updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, merchantName, "");
+        // Add to MerchantResolution and auto-populate category if available
+        addNewMerchantIfNeeded(merchantName);
+        var resolutions = getMerchantResolutions();
+        var resolved = lookupMerchantCategory(merchantName, resolutions);
+        var confirmMsg = "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*";
+        if (resolved && resolved.category) {
+          updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, "");
+          confirmMsg += " \\(" + escapeMarkdown(resolved.category) + "\\)";
+        }
+        sendTelegramMessage(chatId, confirmMsg, {
+          parse_mode: "Markdown"
+        });
+      }
     }
   }
 }
@@ -183,22 +123,14 @@ function handleMessage(update) {
 // Method to handle the /help command (also handles /start)
 function handleHelpCommand(chatId, username) {
   var message =
-    `*Personal commands*\n` +
+    `*Commands*\n` +
     `• /ask — ask anything about your spending\n` +
     `   _e.g. /ask how much on food last month?_\n` +
     `• /stats — analytics dashboard\n` +
-    `• /dashboard — open your visual Looker Studio dashboard\n` +
     `• /recent — recent transactions _(e.g. /recent 10)_\n` +
-    `• /account — your account & settings\n` +
-    `• /ownsheet — transfer Drive ownership of your sheet to you\n` +
-    `• /help — this message\n\n` +
-    `*Splitting with friends*\n` +
-    `Add me to a Telegram group (max 4 members) and run /start there. Every personal transaction notification gains a 👥 *Split with <group>* button — tap to split equally, leave someone out, or pay 100% on a friend's behalf.\n\n` +
-    `*In the group:*\n` +
-    `• /stats — who owes whom (per currency, with a [🔀 Simplify] toggle)\n` +
-    `• /settle @member <amount> — record a cash settlement\n` +
-    `• /account — group setup, members, sheet link\n` +
-    `• /help — group help`;
+    `• /backfill — import older emails _(e.g. /backfill 7d)_\n` +
+    `• /myinfo — your account\n` +
+    `• /help — this message`;
 
   var url = sheetUrl(getTenantSheetId());
   sendTelegramMessage(chatId, message, {
@@ -214,6 +146,104 @@ function handleHelpCommand(chatId, username) {
   });
 }
 
+// Backfill duration unit alias map (module-scope so it isn't rebuilt per call,
+// and so tests can inspect it).
+var BACKFILL_UNIT_MAP = {
+  m: "minute",
+  min: "minute",
+  mins: "minute",
+  minute: "minute",
+  minutes: "minute",
+  h: "hour",
+  hour: "hour",
+  hours: "hour",
+  d: "day",
+  day: "day",
+  days: "day",
+  w: "week",
+  week: "week",
+  weeks: "week",
+  month: "month",
+  months: "month"
+};
+
+var BACKFILL_USAGE_MSG =
+  "❌ *Invalid format!*\n\n" +
+  "Use: `/backfill 10m` or `/backfill 3 days` or `/backfill 2 weeks`\n" +
+  "Or: `/backfill YYYY-MM-DD YYYY-MM-DD`";
+
+// Pure parser for /backfill arguments. Pulled out for unit-testability.
+//   Input:  messageText (the full command), optional `now` Date for tests.
+//   Output: { ok:true, startDate, endDate } | { ok:false, error: 'usage' | 'unknown_unit' | 'invalid_dates' | 'invalid_range' }
+//
+// Supported forms:
+//   /backfill 10m | 2h | 3d | 1w           (compact)
+//   /backfill 10 min | 3 days | 2 weeks    (spaced)
+//   /backfill YYYY-MM-DD YYYY-MM-DD        (absolute range)
+function parseBackfillDuration(messageText, now) {
+  var parts = (messageText || "").split(" ");
+  if (parts.length < 2) return { ok: false, error: "usage" };
+
+  var amount, unit;
+  var compactMatch =
+    parts[1] && parts[1].match(/^(\d+)(m|h|d|w|min|mins|minute|minutes|hour|hours|day|days|week|weeks|month|months)$/i);
+  if (compactMatch) {
+    amount = parseInt(compactMatch[1], 10);
+    unit = compactMatch[2].toLowerCase();
+  } else {
+    amount = parseInt(parts[1], 10);
+    if (!isNaN(amount) && parts.length >= 3 && parts[1].indexOf("-") < 0) {
+      unit = parts[2].toLowerCase();
+    }
+  }
+
+  var startDate, endDate;
+  if (unit) {
+    var normalized = BACKFILL_UNIT_MAP[unit];
+    if (!normalized) return { ok: false, error: "unknown_unit" };
+    var nowMs = now ? now.getTime() : Date.now();
+    endDate = new Date(nowMs);
+    startDate = new Date(nowMs);
+    if (normalized === "minute") startDate.setMinutes(startDate.getMinutes() - amount);
+    else if (normalized === "hour") startDate.setHours(startDate.getHours() - amount);
+    else if (normalized === "day") startDate.setDate(startDate.getDate() - amount);
+    else if (normalized === "week") startDate.setDate(startDate.getDate() - amount * 7);
+    else if (normalized === "month") startDate.setMonth(startDate.getMonth() - amount);
+  } else if (parts.length >= 3) {
+    startDate = new Date(parts[1]);
+    endDate = new Date(parts[2]);
+  } else {
+    return { ok: false, error: "usage" };
+  }
+
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    return { ok: false, error: "invalid_dates" };
+  }
+  if (startDate > endDate) return { ok: false, error: "invalid_range" };
+  return { ok: true, startDate: startDate, endDate: endDate };
+}
+
+// Method to handle the /backfill command
+function handleBackfillCommand(chatId, messageText) {
+  var parsed = parseBackfillDuration(messageText);
+  if (!parsed.ok) {
+    if (parsed.error === "unknown_unit") {
+      sendTelegramMessage(chatId, "❌ *Unknown unit!* Use `min`, `hour`, `day`, `week`, or `month`.");
+    } else if (parsed.error === "invalid_dates") {
+      sendTelegramMessage(
+        chatId,
+        "❌ *Invalid dates!* Use format YYYY-MM-DD\n\nExample: `/backfill 2026-03-01 2026-03-31`"
+      );
+    } else if (parsed.error === "invalid_range") {
+      sendTelegramMessage(chatId, "❌ *Start date must be before end date.*");
+    } else {
+      sendTelegramMessage(chatId, BACKFILL_USAGE_MSG);
+    }
+    return;
+  }
+  startChunkedBackfill(parsed.startDate, parsed.endDate);
+}
+
 // Method to handle the callback queries sent from the Telegram message reply buttons.
 function handleCallbackQuery(update) {
   try {
@@ -225,35 +255,28 @@ function handleCallbackQuery(update) {
     var chatId = update.callback_query.message.chat.id;
     var telegramMessageId = update.callback_query.message.message_id;
     var messageText = update.callback_query.message.text;
-    var data = update.callback_query.data;
+    var data = update.callback_query.data; // Example: "split_abc123", "partner_abc123", "personal_abc123"
 
     if (!data) {
-      answerCallbackQuery(callbackQueryId, "❌ Error: No data received", false);
+      sendTelegramMessage(chatId, "❌ *Error: No data received*");
       return;
     }
 
-    // Group-split UI callbacks use ":" as separator and a distinct action
-    // namespace (gnav, gsp, ...). Dispatch them before the legacy "_" parser
-    // so we don't have to thread the new format through every handler.
-    if (isGroupCallback(data)) {
-      handleGroupCallback(update);
-      return;
-    }
-
-    // Callback data format: "<action>_<payload>" (e.g. "split_abc123", "stats_monthly").
+    // Parse action and message ID from callback data
     var separatorIndex = data.indexOf("_");
     if (separatorIndex < 0) {
-      answerCallbackQuery(callbackQueryId, "❌ Error: Invalid request", false);
+      sendTelegramMessage(chatId, "❌ *Error: Invalid request*");
       return;
     }
 
-    var action = data.substring(0, separatorIndex);
+    var action = data.substring(0, separatorIndex); // "personal", "split", "partner", "editcat", "cat", "del", "setmerch", "stats", etc.
     var callbackPayload = data.substring(separatorIndex + 1);
 
-    // Resend auto-forwarding setup email (button on /account).
-    if (action === "resend" && callbackPayload === "setup") {
-      return handleResendSetupCallback(chatId, callbackQueryId);
-    }
+    // Ack the callback up front so Telegram clears the button spinner
+    // immediately (~150-300ms) instead of waiting on sheet I/O. All later
+    // per-branch toasts/errors must go through sendTelegramMessage —
+    // Telegram only honors one answerCallbackQuery per callback_query_id.
+    answerCallbackQuery(callbackQueryId, "");
 
     // Handle stats callbacks: stats_monthly, stats_trends, stats_whoowes
     if (action === "stats") {
@@ -273,7 +296,6 @@ function handleCallbackQuery(update) {
         var sheet = getSpreadsheet().getSheets()[0];
         catList = getCategoryListForType(sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue());
       }
-      answerCallbackQuery(callbackQueryId, "📂 Pick a category", false);
       sendTelegramMessage(chatId, "📂 *Select a category:*", {
         parse_mode: "Markdown",
         reply_markup: buildCategoryKeyboard(callbackPayload, catList)
@@ -285,7 +307,7 @@ function handleCallbackQuery(update) {
     if (action === "cat") {
       var lastUnderscore = callbackPayload.lastIndexOf("_");
       if (lastUnderscore < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Invalid category data", false);
+        sendTelegramMessage(chatId, "❌ *Invalid category data*");
         return;
       }
       var emailMessageId = callbackPayload.substring(0, lastUnderscore);
@@ -295,11 +317,12 @@ function handleCallbackQuery(update) {
       var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
       if (rowNumber < 0) return;
 
-      var rowData = getRowData(rowNumber);
+      var sheet = getSpreadsheet().getSheets()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
       var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
 
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
-        answerCallbackQuery(callbackQueryId, "❌ Invalid category", false);
+        sendTelegramMessage(chatId, "❌ *Invalid category*");
         return;
       }
 
@@ -308,7 +331,7 @@ function handleCallbackQuery(update) {
       var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, newCategory, currentCategory);
 
       if (!updateResult.success) {
-        answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
+        sendTelegramMessage(chatId, "❌ " + updateResult.message);
         return;
       }
 
@@ -317,23 +340,20 @@ function handleCallbackQuery(update) {
         parse_mode: "Markdown",
         message_id: telegramMessageId
       });
-      answerCallbackQuery(callbackQueryId, "✅ " + newCategory, false);
       return;
     }
 
     // Handle "Set Merchant" — ask user to type merchant name
     if (action === "setmerch") {
       var emailMessageId = callbackPayload;
-      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
       // Store pending state per user per user
       var userId = update.callback_query.from.id;
       var props = PropertiesService.getScriptProperties();
-      props.setProperty("pending_merchant_input_" + userId, emailMessageId);
-      answerCallbackQuery(callbackQueryId, "🏪 Type the merchant name", false);
-      sendTelegramMessage(chatId, "🏪 *Type the merchant name (category picker follows):*", {
-        parse_mode: "Markdown",
-        reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. Flipkart" }
+      props.setProperty("pending_merchant_" + userId, emailMessageId);
+      sendTelegramMessage(chatId, "🏪 *Type the merchant name for this transaction:*", {
+        parse_mode: "Markdown"
       });
       return;
     }
@@ -341,7 +361,7 @@ function handleCallbackQuery(update) {
     // Handle delete transaction: del_{messageId}
     if (action === "del") {
       var emailMessageId = callbackPayload;
-      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
 
       deleteSheetRow(rowNumber);
@@ -350,25 +370,25 @@ function handleCallbackQuery(update) {
         parse_mode: "Markdown",
         message_id: telegramMessageId
       });
-      answerCallbackQuery(callbackQueryId, "🗑️ Deleted", false);
       return;
     }
 
     // Handle "Save Mapping" — confirm the LLM-suggested merchant + category mapping
     if (action === "savemerch") {
       var emailMessageId = callbackPayload;
-      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
-      var rowData = getRowData(rowNumber);
+      var sheet = getSpreadsheet().getSheets()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
       var merchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
       var category = (rowData[CATEGORY_COLUMN - 1] || "").toString().trim();
       if (!merchant) {
-        answerCallbackQuery(callbackQueryId, "❌ No merchant to save", false);
+        sendTelegramMessage(chatId, "❌ *No merchant on this row to save.*");
         return;
       }
       var result = setMerchantResolution(merchant, merchant);
       if (!result.success) {
-        answerCallbackQuery(callbackQueryId, "❌ " + result.message, false);
+        sendTelegramMessage(chatId, "❌ " + result.message);
         return;
       }
       if (category) setCategoryOverride(merchant, category);
@@ -386,19 +406,17 @@ function handleCallbackQuery(update) {
         message_id: telegramMessageId,
         reply_markup: buildReplyMarkup(newRows)
       });
-      answerCallbackQuery(callbackQueryId, "✅ Mapping saved", false);
       return;
     }
 
     // Handle "Edit Merchant" — prompt for a new merchant name; category picker follows after reply
     if (action === "editmerchname") {
       var emailMessageId = callbackPayload;
-      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
       var userIdEdit = update.callback_query.from.id;
       var propsEdit = PropertiesService.getScriptProperties();
-      propsEdit.setProperty("pending_merchant_input_" + userIdEdit, emailMessageId);
-      answerCallbackQuery(callbackQueryId, "🏪 Type the merchant name", false);
+      propsEdit.setProperty("pending_editmerch_" + userIdEdit, emailMessageId);
       sendTelegramMessage(chatId, "🏪 *Type the new merchant name (category picker follows):*", {
         parse_mode: "Markdown",
         reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. Flipkart" }
@@ -412,41 +430,39 @@ function handleCallbackQuery(update) {
     if (action === "mapcat") {
       var lastUnderscore = callbackPayload.lastIndexOf("_");
       if (lastUnderscore < 0) {
-        answerCallbackQuery(callbackQueryId, "❌ Invalid data", false);
+        sendTelegramMessage(chatId, "❌ *Invalid data*");
         return;
       }
       var emailMessageId = callbackPayload.substring(0, lastUnderscore);
       var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
-      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
-      var rowData = getRowData(rowNumber);
+      var sheet = getSpreadsheet().getSheets()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
       var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim(); // current value in col C; for new-merchant flow this == the original raw pattern
       var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
-        answerCallbackQuery(callbackQueryId, "❌ Invalid category", false);
+        sendTelegramMessage(chatId, "❌ *Invalid category*");
         return;
       }
       var newCategory = catList[categoryIndex];
 
-      // Pick up the typed name from the merchant-input flow (if any); else keep existing.
+      // Pick up the typed name from the Edit-Merchant flow (if any); else keep existing.
       var propsMap = PropertiesService.getScriptProperties();
       var pendingNewName = propsMap.getProperty("editmerch_newname_" + emailMessageId);
       var resolvedName = pendingNewName ? pendingNewName : rawMerchant;
       if (pendingNewName) propsMap.deleteProperty("editmerch_newname_" + emailMessageId);
 
-      if (!resolvedName) {
-        answerCallbackQuery(callbackQueryId, "❌ No merchant name to save", false);
+      if (!rawMerchant) {
+        sendTelegramMessage(chatId, "❌ *No merchant on this row*");
         return;
       }
 
-      // Save resolution mapping (raw pattern → resolved name) only when the row
-      // already had a raw merchant that differs from the typed name.
-      if (rawMerchant && rawMerchant.toLowerCase() !== resolvedName.toLowerCase()) {
-        var mapResult = setMerchantResolution(rawMerchant, resolvedName);
-        if (!mapResult.success) {
-          answerCallbackQuery(callbackQueryId, "❌ " + mapResult.message, false);
-          return;
-        }
+      // Save mapping in MerchantResolution (raw pattern → resolved name)
+      var mapResult = setMerchantResolution(rawMerchant, resolvedName);
+      if (!mapResult.success) {
+        sendTelegramMessage(chatId, "❌ " + mapResult.message);
+        return;
       }
       // Save merchant → category in CategoryOverrides
       setCategoryOverride(resolvedName, newCategory);
@@ -462,7 +478,6 @@ function handleCallbackQuery(update) {
         "✅ *Mapping saved:* " + escapeMarkdown(resolvedName) + " → " + escapeMarkdown(newCategory),
         { parse_mode: "Markdown" }
       );
-      answerCallbackQuery(callbackQueryId, "✅ Saved", false);
       return;
     }
 
@@ -470,16 +485,13 @@ function handleCallbackQuery(update) {
 
     // Only handle split-toggle actions here; other actions handled above
     if (action !== "personal" && action !== "split" && action !== "partner") {
-      answerCallbackQuery(callbackQueryId, "❌ Unknown action", false);
+      sendTelegramMessage(chatId, "❌ *Unknown action*");
       return;
     }
 
     // Look up the row by message ID
-    var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
-    if (rowNumber < 0) {
-      sendTelegramMessage(chatId, "❌ *Error:* Could not find the transaction in the sheet.");
-      return;
-    }
+    var rowNumber = requireRowForCallback(chatId, emailMessageId);
+    if (rowNumber < 0) return;
 
     var valueToSet;
     if (action === "personal") valueToSet = SPLIT_STATUS.PERSONAL;
@@ -494,7 +506,6 @@ function handleCallbackQuery(update) {
     var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, SPLIT_COLUMN, valueToSet, currentValue);
 
     if (!updateResult.success) {
-      answerCallbackQuery(callbackQueryId, "❌ " + updateResult.message, false);
       sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\n" + updateResult.message);
       return;
     }
@@ -519,16 +530,17 @@ function handleCallbackQuery(update) {
 
     var message = `✅ *Marked as ${valueToSet}*\n\n${messageText}`;
     sendTelegramMessage(chatId, message, options);
-    answerCallbackQuery(callbackQueryId, `✅ Marked as ${valueToSet}`, false);
   } catch (error) {
     console.error("[handleCallbackQuery] Error:", error.message, error.stack);
-    if (update.callback_query && update.callback_query.id) {
-      answerCallbackQuery(update.callback_query.id, "❌ Error: " + error.message, false);
+    if (update.callback_query && update.callback_query.message && update.callback_query.message.chat) {
+      sendTelegramMessage(update.callback_query.message.chat.id, "❌ *Error:* " + escapeMarkdown(error.message));
     }
   }
 }
 
-// Recent transactions. Supports: /recent, /recent 10, /recent rishik, /recent 10 rishik.
+// Function to show transaction summary. Optional limit param: /summary 10
+// Function to show recent transactions
+// Supports: /recent, /recent 10, /recent rishik, /recent 10 rishik
 function showRecentTransactions(chatId, messageText) {
   try {
     var parts = messageText.trim().split(/\s+/);
@@ -559,8 +571,10 @@ function showRecentTransactions(chatId, messageText) {
       return;
     }
 
+    // Skip header row
     data.shift();
 
+    // Filter by user if specified
     if (userFilter) {
       data = data.filter(function (row) {
         var user = (row[USER_COLUMN - 1] || "").toString().toLowerCase();
@@ -578,28 +592,29 @@ function showRecentTransactions(chatId, messageText) {
 
     var header = "📅 *Recent Transactions*";
     if (userFilter) header += " (user: " + userFilter + ")";
-    var message = header + "\n\n";
+    var message = header + "\n";
 
-    recentTransactions.forEach(function (row, index) {
+    recentTransactions.forEach(function (row) {
       var rawDate = row[EMAIL_DATE_COLUMN - 1] || row[TRANSACTION_DATE_COLUMN - 1];
       var date =
         rawDate instanceof Date
           ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
           : rawDate || "Unknown Date";
-      var merchant = row[MERCHANT_COLUMN - 1] || "Unknown Merchant";
+      var merchant = row[MERCHANT_COLUMN - 1] || "Unknown";
       var amount = parseFloat(row[AMOUNT_COLUMN - 1]) || 0;
       var type = row[TRANSACTION_TYPE_COLUMN - 1] || "Unknown";
-      var category = row[CATEGORY_COLUMN - 1] || "Uncategorized";
+      var category = row[CATEGORY_COLUMN - 1] || "";
       var currency = row[CURRENCY_COLUMN - 1] || "INR";
 
       var emoji = type === "Debit" ? "💸" : "💰";
-      message += `${emoji} *${date}*\n`;
-      message += `🏪 ${merchant}\n`;
-      message += `💰 ${currency} ${amount.toFixed(2)}\n`;
-      message += `📂 ${category}`;
-      if (index < recentTransactions.length - 1) {
-        message += `\n─────────────\n`;
-      }
+      var money = (currency === "INR" ? "₹" : currency + " ") + formatAmount(amount);
+      var catLabel = category ? " · " + shortCategoryName(category) : "";
+
+      // Two lines per entry, blank line between. No ─── dividers — line
+      // spacing alone is enough separation, and dividers were dominating the
+      // visual weight of every row.
+      message += "\n" + emoji + " *" + escapeMarkdown(merchant) + "* " + money + catLabel + "\n";
+      message += "   _" + escapeMarkdown(date) + "_\n";
     });
 
     sendTelegramMessage(chatId, message);
@@ -612,18 +627,21 @@ function showRecentTransactions(chatId, messageText) {
 // ─── Stats Command ───────────────────────────────────────────────────
 
 function handleStatsCommand(chatId) {
-  sendTelegramMessage(chatId, "📊 *Analytics Dashboard*\n\nPick an option:", {
+  sendTelegramMessage(chatId, "📊 *Stats* — pick a view:", {
     parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "📊 Monthly", callback_data: "stats_monthly" },
-          { text: "📉 Trends", callback_data: "stats_trends" },
-          { text: "💰 Who Owes", callback_data: "stats_whoowes" }
-        ]
-      ]
-    }
+    reply_markup: { inline_keyboard: buildStatsMenuKeyboard() }
   });
+}
+
+// Pure-data builder — used both by /stats entry and the back button.
+function buildStatsMenuKeyboard() {
+  return [
+    [
+      { text: "📊 Monthly", callback_data: "stats_monthly" },
+      { text: "📉 Trends", callback_data: "stats_trends" },
+      { text: "💰 Who Owes", callback_data: "stats_whoowes" }
+    ]
+  ];
 }
 
 // ─── Ask Command (AI tool-calling) ───────────────────────────────────
@@ -680,48 +698,65 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
   var month = now.getMonth();
 
   try {
-    if (subAction === "monthly" || subAction.indexOf("monthly_") === 0) {
-      var numMonths = 1;
-      if (subAction.indexOf("monthly_") === 0) {
-        numMonths = parseInt(subAction.split("_")[1], 10) || 1;
-      }
-      answerCallbackQuery(callbackQueryId, "📊 Loading...", false);
-      var data = getMonthlyAnalytics(year, month, numMonths);
+    // Back button — restore the dashboard menu in place.
+    if (subAction === "back") {
+      sendTelegramMessage(chatId, "📊 *Stats* — pick a view:", {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId,
+        reply_markup: { inline_keyboard: buildStatsMenuKeyboard() }
+      });
+      return;
+    }
+
+    if (subAction === "monthly") {
+      var data = getMonthlyAnalytics(year, month);
       if (!data) {
-        sendTelegramMessage(chatId, "📊 *No transactions found.*");
+        sendTelegramMessage(chatId, "📊 *No transactions found.*", {
+          parse_mode: "Markdown",
+          message_id: telegramMessageId,
+          reply_markup: { inline_keyboard: [buildStatsBackRow()] }
+        });
         return;
       }
-      var msg = formatMonthlyMessage(year, month, data, numMonths);
+      var msg = formatMonthlyMessage(year, month, data);
       sendTelegramMessage(chatId, msg, {
         parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [buildPeriodButtons(year, month), buildMonthNavButtons(year, month)]
-        }
+        message_id: telegramMessageId,
+        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month), buildStatsBackRow()] }
       });
     } else if (subAction === "trends") {
-      answerCallbackQuery(callbackQueryId, "📉 Loading trends...", false);
       var months = getTrendsAnalytics(6);
       var msg = formatTrendsMessage(months);
-      sendTelegramMessage(chatId, msg);
+      sendTelegramMessage(chatId, msg, {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId,
+        reply_markup: { inline_keyboard: [buildStatsBackRow()] }
+      });
     } else if (subAction === "whoowes") {
-      answerCallbackQuery(callbackQueryId, "💰 Calculating...", false);
       var data = getWhoOwesAnalytics(year, month);
       if (!data) {
-        sendTelegramMessage(chatId, "💰 *No split transactions this month.*");
+        sendTelegramMessage(chatId, "💰 *No split transactions this month.*", {
+          parse_mode: "Markdown",
+          message_id: telegramMessageId,
+          reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
+        });
         return;
       }
       var msg = formatWhoOwesMessage(year, month, data);
       sendTelegramMessage(chatId, msg, {
         parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [buildMonthNavButtons(year, month, "whoowes")]
-        }
+        message_id: telegramMessageId,
+        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
       });
     }
   } catch (error) {
     console.error("Error in handleStatsCallback:", error.message, error.stack);
-    answerCallbackQuery(callbackQueryId, "❌ Error: " + error.message, false);
+    sendTelegramMessage(chatId, "❌ *Error:* " + escapeMarkdown(error.message));
   }
+}
+
+function buildStatsBackRow() {
+  return [{ text: "🔙 Back", callback_data: "stats_back" }];
 }
 
 function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, payload) {
@@ -747,18 +782,14 @@ function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, actio
     }
 
     if (mode === "whoowes") {
-      answerCallbackQuery(callbackQueryId, "💰 Loading...", false);
       var data = getWhoOwesAnalytics(year, month);
       if (!data) {
-        answerCallbackQuery(callbackQueryId, "No split transactions", false);
         var tz = Session.getScriptTimeZone();
         var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
         sendTelegramMessage(chatId, "💰 *No split transactions in " + label + "*", {
           parse_mode: "Markdown",
           message_id: telegramMessageId,
-          reply_markup: {
-            inline_keyboard: [buildMonthNavButtons(year, month, "whoowes")]
-          }
+          reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
         });
         return;
       }
@@ -766,23 +797,17 @@ function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, actio
       sendTelegramMessage(chatId, msg, {
         parse_mode: "Markdown",
         message_id: telegramMessageId,
-        reply_markup: {
-          inline_keyboard: [buildMonthNavButtons(year, month, "whoowes")]
-        }
+        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
       });
     } else {
-      answerCallbackQuery(callbackQueryId, "📊 Loading...", false);
       var data = getMonthlyAnalytics(year, month);
       if (!data) {
-        answerCallbackQuery(callbackQueryId, "No transactions", false);
         var tz = Session.getScriptTimeZone();
         var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
         sendTelegramMessage(chatId, "📊 *No transactions in " + label + "*", {
           parse_mode: "Markdown",
           message_id: telegramMessageId,
-          reply_markup: {
-            inline_keyboard: [buildPeriodButtons(year, month), buildMonthNavButtons(year, month)]
-          }
+          reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month), buildStatsBackRow()] }
         });
         return;
       }
@@ -790,30 +815,24 @@ function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, actio
       sendTelegramMessage(chatId, msg, {
         parse_mode: "Markdown",
         message_id: telegramMessageId,
-        reply_markup: {
-          inline_keyboard: [buildPeriodButtons(year, month), buildMonthNavButtons(year, month)]
-        }
+        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month), buildStatsBackRow()] }
       });
     }
   } catch (error) {
     console.error("Error in handleMonthNavigation:", error.message, error.stack);
-    answerCallbackQuery(callbackQueryId, "❌ Error: " + error.message, false);
+    sendTelegramMessage(chatId, "❌ *Error:* " + escapeMarkdown(error.message));
   }
 }
 
+// Builds the [◀️ Prev] [▶️ Next] row. Hides Next when at the current month
+// (no future data exists). `mode` adds a trailing _whoowes suffix when set.
 function buildMonthNavButtons(year, month, mode) {
   var suffix = mode ? "_" + mode : "";
-  return [
-    { text: "◀️ Prev", callback_data: "monthprev_" + year + "_" + month + suffix },
-    { text: "▶️ Next", callback_data: "monthnext_" + year + "_" + month + suffix }
-  ];
-}
-
-function buildPeriodButtons(year, month) {
-  return [
-    { text: "1M", callback_data: "stats_monthly_1" },
-    { text: "2M", callback_data: "stats_monthly_2" },
-    { text: "3M", callback_data: "stats_monthly_3" },
-    { text: "6M", callback_data: "stats_monthly_6" }
-  ];
+  var now = new Date();
+  var atCurrent = year === now.getFullYear() && month === now.getMonth();
+  var row = [{ text: "◀️ Prev", callback_data: "monthprev_" + year + "_" + month + suffix }];
+  if (!atCurrent) {
+    row.push({ text: "▶️ Next", callback_data: "monthnext_" + year + "_" + month + suffix });
+  }
+  return row;
 }

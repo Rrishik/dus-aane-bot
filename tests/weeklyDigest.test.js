@@ -77,7 +77,7 @@ describe("formatWeeklyMessage", () => {
       topTransactions: []
     });
     expect(msg).toContain("Apr 20–Apr 26");
-    expect(msg).toContain("₹500.00");
+    expect(msg).toContain("₹500");
   });
 
   it("omits delta when previous week had zero INR", () => {
@@ -100,7 +100,7 @@ describe("formatWeeklyMessage", () => {
       topTransactions: []
     });
     expect(msg).toContain("↑50%");
-    expect(msg).toContain("vs ₹1,000.00");
+    expect(msg).toContain("vs ₹1,000");
   });
 
   it("shows down-arrow delta when spending decreased", () => {
@@ -138,7 +138,7 @@ describe("formatWeeklyMessage", () => {
       categorySpend: { "Shopping|||INR": 500, "Shopping|||USD": 30 },
       topTransactions: []
     });
-    expect(msg).toContain("USD 30.00");
+    expect(msg).toContain("USD 30");
   });
 
   it("lists top transactions when present", () => {

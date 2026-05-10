@@ -604,9 +604,15 @@ function buildGroupParentButtonRows(personalChatId, emailMessageId) {
 function handleGroupCallback(update) {
   var cb = update.callback_query;
   if (!cb || !cb.data) return;
+
+  // Ack the callback immediately so the Telegram client clears the spinner
+  // (~150ms) instead of waiting on sheet I/O, group posts, etc. Telegram
+  // honors only one answerCallbackQuery per callback_query_id; later branches
+  // surface errors as chat messages instead of toasts.
+  answerCallbackQuery(cb.id, "");
+
   var decoded = decodeGroupCallback(cb.data);
   if (!decoded || !decoded.action) {
-    answerCallbackQuery(cb.id, "❌ Bad callback", false);
     return;
   }
 
@@ -621,11 +627,11 @@ function handleGroupCallback(update) {
     var groupChatId = decoded.parts[1];
     var group = findGroupTenantByChatId(groupChatId);
     if (!group || group.status !== TENANT_STATUS.ACTIVE) {
-      answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+      sendTelegramMessage(chatId, "❌ *Group is no longer active.*");
       return;
     }
     if (group.group_members.indexOf(callerChatId) === -1) {
-      answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+      sendTelegramMessage(chatId, "❌ *You're not a member of this group.*");
       return;
     }
     var kb = buildSplitLevel1Keyboard(group, callerChatId, emailMessageId);
@@ -634,7 +640,6 @@ function handleGroupCallback(update) {
       message_id: telegramMessageId,
       reply_markup: kb
     });
-    answerCallbackQuery(cb.id, "");
     return;
   }
 
@@ -644,11 +649,11 @@ function handleGroupCallback(update) {
     var groupChatIdSet = decoded.parts[1];
     var groupSet = findGroupTenantByChatId(groupChatIdSet);
     if (!groupSet || groupSet.status !== TENANT_STATUS.ACTIVE) {
-      answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+      sendTelegramMessage(chatId, "❌ *Group is no longer active.*");
       return;
     }
     if (groupSet.group_members.indexOf(callerChatId) === -1) {
-      answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+      sendTelegramMessage(chatId, "❌ *You're not a member of this group.*");
       return;
     }
     var kbSet = buildSplitLevel2Keyboard(groupSet, callerChatId, emailMessageIdSet);
@@ -657,7 +662,6 @@ function handleGroupCallback(update) {
       message_id: telegramMessageId,
       reply_markup: kbSet
     });
-    answerCallbackQuery(cb.id, "");
     return;
   }
 
@@ -671,7 +675,7 @@ function handleGroupCallback(update) {
     if (destLevel === "1") {
       var groupBk = findGroupTenantByChatId(groupChatIdBk);
       if (!groupBk) {
-        answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+        sendTelegramMessage(chatId, "❌ *Group is no longer active.*");
         return;
       }
       var kbBack1 = buildSplitLevel1Keyboard(groupBk, callerChatId, emailMessageIdBk);
@@ -688,7 +692,6 @@ function handleGroupCallback(update) {
         reply_markup: kbBack0
       });
     }
-    answerCallbackQuery(cb.id, "");
     return;
   }
 
@@ -712,11 +715,11 @@ function handleGroupCallback(update) {
     var mode = decoded.parts[0] === "s" ? "s" : "d";
     var groupStats = findGroupTenantByChatId(chatId);
     if (!groupStats || groupStats.status !== TENANT_STATUS.ACTIVE) {
-      answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+      sendTelegramMessage(chatId, "❌ *Group is no longer active.*");
       return;
     }
     if (groupStats.group_members.indexOf(callerChatId) === -1) {
-      answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+      sendTelegramMessage(chatId, "❌ *You're not a member of this group.*");
       return;
     }
     var sheetStats = openGroupSheet(groupStats.sheet_id);
@@ -738,11 +741,8 @@ function handleGroupCallback(update) {
       message_id: telegramMessageId,
       reply_markup: buildGroupStatsKeyboard(mode)
     });
-    answerCallbackQuery(cb.id, "");
     return;
   }
-
-  answerCallbackQuery(cb.id, "❌ Unknown action", false);
 }
 
 // --- Split menu keyboards (UI only — writes ship in step 4) ---
@@ -1006,11 +1006,11 @@ function formatGroupSplitNotification(opts) {
   var sharePieces = [];
   for (var i = 0; i < holders.length; i++) {
     var name = nameOf(holders[i]) || String(holders[i]);
-    sharePieces.push(escapeMarkdown(name) + " (" + currency + " " + shares[i] + ")");
+    sharePieces.push(escapeMarkdown(name) + " (" + currency + " " + formatAmount(shares[i]) + ")");
   }
 
   var lines = [];
-  lines.push("✂️ *" + escapeMarkdown(merchant) + " · " + currency + " " + amount + "*");
+  lines.push("✂️ *" + escapeMarkdown(merchant) + " · " + currency + " " + formatAmount(amount) + "*");
   lines.push("👤 Paid by " + escapeMarkdown(payerName));
   lines.push("👥 Shared by " + sharePieces.join(", "));
   if (category) lines.push("📂 " + escapeMarkdown(category));
@@ -1031,17 +1031,17 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
 
   var group = findGroupTenantByChatId(groupChatId);
   if (!group || group.status !== TENANT_STATUS.ACTIVE) {
-    answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+    sendTelegramMessage(dmChatId, "❌ *Group is no longer active.*");
     return;
   }
   if (group.group_members.indexOf(callerChatId) === -1) {
-    answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+    sendTelegramMessage(dmChatId, "❌ *You're not a member of this group.*");
     return;
   }
 
   var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
   if (rowNumber < 0) {
-    answerCallbackQuery(cb.id, "❌ Transaction not found", true);
+    sendTelegramMessage(dmChatId, "❌ *Transaction not found.*");
     return;
   }
   // Read the row at the full 13-column width directly. getRowData() only
@@ -1050,14 +1050,14 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
   var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
   // Re-split guard. Caller must undo before splitting again.
   if (rowData[GROUP_REF_COLUMN - 1]) {
-    answerCallbackQuery(cb.id, "ℹ️ Already split — undo first", true);
+    sendTelegramMessage(dmChatId, "ℹ️ *Already split — undo first.*");
     return;
   }
 
   var amount = Number(rowData[AMOUNT_COLUMN - 1]);
   var shareSet = computeSplitShareSet(group, callerChatId, mode, amount);
   if (!shareSet) {
-    answerCallbackQuery(cb.id, "❌ Invalid split for this group", true);
+    sendTelegramMessage(dmChatId, "❌ *Invalid split for this group.*");
     return;
   }
 
@@ -1102,7 +1102,7 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
     }
   } catch (_) {}
   if (!groupMsgId) {
-    answerCallbackQuery(cb.id, "❌ Couldn't post in the group", true);
+    sendTelegramMessage(dmChatId, "❌ *Couldn't post in the group.*");
     return;
   }
 
@@ -1145,8 +1145,6 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
     message_id: telegramMessageId,
     reply_markup: newKb
   });
-
-  answerCallbackQuery(cb.id, "✅ Split recorded");
 }
 
 // gun executor — undo a previously-recorded split. Strikes through the group
@@ -1163,7 +1161,7 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
 
   var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
   if (rowNumber < 0) {
-    answerCallbackQuery(cb.id, "❌ Transaction not found", true);
+    sendTelegramMessage(dmChatId, "❌ *Transaction not found.*");
     return;
   }
   var personalSheet = getSpreadsheet().getSheets()[0];
@@ -1171,7 +1169,7 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
   var groupRef = rowData[GROUP_REF_COLUMN - 1];
   var groupMsgId = rowData[GROUP_MESSAGE_ID_COLUMN - 1];
   if (!groupRef) {
-    answerCallbackQuery(cb.id, "ℹ️ Not a group split", true);
+    sendTelegramMessage(dmChatId, "ℹ️ *Not a group split.*");
     return;
   }
 
@@ -1184,7 +1182,7 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
     // pointing at a phantom; nothing else we can clean up.
     personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue("");
     personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue("");
-    answerCallbackQuery(cb.id, "ℹ️ Group no longer exists — cleared local link", true);
+    sendTelegramMessage(dmChatId, "ℹ️ *Group no longer exists — cleared local link.*");
     return;
   }
 
@@ -1207,7 +1205,10 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
     editOk = false;
   }
   if (!editOk) {
-    answerCallbackQuery(cb.id, "⚠️ Couldn't edit the group message (older than 48h?). Edit your sheet manually.", true);
+    sendTelegramMessage(
+      dmChatId,
+      "⚠️ *Couldn't edit the group message (older than 48h?). Edit your sheet manually.*"
+    );
     return;
   }
 
@@ -1235,8 +1236,6 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
     message_id: telegramMessageId,
     reply_markup: newKb
   });
-
-  answerCallbackQuery(cb.id, "↩️ Made personal again");
 }
 
 // Minimal HTML escaper for Telegram parse_mode=HTML. Apps Script doesn't
@@ -1260,40 +1259,40 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
 
   var group = findGroupTenantByChatId(groupChatId);
   if (!group || group.status !== TENANT_STATUS.ACTIVE) {
-    answerCallbackQuery(cb.id, "❌ Group is no longer active", true);
+    sendTelegramMessage(dmChatId, "❌ *Group is no longer active.*");
     return;
   }
   if (group.group_members.indexOf(callerChatId) === -1) {
-    answerCallbackQuery(cb.id, "❌ You're not a member of this group", true);
+    sendTelegramMessage(dmChatId, "❌ *You're not a member of this group.*");
     return;
   }
 
   var targetIdx = parseInt(targetIdxRaw, 10);
   if (isNaN(targetIdx) || targetIdx < 0 || targetIdx >= group.group_members.length) {
-    answerCallbackQuery(cb.id, "❌ Invalid settlement target", true);
+    sendTelegramMessage(dmChatId, "❌ *Invalid settlement target.*");
     return;
   }
   var targetChatId = group.group_members[targetIdx];
   if (targetChatId === callerChatId) {
-    answerCallbackQuery(cb.id, "❌ Can't settle with yourself", true);
+    sendTelegramMessage(dmChatId, "❌ *Can't settle with yourself.*");
     return;
   }
 
   var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
   if (rowNumber < 0) {
-    answerCallbackQuery(cb.id, "❌ Transaction not found", true);
+    sendTelegramMessage(dmChatId, "❌ *Transaction not found.*");
     return;
   }
   var personalSheet = getSpreadsheet().getSheets()[0];
   var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
   if (rowData[GROUP_REF_COLUMN - 1]) {
-    answerCallbackQuery(cb.id, "ℹ️ Already split — undo first", true);
+    sendTelegramMessage(dmChatId, "ℹ️ *Already split — undo first.*");
     return;
   }
 
   var amount = Number(rowData[AMOUNT_COLUMN - 1]);
   if (isNaN(amount) || amount <= 0) {
-    answerCallbackQuery(cb.id, "❌ Invalid transaction amount", true);
+    sendTelegramMessage(dmChatId, "❌ *Invalid transaction amount.*");
     return;
   }
 
@@ -1318,7 +1317,7 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
     "* settled " +
     currency +
     " " +
-    amount +
+    formatAmount(amount) +
     " with *" +
     escapeMarkdown(targetName) +
     "*";
@@ -1335,7 +1334,7 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
     }
   } catch (_) {}
   if (!groupMsgId) {
-    answerCallbackQuery(cb.id, "❌ Couldn't post in the group", true);
+    sendTelegramMessage(dmChatId, "❌ *Couldn't post in the group.*");
     return;
   }
 
@@ -1374,8 +1373,6 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
     message_id: telegramMessageId,
     reply_markup: newKb
   });
-
-  answerCallbackQuery(cb.id, "✅ Settlement recorded");
 }
 
 // --- Step 5.1 group /stats: per-currency raw pairwise summary ---
@@ -1580,7 +1577,7 @@ function formatGroupStats(perCurrency, nameOf, groupName, simplified) {
       var creditorName = resolveName(e.creditor) || e.creditor;
       var verb = simplified ? " → " : " owes ";
       lines.push(
-        "• " + escapeMarkdown(debtorName) + verb + escapeMarkdown(creditorName) + " " + ccy + " " + e.amount.toFixed(2)
+        "• " + escapeMarkdown(debtorName) + verb + escapeMarkdown(creditorName) + " " + ccy + " " + formatAmount(e.amount)
       );
     }
   }
@@ -1771,7 +1768,7 @@ function handleGroupSettleCommand(update) {
     "* settled " +
     currency +
     " " +
-    amount.toFixed(2) +
+    formatAmount(amount) +
     " with *" +
     escapeMarkdown(targetName) +
     "* _(cash)_";
