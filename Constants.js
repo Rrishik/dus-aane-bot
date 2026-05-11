@@ -111,6 +111,12 @@ const CATEGORY_EMOJIS = {
 // Gmail
 const MAILS_LOOKBACK_PERIOD = "1h";
 
+// /ask quota — calls per tenant per IST day. Hard cap for everyone (no
+// premium tier yet); when the cap is hit we surface a "Premium coming soon"
+// upsell so we can measure who hits the limit before pricing/sizing premium.
+const FREE_ASK_LIMIT = 5;
+const IST_TIMEZONE = "Asia/Kolkata";
+
 // Bank sender domains — matched as substrings by Gmail's `from:` operator.
 // Add new banks here; no label setup needed.
 const BANK_FROM_DOMAINS = [

@@ -16,6 +16,10 @@
 //  11: chat_type         ("personal" | "group"; defaults to personal for legacy rows)
 //  12: group_members     (CSV of member tenant chat_ids; group rows only)
 //  13: primary_currency  (ISO currency code, defaults to INR)
+//  14: ask_used_today    (integer; /ask calls successfully consumed today)
+//  15: ask_used_date     ("YYYY-MM-DD" in IST; date that ask_used_today applies to)
+//  16: ask_lifetime_count (integer; total successful /ask calls all-time)
+//  17: ask_cap_hit_count (integer; days the tenant hit the daily /ask cap)
 //
 // A row with status=pending has no sheet_id yet; it's created on first forward.
 // dormant = nag-cap reached without a fresh forward; auto-flips back to active
@@ -38,9 +42,13 @@ var TENANT_COLS = {
   NAG_COUNT: 10,
   CHAT_TYPE: 11,
   GROUP_MEMBERS: 12,
-  PRIMARY_CURRENCY: 13
+  PRIMARY_CURRENCY: 13,
+  ASK_USED_TODAY: 14,
+  ASK_USED_DATE: 15,
+  ASK_LIFETIME_COUNT: 16,
+  ASK_CAP_HIT_COUNT: 17
 };
-var TENANT_COL_COUNT = 13;
+var TENANT_COL_COUNT = 17;
 var TENANT_STATUS = {
   PENDING: "pending",
   ACTIVE: "active",
@@ -86,7 +94,11 @@ function _getOrCreateTenantsTab() {
       "nag_count",
       "chat_type",
       "group_members",
-      "primary_currency"
+      "primary_currency",
+      "ask_used_today",
+      "ask_used_date",
+      "ask_lifetime_count",
+      "ask_cap_hit_count"
     ]);
   }
   return tab;
@@ -120,7 +132,11 @@ function _rowToTenant(row) {
       .filter(function (s) {
         return s.length > 0;
       }),
-    primary_currency: String(row[TENANT_COLS.PRIMARY_CURRENCY - 1] || DEFAULT_PRIMARY_CURRENCY)
+    primary_currency: String(row[TENANT_COLS.PRIMARY_CURRENCY - 1] || DEFAULT_PRIMARY_CURRENCY),
+    ask_used_today: parseInt(row[TENANT_COLS.ASK_USED_TODAY - 1], 10) || 0,
+    ask_used_date: String(row[TENANT_COLS.ASK_USED_DATE - 1] || ""),
+    ask_lifetime_count: parseInt(row[TENANT_COLS.ASK_LIFETIME_COUNT - 1], 10) || 0,
+    ask_cap_hit_count: parseInt(row[TENANT_COLS.ASK_CAP_HIT_COUNT - 1], 10) || 0
   };
 }
 
