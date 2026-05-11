@@ -268,6 +268,14 @@ function handleCallbackQuery(update) {
       return;
     }
 
+    // Group-split UI callbacks use ":" as separator (gnav, gsp, gset, gst,
+    // gbk, gun, gstats). Dispatch before the legacy "_" parser. handleGroupCallback
+    // owns the ack, so we must not pre-ack here (Telegram 400s on dupes).
+    if (isGroupCallback(data)) {
+      handleGroupCallback(update);
+      return;
+    }
+
     // Parse action and message ID from callback data
     var separatorIndex = data.indexOf("_");
     if (separatorIndex < 0) {
