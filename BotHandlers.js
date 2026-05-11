@@ -585,10 +585,26 @@ function showRecentTransactions(chatId, messageText) {
 // Build the markdown body for a "recent N transactions" view. Pure-ish — reads
 // the tenant sheet but returns text only, no Telegram I/O. Used both by the
 // typed `/recent` command (above) and the 🕒 Recent button in /stats.
+//
+// Two schemas to read. Personal and group tenants store transactions on
+// completely different sheet layouts (see G_*_COLUMN in Constants.js):
+//   - Personal: 1 row per transaction. Type at col 6, currency col 10,
+//     category col 5, payer (gmail local-part) col 7.
+//   - Group: N rows per transaction (one per share-holder). Type at col 11,
+//     currency col 5, category col 10, payer (chat_id) col 6, share-holder
+//     (chat_id) col 7, Tx ID col 9.
+// Pre-fix /recent was reading the personal columns against a group sheet,
+// which meant type (col 6) was actually a chat_id ("3893…"), so isDebit()
+// was always false and every row rendered with the credit emoji and showed
+// the chat_id verbatim instead of a username. Now we branch on chat_type
+// and dedupe by Tx ID so the user sees N transactions, not N×members rows.
 function buildRecentTransactionsMessage(limit, userFilter) {
   // Cap limit to keep the webhook response snappy.
   if (limit > 50) limit = 50;
   if (limit < 1) limit = 1;
+
+  var tenant = getCurrentTenant();
+  var isGroup = tenant && tenant.chat_type === TENANT_CHAT_TYPE.GROUP;
 
   var sheet = getSpreadsheet().getSheets()[0];
   var data = sheet.getDataRange().getValues();
@@ -600,56 +616,104 @@ function buildRecentTransactionsMessage(limit, userFilter) {
   // Skip header row
   data.shift();
 
+  // Group sheet stores one row per share-holder. Keep only the first row
+  // per Tx ID so /recent lists distinct transactions, not the share ledger.
+  // Iterate from the bottom so the kept row is the most-recent appearance
+  // (defensive against any future row-rewrite logic).
+  if (isGroup) {
+    var seen = {};
+    var deduped = [];
+    for (var di = data.length - 1; di >= 0; di--) {
+      var txId = (data[di][G_TX_ID_COLUMN - 1] || "").toString();
+      if (txId && seen[txId]) continue;
+      if (txId) seen[txId] = true;
+      deduped.unshift(data[di]);
+    }
+    data = deduped;
+  }
+
+  // Per-schema row reader. Group payer is a Telegram chat_id; resolve to
+  // the personal tenant's `name` so the display matches /stats member labels
+  // and settlement buttons. Falls back to the raw chat_id only when the
+  // member's tenant row is missing or unnamed (rare mid-onboarding case).
+  var pickRow;
+  if (isGroup) {
+    pickRow = function (row) {
+      var payerId = (row[G_PAID_BY_COLUMN - 1] || "").toString();
+      var payerLabel = payerId;
+      if (payerId) {
+        var t = findTenantByChatId(payerId);
+        if (t && t.name) payerLabel = t.name;
+      }
+      return {
+        rawDate: row[G_EMAIL_DATE_COLUMN - 1] || row[G_TRANSACTION_DATE_COLUMN - 1],
+        merchant: row[G_MERCHANT_COLUMN - 1] || "Unknown",
+        amount: parseFloat(row[G_AMOUNT_COLUMN - 1]) || 0,
+        type: row[G_TRANSACTION_TYPE_COLUMN - 1] || "Unknown",
+        category: row[G_CATEGORY_COLUMN - 1] || "",
+        currency: row[G_CURRENCY_COLUMN - 1] || "INR",
+        userLabel: payerLabel
+      };
+    };
+  } else {
+    pickRow = function (row) {
+      return {
+        rawDate: row[EMAIL_DATE_COLUMN - 1] || row[TRANSACTION_DATE_COLUMN - 1],
+        merchant: row[MERCHANT_COLUMN - 1] || "Unknown",
+        amount: parseFloat(row[AMOUNT_COLUMN - 1]) || 0,
+        type: row[TRANSACTION_TYPE_COLUMN - 1] || "Unknown",
+        category: row[CATEGORY_COLUMN - 1] || "",
+        currency: row[CURRENCY_COLUMN - 1] || "INR",
+        userLabel: (row[USER_COLUMN - 1] || "").toString()
+      };
+    };
+  }
+
+  var picked = data.map(pickRow);
+
   if (userFilter) {
-    data = data.filter(function (row) {
-      var user = (row[USER_COLUMN - 1] || "").toString().toLowerCase();
-      return user.indexOf(userFilter) !== -1;
+    var needle = userFilter.toLowerCase();
+    picked = picked.filter(function (p) {
+      return p.userLabel.toLowerCase().indexOf(needle) !== -1;
     });
   }
 
-  if (data.length === 0) {
-    return { text: "📅 *No transactions found* for user: " + userFilter };
+  if (picked.length === 0) {
+    return userFilter
+      ? { text: "📅 *No transactions found* for user: " + userFilter }
+      : { text: "📅 *No transactions found yet!*" };
   }
 
-  var recentTransactions = data.slice(-limit).reverse();
+  var recentTransactions = picked.slice(-limit).reverse();
 
   var header = "📅 *Recent Transactions*";
   if (userFilter) header += " (user: " + userFilter + ")";
   var message = header + "\n";
 
-  // In group chats, attribute each row to the forwarder that paid — in a
-  // multi-person group "Swiggy ₹450" doesn't tell you whether to nudge alice
-  // or bob about the receipt. Personal chats stay clean (same name on every
-  // row would just clutter the card), matching the same chat_type gate we
-  // use for the Who Owes button in /stats and the 👤 line in transaction
-  // notifications.
-  var tenant = getCurrentTenant();
-  var showUser = tenant && tenant.chat_type === TENANT_CHAT_TYPE.GROUP;
+  // Show the payer username inline on the date row in group chats — same
+  // chat_type gate as the Who Owes button in /stats and the 👤 line in
+  // transaction notifications. In a multi-person group "Swiggy ₹450" alone
+  // doesn't tell you who paid. In personal chats the same name on every
+  // row would just clutter the card.
+  var showUser = isGroup;
 
-  recentTransactions.forEach(function (row) {
-    var rawDate = row[EMAIL_DATE_COLUMN - 1] || row[TRANSACTION_DATE_COLUMN - 1];
+  recentTransactions.forEach(function (p) {
     var date =
-      rawDate instanceof Date
-        ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
-        : rawDate || "Unknown Date";
-    var merchant = row[MERCHANT_COLUMN - 1] || "Unknown";
-    var amount = parseFloat(row[AMOUNT_COLUMN - 1]) || 0;
-    var type = row[TRANSACTION_TYPE_COLUMN - 1] || "Unknown";
-    var category = row[CATEGORY_COLUMN - 1] || "";
-    var currency = row[CURRENCY_COLUMN - 1] || "INR";
-    var user = (row[USER_COLUMN - 1] || "").toString();
+      p.rawDate instanceof Date
+        ? Utilities.formatDate(p.rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
+        : p.rawDate || "Unknown Date";
 
-    var emoji = isDebit(type) ? "�" : "🟢";
-    var money = currencySymbol(currency) + formatAmount(amount);
-    var catLabel = category ? " · " + shortCategoryName(category) : "";
-    var userTag = showUser && user ? " · 👤 " + escapeMarkdown(user) : "";
+    var emoji = isDebit(p.type) ? "🔴" : "🟢";
+    var money = currencySymbol(p.currency) + formatAmount(p.amount);
+    var catLabel = p.category ? " · " + shortCategoryName(p.category) : "";
+    var userTag = showUser && p.userLabel ? " · 👤 " + escapeMarkdown(p.userLabel) : "";
 
     // Two lines per entry, blank line between. No ─── dividers — line
     // spacing alone is enough separation, and dividers were dominating the
     // visual weight of every row. In groups, the user tag rides on the
     // second line next to the date so the headline stays the most-scanned
     // facts (merchant + amount).
-    message += "\n" + emoji + " *" + escapeMarkdown(merchant) + "* " + money + catLabel + "\n";
+    message += "\n" + emoji + " *" + escapeMarkdown(p.merchant) + "* " + money + catLabel + "\n";
     message += "   _" + escapeMarkdown(date) + "_" + userTag + "\n";
   });
 
