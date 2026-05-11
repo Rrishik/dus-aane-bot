@@ -617,6 +617,15 @@ function buildRecentTransactionsMessage(limit, userFilter) {
   if (userFilter) header += " (user: " + userFilter + ")";
   var message = header + "\n";
 
+  // In group chats, attribute each row to the forwarder that paid — in a
+  // multi-person group "Swiggy ₹450" doesn't tell you whether to nudge alice
+  // or bob about the receipt. Personal chats stay clean (same name on every
+  // row would just clutter the card), matching the same chat_type gate we
+  // use for the Who Owes button in /stats and the 👤 line in transaction
+  // notifications.
+  var tenant = getCurrentTenant();
+  var showUser = tenant && tenant.chat_type === TENANT_CHAT_TYPE.GROUP;
+
   recentTransactions.forEach(function (row) {
     var rawDate = row[EMAIL_DATE_COLUMN - 1] || row[TRANSACTION_DATE_COLUMN - 1];
     var date =
@@ -628,16 +637,20 @@ function buildRecentTransactionsMessage(limit, userFilter) {
     var type = row[TRANSACTION_TYPE_COLUMN - 1] || "Unknown";
     var category = row[CATEGORY_COLUMN - 1] || "";
     var currency = row[CURRENCY_COLUMN - 1] || "INR";
+    var user = (row[USER_COLUMN - 1] || "").toString();
 
     var emoji = isDebit(type) ? "📤" : "📥";
     var money = currencySymbol(currency) + formatAmount(amount);
     var catLabel = category ? " · " + shortCategoryName(category) : "";
+    var userTag = showUser && user ? " · 👤 " + escapeMarkdown(user) : "";
 
     // Two lines per entry, blank line between. No ─── dividers — line
     // spacing alone is enough separation, and dividers were dominating the
-    // visual weight of every row.
+    // visual weight of every row. In groups, the user tag rides on the
+    // second line next to the date so the headline stays the most-scanned
+    // facts (merchant + amount).
     message += "\n" + emoji + " *" + escapeMarkdown(merchant) + "* " + money + catLabel + "\n";
-    message += "   _" + escapeMarkdown(date) + "_\n";
+    message += "   _" + escapeMarkdown(date) + "_" + userTag + "\n";
   });
 
   return { text: message };
