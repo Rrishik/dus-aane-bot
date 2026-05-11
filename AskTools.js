@@ -258,7 +258,7 @@ function getAskSystemPrompt() {
     today +
     "\n" +
     "- When no user is specified, include all users combined\n" +
-    "- Format currency amounts with the currency code (e.g. INR 1,234.56). Show INR prominently; other currencies only if present\n" +
+    "- Format currency amounts with the symbol and a rounded whole number, no thousands separator or decimals (e.g. ₹1234, $550, €99). Currency symbols: INR=₹, USD=$, EUR=€, GBP=£, JPY/CNY=¥, AUD=A$, CAD=C$, SGD=S$, HKD=HK$, NZD=NZ$. For currencies not listed here, use the 3-letter code prefix instead (e.g. AED 500). Show INR prominently; other currencies only if present\n" +
     "- Keep answers short — 2-5 sentences max. Use bullet points for lists\n" +
     "- Do NOT use Markdown bold/italic formatting\n" +
     "- If the question is unrelated to expenses or transactions, politely decline\n" +
