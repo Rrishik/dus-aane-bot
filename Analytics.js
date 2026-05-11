@@ -534,6 +534,17 @@ function shortCategoryName(cat) {
   return CATEGORY_SHORT_NAMES[cat] || cat;
 }
 
+// Render an 8-char horizontal bar inside a Telegram code span. Uses U+2588
+// FULL BLOCK + U+2591 LIGHT SHADE specifically — these two render at the
+// same width in every monospace fallback font Telegram uses (iOS SF Mono,
+// macOS, Roboto Mono on Android, Consolas/Cascadia on Desktop). Earlier
+// versions used ▓ (medium shade), which Android Telegram pulls from a
+// different glyph table than ░ and renders ~5-10% narrower, making bars
+// look ragged across rows.
+//
+// Minimum-1 rule: a positive value always gets at least one filled block,
+// even if it would round to 0. Otherwise a tiny-but-nonzero week renders
+// identically to a true-zero week, which silently lies in the chart.
 function makeBar(value, buckets, type) {
   var max = 0;
   buckets.forEach(function (b) {
@@ -541,10 +552,13 @@ function makeBar(value, buckets, type) {
     var inr = (bucket || {})["INR"] || 0;
     if (inr > max) max = inr;
   });
-  if (max === 0) return "";
+  // All-zero data: render 8 empty cells so the column still has uniform
+  // width across rows (early `return ""` here used to leave gaps).
+  if (max === 0) return "░░░░░░░░";
   var len = Math.round((value / max) * 8);
+  if (value > 0 && len === 0) len = 1;
   var bar = "";
-  for (var i = 0; i < len; i++) bar += "▓";
+  for (var i = 0; i < len; i++) bar += "█";
   for (var j = len; j < 8; j++) bar += "░";
   return bar;
 }
