@@ -32,7 +32,6 @@ function setTelegramCommands() {
     { command: "/ask", description: "Ask anything about your spending" },
     { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
     { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
-    { command: "/backfill", description: "Import older emails (e.g. /backfill 7d)" },
     { command: "/account", description: "Account & settings" },
     { command: "/help", description: "Show available commands" }
   ];
