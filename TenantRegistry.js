@@ -76,30 +76,44 @@ function _adminSpreadsheet() {
   return SpreadsheetApp.openById(ADMIN_SHEET_ID);
 }
 
+// Canonical Tenants header. Index = column - 1. Single source of truth for
+// both creation and the lightweight in-place schema migration below.
+var TENANT_HEADERS = [
+  "chat_id",
+  "name",
+  "emails",
+  "sheet_id",
+  "status",
+  "created_at",
+  "notes",
+  "last_forward_at",
+  "last_nag_at",
+  "nag_count",
+  "chat_type",
+  "group_members",
+  "primary_currency",
+  "ask_used_today",
+  "ask_used_date",
+  "ask_lifetime_count",
+  "ask_cap_hit_count"
+];
+
 function _getOrCreateTenantsTab() {
   var ss = _adminSpreadsheet();
   var tab = ss.getSheetByName(TENANTS_TAB);
   if (!tab) {
     tab = ss.insertSheet(TENANTS_TAB);
-    tab.appendRow([
-      "chat_id",
-      "name",
-      "emails",
-      "sheet_id",
-      "status",
-      "created_at",
-      "notes",
-      "last_forward_at",
-      "last_nag_at",
-      "nag_count",
-      "chat_type",
-      "group_members",
-      "primary_currency",
-      "ask_used_today",
-      "ask_used_date",
-      "ask_lifetime_count",
-      "ask_cap_hit_count"
-    ]);
+    tab.appendRow(TENANT_HEADERS);
+    return tab;
+  }
+  // Idempotent header migration: if the live header row is shorter than the
+  // canonical schema (older tabs created before columns were added), top up
+  // the missing header cells. Existing data rows are unaffected — reads use
+  // getRange(...TENANT_COL_COUNT) which already auto-extends to blanks.
+  var lastCol = tab.getLastColumn();
+  if (lastCol < TENANT_HEADERS.length) {
+    var missing = TENANT_HEADERS.slice(lastCol);
+    tab.getRange(1, lastCol + 1, 1, missing.length).setValues([missing]);
   }
   return tab;
 }
