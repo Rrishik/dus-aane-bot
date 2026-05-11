@@ -22,7 +22,7 @@ Analytics.js            # /stats aggregations and formatters
 AskTools.js             # /ask tool-calling definitions
 AIProviders.js          # Azure OpenAI HTTP client
 TenantRegistry.js       # Tenants tab CRUD
-Onboarding.js           # /start, /register, /myinfo, activation
+Onboarding.js           # /start, /register, /account, activation
 AdminHelpers.js         # Manually-run maintenance (create template, seed, etc.)
 worker/                 # Cloudflare Worker proxy
 ```

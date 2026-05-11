@@ -24,7 +24,7 @@ function handleMessage(update) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();
 
       // Onboarding commands always allowed (they're how tenants are created).
-      var ONBOARDING = ["/start", "/register", "/myinfo"];
+      var ONBOARDING = ["/start", "/register", "/account"];
       if (ONBOARDING.indexOf(command) === -1) {
         if (!gateTenantForCommand(chatId)) return;
       }
@@ -36,8 +36,8 @@ function handleMessage(update) {
         case "/register":
           handleRegisterCommand(chatId, username, messageText);
           break;
-        case "/myinfo":
-          handleMyInfoCommand(chatId);
+        case "/account":
+          handleAccountCommand(chatId);
           break;
         case "/help":
           handleHelpCommand(chatId, username);
@@ -129,7 +129,8 @@ function handleHelpCommand(chatId, username) {
     `• /stats — analytics dashboard\n` +
     `• /recent — recent transactions _(e.g. /recent 10)_\n` +
     `• /backfill — import older emails _(e.g. /backfill 7d)_\n` +
-    `• /myinfo — your account\n` +
+    `• /register — add another Gmail to forward from\n` +
+    `• /account — status, sheet link, resend setup\n` +
     `• /help — this message`;
 
   var url = sheetUrl(getTenantSheetId());
