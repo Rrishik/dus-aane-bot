@@ -30,8 +30,7 @@ function setTelegramCommands() {
     { command: "/start", description: "Onboard / show welcome" },
     { command: "/register", description: "Register a Gmail address to forward from" },
     { command: "/ask", description: "Ask anything about your spending" },
-    { command: "/stats", description: "Analytics dashboard (monthly, trends, who owes)" },
-    { command: "/recent", description: "Recent transactions (e.g. /recent 10 rishik)" },
+    { command: "/stats", description: "Dashboard: recent, monthly, trends, who owes" },
     { command: "/account", description: "Account & settings" },
     { command: "/help", description: "Show available commands" }
   ];

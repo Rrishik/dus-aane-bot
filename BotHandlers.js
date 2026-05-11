@@ -126,8 +126,7 @@ function handleHelpCommand(chatId, username) {
     `*Commands*\n` +
     `• /ask — ask anything about your spending\n` +
     `   _e.g. /ask how much on food last month?_\n` +
-    `• /stats — analytics dashboard\n` +
-    `• /recent — recent transactions _(e.g. /recent 10)_\n` +
+    `• /stats — dashboard: recent, monthly, trends, who owes\n` +
     `• /register — add another Gmail to forward from\n` +
     `• /account — status, sheet link, resend setup\n` +
     `• /help — this message`;
@@ -568,70 +567,73 @@ function showRecentTransactions(chatId, messageText) {
       }
     });
 
-    // Cap limit to keep the webhook response snappy.
-    if (limit > 50) limit = 50;
-    if (limit < 1) limit = 1;
-
-    var sheet = getSpreadsheet().getSheets()[0];
-    var data = sheet.getDataRange().getValues();
-
-    // Check if sheet is empty
-    if (data.length <= 1) {
-      sendTelegramMessage(chatId, "📅 *No transactions found yet!*");
-      return;
-    }
-
-    // Skip header row
-    data.shift();
-
-    // Filter by user if specified
-    if (userFilter) {
-      data = data.filter(function (row) {
-        var user = (row[USER_COLUMN - 1] || "").toString().toLowerCase();
-        return user.indexOf(userFilter) !== -1;
-      });
-    }
-
-    if (data.length === 0) {
-      sendTelegramMessage(chatId, "📅 *No transactions found* for user: " + userFilter);
-      return;
-    }
-
-    // Get last N transactions
-    var recentTransactions = data.slice(-limit).reverse();
-
-    var header = "📅 *Recent Transactions*";
-    if (userFilter) header += " (user: " + userFilter + ")";
-    var message = header + "\n";
-
-    recentTransactions.forEach(function (row) {
-      var rawDate = row[EMAIL_DATE_COLUMN - 1] || row[TRANSACTION_DATE_COLUMN - 1];
-      var date =
-        rawDate instanceof Date
-          ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
-          : rawDate || "Unknown Date";
-      var merchant = row[MERCHANT_COLUMN - 1] || "Unknown";
-      var amount = parseFloat(row[AMOUNT_COLUMN - 1]) || 0;
-      var type = row[TRANSACTION_TYPE_COLUMN - 1] || "Unknown";
-      var category = row[CATEGORY_COLUMN - 1] || "";
-      var currency = row[CURRENCY_COLUMN - 1] || "INR";
-
-      var emoji = type === "Debit" ? "💸" : "💰";
-      var money = (currency === "INR" ? "₹" : currency + " ") + formatAmount(amount);
-      var catLabel = category ? " · " + shortCategoryName(category) : "";
-
-      // Two lines per entry, blank line between. No ─── dividers — line
-      // spacing alone is enough separation, and dividers were dominating the
-      // visual weight of every row.
-      message += "\n" + emoji + " *" + escapeMarkdown(merchant) + "* " + money + catLabel + "\n";
-      message += "   _" + escapeMarkdown(date) + "_\n";
-    });
-
-    sendTelegramMessage(chatId, message);
+    var result = buildRecentTransactionsMessage(limit, userFilter);
+    sendTelegramMessage(chatId, result.text);
   } catch (error) {
     console.error("Error in showRecentTransactions:", error);
     sendTelegramMessage(chatId, "❌ *Error fetching recent transactions*\n\nPlease try again later.");
   }
+}
+
+// Build the markdown body for a "recent N transactions" view. Pure-ish — reads
+// the tenant sheet but returns text only, no Telegram I/O. Used both by the
+// typed `/recent` command (above) and the 🕒 Recent button in /stats.
+function buildRecentTransactionsMessage(limit, userFilter) {
+  // Cap limit to keep the webhook response snappy.
+  if (limit > 50) limit = 50;
+  if (limit < 1) limit = 1;
+
+  var sheet = getSpreadsheet().getSheets()[0];
+  var data = sheet.getDataRange().getValues();
+
+  if (data.length <= 1) {
+    return { text: "📅 *No transactions found yet!*" };
+  }
+
+  // Skip header row
+  data.shift();
+
+  if (userFilter) {
+    data = data.filter(function (row) {
+      var user = (row[USER_COLUMN - 1] || "").toString().toLowerCase();
+      return user.indexOf(userFilter) !== -1;
+    });
+  }
+
+  if (data.length === 0) {
+    return { text: "📅 *No transactions found* for user: " + userFilter };
+  }
+
+  var recentTransactions = data.slice(-limit).reverse();
+
+  var header = "📅 *Recent Transactions*";
+  if (userFilter) header += " (user: " + userFilter + ")";
+  var message = header + "\n";
+
+  recentTransactions.forEach(function (row) {
+    var rawDate = row[EMAIL_DATE_COLUMN - 1] || row[TRANSACTION_DATE_COLUMN - 1];
+    var date =
+      rawDate instanceof Date
+        ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy, HH:mm")
+        : rawDate || "Unknown Date";
+    var merchant = row[MERCHANT_COLUMN - 1] || "Unknown";
+    var amount = parseFloat(row[AMOUNT_COLUMN - 1]) || 0;
+    var type = row[TRANSACTION_TYPE_COLUMN - 1] || "Unknown";
+    var category = row[CATEGORY_COLUMN - 1] || "";
+    var currency = row[CURRENCY_COLUMN - 1] || "INR";
+
+    var emoji = type === "Debit" ? "💸" : "💰";
+    var money = (currency === "INR" ? "₹" : currency + " ") + formatAmount(amount);
+    var catLabel = category ? " · " + shortCategoryName(category) : "";
+
+    // Two lines per entry, blank line between. No ─── dividers — line
+    // spacing alone is enough separation, and dividers were dominating the
+    // visual weight of every row.
+    message += "\n" + emoji + " *" + escapeMarkdown(merchant) + "* " + money + catLabel + "\n";
+    message += "   _" + escapeMarkdown(date) + "_\n";
+  });
+
+  return { text: message };
 }
 
 // ─── Stats Command ───────────────────────────────────────────────────
@@ -644,10 +646,15 @@ function handleStatsCommand(chatId) {
 }
 
 // Pure-data builder — used both by /stats entry and the back button.
+// Two rows of two keeps each button label readable on narrow phone screens;
+// a single row of four wraps awkwardly with the emoji prefixes.
 function buildStatsMenuKeyboard() {
   return [
     [
-      { text: "📊 Monthly", callback_data: "stats_monthly" },
+      { text: "🕒 Recent", callback_data: "stats_recent" },
+      { text: "📊 Monthly", callback_data: "stats_monthly" }
+    ],
+    [
       { text: "📉 Trends", callback_data: "stats_trends" },
       { text: "💰 Who Owes", callback_data: "stats_whoowes" }
     ]
@@ -728,6 +735,19 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
         parse_mode: "Markdown",
         message_id: telegramMessageId,
         reply_markup: { inline_keyboard: buildStatsMenuKeyboard() }
+      });
+      return;
+    }
+
+    if (subAction === "recent") {
+      // 🕒 Recent inside /stats — same content as the typed /recent command,
+      // rendered in place with a Back button. The typed-command path is
+      // unchanged for power users who want filters (e.g. /recent 10 rishik).
+      var recent = buildRecentTransactionsMessage(5, null);
+      sendTelegramMessage(chatId, recent.text, {
+        parse_mode: "Markdown",
+        message_id: telegramMessageId,
+        reply_markup: { inline_keyboard: [buildStatsBackRow()] }
       });
       return;
     }
