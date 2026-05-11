@@ -278,6 +278,16 @@ function handleCallbackQuery(update) {
     // Telegram only honors one answerCallbackQuery per callback_query_id.
     answerCallbackQuery(callbackQueryId, "");
 
+    // "Upgrade to Premium" upsell — shown after a user hits the /ask cap.
+    // Premium isn't built yet; we just acknowledge intent and measure who
+    // taps it (via Telegram update logs). The 5/day cap is the same for
+    // everyone for now; this branch will graduate into a real upgrade flow
+    // once we set pricing.
+    if (data === "premium_info") {
+      sendTelegramMessage(chatId, "\u{1F48E} *Premium coming soon* \u2014 we'll let you know when it's ready.");
+      return;
+    }
+
     // Handle stats callbacks: stats_monthly, stats_trends, stats_whoowes
     if (action === "stats") {
       return handleStatsCallback(chatId, telegramMessageId, callbackQueryId, callbackPayload);
@@ -669,6 +679,19 @@ function handleAskCommand(chatId, messageText) {
     return;
   }
 
+  // Daily /ask cap. consumeAskQuota is atomic (LockService) and tracks both
+  // the daily counter and lifetime/cap-hit metrics on the Tenants row. We
+  // consume *before* spending Azure tokens; if runAskLoop later throws we
+  // refund so a failed call doesn't burn a slot.
+  var quota = consumeAskQuota(chatId);
+  if (!quota.allowed) {
+    if (thinkingMsgId) deleteTelegramMessage(chatId, thinkingMsgId);
+    sendTelegramMessage(chatId, formatAskCapHitMessage(new Date()), {
+      reply_markup: buildAskCapHitKeyboard()
+    });
+    return;
+  }
+
   try {
     var answer = runAskLoop(question);
     var escaped = escapeMarkdown(answer);
@@ -682,6 +705,7 @@ function handleAskCommand(chatId, messageText) {
       sendTelegramMessage(chatId, escaped);
     }
   } catch (error) {
+    refundAskQuota(chatId);
     console.error("Error in handleAskCommand:", error.message, error.stack);
     var errorMsg = "❌ Something went wrong. Try /stats for preset analytics.";
     if (thinkingMsgId) {
