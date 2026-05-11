@@ -340,7 +340,7 @@ function escapeMarkdown(text) {
 // the value already showed (🗓 *Date:* …, 🏪 *Merchant:* …). Today: 3 lines max.
 //
 // Headline merges merchant + amount so the most-scanned facts are line 1.
-// � / 🟢 alone signal debit vs credit — the "Debited" verb is gone.
+// 🔴 / 🟢 alone signal debit vs credit — the "Debited" verb is gone.
 // Date moves onto the category line (one inline icon, no "Date:" label).
 // The previous 💸/💰 pair was ambiguous (💰 reads as generic "money", not
 // specifically credit), then 📤/📥 didn't render in every Telegram client,
