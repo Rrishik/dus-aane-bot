@@ -2338,7 +2338,7 @@ describe("formatGroupStats", () => {
       "Pad"
     );
     expect(text).toContain("*INR*");
-    expect(text).toContain("Bob owes Alice INR 1,234.50");
+    expect(text).toContain("Bob owes Alice INR 1235");
     expect(text).toContain("*USD*");
     expect(text).toContain("Alice owes Bob USD 50");
   });

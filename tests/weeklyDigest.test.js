@@ -101,7 +101,7 @@ describe("formatWeeklyMessage", () => {
       topTransactions: []
     });
     expect(msg).toContain("↑50%");
-    expect(msg).toContain("vs ₹1,000");
+    expect(msg).toContain("vs ₹1000");
   });
 
   it("shows down-arrow delta when spending decreased", () => {

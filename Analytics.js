@@ -419,16 +419,13 @@ function formatWhoOwesMessage(year, month, data) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
-// Format a numeric amount for display. Drops the trailing `.00` when the value
-// rounds to a whole number ("₹549" not "₹549.00") and keeps 2 decimals when
-// the fractional part matters ("₹12.50"). Uses Indian grouping (1,00,000).
+// Format a numeric amount for display. Rounds to a whole number and drops
+// thousands separators — phone-width messages already pack currency symbol,
+// amount, date, and category onto crowded lines, so "₹549" reads better than
+// "₹549.50" or "₹1,234". Decimal precision was never the point of these
+// summaries; if a user wants to-the-paisa accuracy they open the sheet.
 function formatAmount(num) {
-  var rounded = Math.round(num * 100) / 100;
-  var isWhole = Math.abs(rounded - Math.round(rounded)) < 0.005;
-  return rounded.toLocaleString("en-IN", {
-    minimumFractionDigits: isWhole ? 0 : 2,
-    maximumFractionDigits: 2
-  });
+  return Math.round(num).toLocaleString("en-IN", { useGrouping: false });
 }
 
 // Currency-code → display prefix. Common currencies render with their symbol
