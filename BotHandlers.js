@@ -62,6 +62,13 @@ function handleMessage(update) {
     else if (messageText === " Recent Transactions") {
       showRecentTransactions(chatId, "/recent");
     } else {
+      // Pending-input flows (bare /ask or bare /register stashed a flag and
+      // is now waiting for the user's next plain message). Check these first
+      // — they're the highest-intent interactions, and merchant edits are
+      // keyed by message id so they can't collide.
+      if (handleAskQuestionReply(chatId, messageText)) return;
+      if (handleRegisterEmailReply(chatId, username, messageText)) return;
+
       // Check for pending merchant input
       var userId = update.message.from.id;
       var props = PropertiesService.getScriptProperties();
@@ -667,19 +674,51 @@ function buildStatsMenuKeyboard() {
 function handleAskCommand(chatId, messageText) {
   var question = messageText.replace(/^\/ask(@\w+)?\s*/i, "").trim();
 
+  // Tapped /ask from the slash menu (or sent /ask with no question): stash a
+  // pending flag and prompt for the question. The next plain-text message
+  // from this chat is consumed by handleAskQuestionReply. Mirrors the
+  // /register-without-address flow.
   if (!question) {
+    PropertiesService.getScriptProperties().setProperty("pending_ask_" + chatId, "1");
     sendTelegramMessage(
       chatId,
-      "❓ *Ask me anything about your spending!*\n\n" +
-        "Examples:\n" +
-        "• `/ask How much did we spend on food?`\n" +
-        "• `/ask Top merchants this month`\n" +
-        "• `/ask Who owes whom in March?`\n" +
-        "• `/ask Compare grocery spending Feb vs Mar`"
+      "❓ *What would you like to know about your spending?*\n\n" +
+        "_Examples:_\n" +
+        "• How much did we spend on food?\n" +
+        "• Top merchants this month\n" +
+        "• Who owes whom in March?\n" +
+        "• Compare grocery spending Feb vs Mar\n\n" +
+        "_Reply with your question, or send_ `/ask <question>` _directly._",
+      {
+        parse_mode: "Markdown",
+        reply_markup: { force_reply: true, input_field_placeholder: "Ask about your spending…" }
+      }
     );
     return;
   }
 
+  runAskFlow(chatId, question);
+}
+
+// Consume a plain-text reply when the user is mid-/ask flow. Returns true
+// if the message was consumed (and therefore handleMessage should stop).
+function handleAskQuestionReply(chatId, messageText) {
+  var props = PropertiesService.getScriptProperties();
+  var key = "pending_ask_" + chatId;
+  if (!props.getProperty(key)) return false;
+  props.deleteProperty(key);
+  var question = (messageText || "").trim();
+  if (!question) {
+    sendTelegramMessage(chatId, "❌ Empty question, /ask cancelled.");
+    return true;
+  }
+  runAskFlow(chatId, question);
+  return true;
+}
+
+// Shared core: quota → typing indicator → LLM loop → send answer. Used by
+// both the direct /ask <question> path and the pending-input reply path.
+function runAskFlow(chatId, question) {
   // Daily /ask cap. consumeAskQuota is atomic (LockService) and tracks both
   // the daily counter and lifetime/cap-hit metrics on the Tenants row. We
   // consume *before* spending Azure tokens; if runAskLoop later throws we
@@ -706,7 +745,7 @@ function handleAskCommand(chatId, messageText) {
     sendTelegramMessage(chatId, escapeMarkdown(answer));
   } catch (error) {
     refundAskQuota(chatId);
-    console.error("Error in handleAskCommand:", error.message, error.stack);
+    console.error("Error in runAskFlow:", error.message, error.stack);
     sendTelegramMessage(chatId, "❌ Something went wrong. Try /stats for preset analytics.");
   }
 }
