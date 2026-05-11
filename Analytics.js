@@ -219,17 +219,33 @@ function formatTrendsMessage(months) {
   var tz = Session.getScriptTimeZone();
   var msg = "📉 *Spending Trends*\n\n";
 
-  // Compact INR debits with bar chart
+  // Each row is wrapped in a single backtick code span so Telegram renders it
+  // monospaced — that's what keeps the date, bar, and amount columns visually
+  // aligned across rows even when amount widths differ (₹500 vs ₹54321).
+  // Outside a code span, Telegram collapses runs of spaces and uses a
+  // proportional font, so columns drift.
+
+  // INR debits with bar chart — right-align amounts to a common width so the
+  // rightmost digit lines up across months.
   msg += "💸 *Debits (INR):*\n";
-  months.forEach(function (m) {
+  var inrAmounts = months.map(function (m) {
+    return formatAmount(m.debitByCurrency["INR"] || 0);
+  });
+  var maxInrWidth = inrAmounts.reduce(function (w, a) {
+    return Math.max(w, a.length);
+  }, 0);
+  months.forEach(function (m, i) {
     var d = new Date(m.year, m.month, 1);
     var label = Utilities.formatDate(d, tz, "MMM yy");
     var inr = m.debitByCurrency["INR"] || 0;
     var bar = makeBar(inr, months, "debit");
-    msg += "`" + label + "` " + bar + " ₹" + formatAmount(inr) + "\n";
+    var amt = inrAmounts[i].padStart(maxInrWidth, " ");
+    msg += "`" + label + "  " + bar + "  ₹" + amt + "`\n";
   });
 
-  // Non-INR debits — only months that have them, compact
+  // Non-INR debits — only months that have them, compact. Multi-currency
+  // composition varies per row so amounts are left-flowed inside the code span
+  // rather than column-aligned.
   var hasOtherDebits = months.some(function (m) {
     return Object.keys(m.debitByCurrency).some(function (c) {
       return c !== "INR";
@@ -247,12 +263,12 @@ function formatTrendsMessage(months) {
         var parts = others.map(function (c) {
           return currencySymbol(c) + formatAmount(m.debitByCurrency[c]);
         });
-        msg += "`" + label + "` " + parts.join(", ") + "\n";
+        msg += "`" + label + "  " + parts.join(", ") + "`\n";
       }
     });
   }
 
-  // Credits — separate section
+  // Credits — separate section, same code-span treatment.
   var hasCredits = months.some(function (m) {
     return Object.keys(m.creditByCurrency).length > 0;
   });
@@ -266,7 +282,7 @@ function formatTrendsMessage(months) {
         var parts = curs.map(function (c) {
           return currencySymbol(c) + formatAmount(m.creditByCurrency[c]);
         });
-        msg += "`" + label + "` " + parts.join(", ") + "\n";
+        msg += "`" + label + "  " + parts.join(", ") + "`\n";
       }
     });
   }
