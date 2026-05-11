@@ -7,8 +7,7 @@ A self-hostable Telegram bot for couples, roommates, and friends who want shared
 - 🤖 **Auto-fills from your inbox** — forward bank transaction emails (manually or via a one-time Gmail filter) and an LLM extracts merchant, amount, category. No data entry.
 - 👫 **Built for shared expenses** — every transaction has a one-tap _Personal / Split 50–50 / Partner paid 100%_ button. `/stats` rolls it into a who-owes-whom settlement.
 - 📊 **Your sheet, your data** — each tenant gets their own Google Sheet, shared with them as editor on day 1 and transferable to full ownership via `/ownsheet`. Native CSV export, Apps Script, Sheets formulas — anything you can do with a spreadsheet, you can do here.
-- � **Visual dashboard** — `/dashboard` opens a Looker Studio report wired to your sheet. One-tap save to your Drive.
-- �🔒 **Narrow access by design** — the bot only ever sees emails matching a fixed allowlist of ~30 verified bank senders. OTPs, statements, security codes and personal mail never leave your Gmail.
+- 🔒 **Narrow access by design** — the bot only ever sees emails matching a fixed allowlist of ~30 verified bank senders. OTPs, statements, security codes and personal mail never leave your Gmail.
 - 🏠 **Self-hostable** — one Apps Script deploy serves your whole friend group. Code's in this repo; audit it before you trust it.
 
 ## Table of contents
@@ -130,7 +129,6 @@ Admin = the person deploying and operating the bot. Users don't need any of this
    const SHEET_NAME = "Transactions";
    const TEMPLATE_SHEET_ID = ""; // filled in step 6 below
    const GROUP_TEMPLATE_SHEET_ID = ""; // filled in step 7 below; leave blank to disable group features
-   const LOOKER_DASHBOARD_REPORT_ID = ""; // filled in step 8 below; leave blank to disable /dashboard
    const AZURE_OPENAI_ENDPOINT = "...";
    const AZURE_OPENAI_API_KEY = "...";
    const AZURE_OPENAI_DEPLOYMENT_NAME = "...";
@@ -140,15 +138,10 @@ Admin = the person deploying and operating the bot. Users don't need any of this
 5. Deploy as Web App (execute as bot account, access: Anyone) → note the `/exec` URL + deployment ID.
 6. **Create the template sheet** — in the script editor, run `adminCreateTemplateSheet()`. It copies your admin sheet structure, clears the data, and logs the new sheet ID. Put that ID in `AConfig.js` as `TEMPLATE_SHEET_ID` and in the GitHub secret.
 7. **Create the group-sheet template** (optional; needed for the Groups feature) — run `adminCreateGroupTemplateSheet()`. It creates a fresh blank spreadsheet pre-loaded with the per-share group schema and logs its ID. Put that ID in `AConfig.js` as `GROUP_TEMPLATE_SHEET_ID` and in the GitHub secret.
-8. **Build the Looker Studio master report** (one-time, optional but recommended for `/dashboard`):
-   1. Make a copy of the template sheet and populate it with ~50 representative rows (varied merchants, categories, currencies, splits) so charts render meaningfully in the Looker Studio editor. Charts only — no tenant data.
-   2. Open Looker Studio → **Create → Report** → add the populated sheet as a Google Sheets data source.
-   3. Build the dashboard you want tenants to see (the v1 design is: monthly spend trend, category donut, top-merchants bar, transactions table, with a single date-range filter at the top).
-   4. Save the report. Copy the report ID from the URL (the segment between `reporting/` and `/page`). Set `LOOKER_DASHBOARD_REPORT_ID` in `AConfig.js` and as a GitHub secret. The bot's Linking API URL replaces the data source per-tenant on click — the master sheet stays private to you.
-9. **Cloudflare Worker** — set `APPS_SCRIPT_URL` secret, `wrangler deploy` (or use the GitHub Actions workflow).
-10. **Bot wiring** — from the script editor, run `setTelegramWebhook()` (points Telegram at the worker) and `setTelegramCommands()` (registers the slash-menu).
-11. **Trigger** — add an hourly trigger for `triggerEmailProcessing` (Triggers panel in the script editor).
-12. **Seed tenant 0** — run `adminSeedTenantZero()` once; optionally `adminAddEmailToTenantZero("you@gmail.com")` for each forwarder.
+8. **Cloudflare Worker** — set `APPS_SCRIPT_URL` secret, `wrangler deploy` (or use the GitHub Actions workflow).
+9. **Bot wiring** — from the script editor, run `setTelegramWebhook()` (points Telegram at the worker) and `setTelegramCommands()` (registers the slash-menu).
+10. **Trigger** — add an hourly trigger for `triggerEmailProcessing` (Triggers panel in the script editor).
+11. **Seed tenant 0** — run `adminSeedTenantZero()` once; optionally `adminAddEmailToTenantZero("you@gmail.com")` for each forwarder.
 
 That's it — the bot is live. Share it with others by just giving them the Telegram handle; they self-onboard with `/start`.
 
@@ -256,7 +249,6 @@ The trust model: you set up a one-time Gmail filter that matches a **fixed allow
 ├── AskTools.js             # /ask tool definitions, executor, system prompt
 ├── TenantRegistry.js       # Tenants tab CRUD, tenant lookup helpers
 ├── Onboarding.js           # /start, /register, /account, /ownsheet, sheet provisioning, setup email
-├── Dashboard.js            # /dashboard — Looker Studio Linking API URL builder + handler
 ├── Groups.js               # group provisioning, member onboarding, split/settle/stats UI + writes
 ├── GroupSheet.js           # group-sheet β-schema headers + open helper
 ├── AdminHelpers.js         # adminCreateTemplateSheet, adminProvisionTenantSheet, seed helpers
@@ -274,7 +266,7 @@ GitHub Actions on push to `main`:
 4. `clasp deploy` with deployment ID
 5. Deploy Cloudflare Worker via wrangler
 
-**Required GitHub Secrets**: `CLASP_TOKEN`, `DEPLOYMENT_ID`, `APPS_SCRIPT_URL`, plus every variable in `AConfig.js` (see step 3 above) — in particular `PROD_SHEET_ID`, `TEMPLATE_SHEET_ID`, `GROUP_TEMPLATE_SHEET_ID`, and `LOOKER_DASHBOARD_REPORT_ID`. Secret names remain `GROUP_CHAT_ID` and `PROD_SHEET_ID`; the deploy step maps them to `ADMIN_CHAT_ID` and `ADMIN_SHEET_ID` in the generated file.
+**Required GitHub Secrets**: `CLASP_TOKEN`, `DEPLOYMENT_ID`, `APPS_SCRIPT_URL`, plus every variable in `AConfig.js` (see step 3 above) — in particular `PROD_SHEET_ID`, `TEMPLATE_SHEET_ID`, and `GROUP_TEMPLATE_SHEET_ID`. Secret names remain `GROUP_CHAT_ID` and `PROD_SHEET_ID`; the deploy step maps them to `ADMIN_CHAT_ID` and `ADMIN_SHEET_ID` in the generated file.
 
 ## Troubleshooting
 

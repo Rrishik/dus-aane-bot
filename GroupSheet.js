@@ -3,8 +3,8 @@
 // Group sheets are provisioned per Telegram group when the bot is /start'd
 // in that group chat. The schema is intentionally different from personal
 // sheets — see G_*_COLUMN constants in Constants.js. Per-share rows make
-// settlement math (groupBy paid_by, share_holder) trivial and play nicely
-// with Looker Studio. Tx ID links the N rows of one transaction.
+// settlement math (groupBy paid_by, share_holder) trivial. Tx ID links
+// the N rows of one transaction.
 //
 // Provisioning lives in AdminHelpers.js (adminCreateGroupTemplateSheet,
 // adminProvisionGroupSheet). This file owns the per-sheet schema concerns.
