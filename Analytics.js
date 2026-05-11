@@ -282,9 +282,12 @@ function formatTrendsMessage(buckets, opts) {
   buckets.forEach(function (b, i) {
     var inr = b.debitByCurrency["INR"] || 0;
     var bar = makeBar(inr, buckets, "debit");
-    var amt = inrAmounts[i].padStart(maxInrWidth, " ");
+    // Pad to the LEFT of the ₹ so the symbol always sits flush against the
+    // number ("₹500" not "₹  500"). The column still right-aligns because
+    // every row gets the same total width up to the ₹.
+    var pad = " ".repeat(Math.max(0, maxInrWidth - inrAmounts[i].length));
     var label = b.label.padEnd(maxLabelWidth, " ");
-    msg += "`" + label + "  " + bar + "  ₹" + amt + "`\n";
+    msg += "`" + label + "  " + bar + "  " + pad + "₹" + inrAmounts[i] + "`\n";
   });
 
   // Non-INR debits — only buckets that have them, compact. Multi-currency
