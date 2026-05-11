@@ -111,6 +111,32 @@ const CATEGORY_EMOJIS = {
 // Gmail
 const MAILS_LOOKBACK_PERIOD = "1h";
 
+// Display symbols for the currencies we expect to see in bank emails. Any
+// code not in this map is rendered as-is (the original 3-letter code is a
+// safe fallback for unknowns and rarely-seen currencies). See
+// currencySymbol() in Analytics.js for the lookup.
+const CURRENCY_SYMBOLS = {
+  INR: "₹",
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  JPY: "¥",
+  CNY: "¥",
+  AUD: "A$",
+  CAD: "C$",
+  SGD: "S$",
+  HKD: "HK$",
+  NZD: "NZ$",
+  CHF: "CHF ",
+  AED: "AED ",
+  SAR: "SAR ",
+  THB: "฿",
+  KRW: "₩",
+  RUB: "₽",
+  TRY: "₺",
+  ZAR: "R "
+};
+
 // /ask quota — calls per tenant per IST day. Hard cap for everyone (no
 // premium tier yet); when the cap is hit we surface a "Premium coming soon"
 // upsell so we can measure who hits the limit before pricing/sizing premium.

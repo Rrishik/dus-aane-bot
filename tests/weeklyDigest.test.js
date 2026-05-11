@@ -22,6 +22,7 @@ beforeAll(() => {
     Session,
     Utilities,
     CATEGORY_EMOJIS: { "Food & Dining": "🍔", Shopping: "🛒" },
+    CURRENCY_SYMBOLS: { INR: "₹", USD: "$", EUR: "€", JPY: "¥" },
     escapeMarkdown: (s) => String(s).replace(/([_*`\[])/g, "\\$1")
   }));
 });
@@ -138,7 +139,9 @@ describe("formatWeeklyMessage", () => {
       categorySpend: { "Shopping|||INR": 500, "Shopping|||USD": 30 },
       topTransactions: []
     });
-    expect(msg).toContain("USD 30");
+    // Non-INR currencies now render with the currency symbol ("$30") instead
+    // of the 3-letter code ("USD 30") — see currencySymbol() in Analytics.js.
+    expect(msg).toContain("$30");
   });
 
   it("lists top transactions when present", () => {

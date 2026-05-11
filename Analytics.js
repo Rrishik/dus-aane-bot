@@ -27,191 +27,6 @@ function filterByMonth(transactions, year, month) {
   });
 }
 
-// ─── Monthly Analytics ───────────────────────────────────────────────
-
-function getMonthlyAnalytics(year, month, numMonths) {
-  numMonths = numMonths || 1;
-  var all = getAllTransactions();
-
-  var txns = [];
-  for (var i = numMonths - 1; i >= 0; i--) {
-    var d = new Date(year, month - i, 1);
-    txns = txns.concat(filterByMonth(all, d.getFullYear(), d.getMonth()));
-  }
-
-  if (txns.length === 0) return null;
-
-  var debits = txns.filter(function (t) {
-    return t.type === "Debit";
-  });
-
-  var spentByCurrency = sumByCurrency(debits);
-
-  // Category breakdown (uses ||| separator for backward compat with formatter)
-  var categorySpend = {};
-  debits.forEach(function (t) {
-    var key = t.category + "|||" + t.currency;
-    categorySpend[key] = (categorySpend[key] || 0) + t.amount;
-  });
-
-  // Previous period category data for deltas
-  var prevCategorySpend = {};
-  if (numMonths === 1) {
-    var prevMonth = new Date(year, month - 1, 1);
-    var prevTxns = filterByMonth(all, prevMonth.getFullYear(), prevMonth.getMonth());
-    var prevDebits = prevTxns.filter(function (t) {
-      return t.type === "Debit";
-    });
-    prevDebits.forEach(function (t) {
-      var key = t.category + "|||" + t.currency;
-      prevCategorySpend[key] = (prevCategorySpend[key] || 0) + t.amount;
-    });
-  }
-
-  // Top 5 transactions by amount
-  var topTransactions = debits
-    .slice()
-    .sort(function (a, b) {
-      return b.amount - a.amount;
-    })
-    .slice(0, 5)
-    .map(function (t) {
-      return { merchant: t.merchant, amount: t.amount, currency: t.currency, date: t.date };
-    });
-
-  // Split settlement data
-  var settlement = calcSplitSettlement(debits);
-
-  return {
-    totalTransactions: txns.length,
-    debitCount: debits.length,
-    spentByCurrency: spentByCurrency,
-    categorySpend: categorySpend,
-    prevCategorySpend: prevCategorySpend,
-    topTransactions: topTransactions,
-    settlement: settlement,
-    userSpend: aggregateByUser(debits)
-  };
-}
-
-function formatMonthlyMessage(year, month, data, numMonths) {
-  numMonths = numMonths || 1;
-  var tz = Session.getScriptTimeZone();
-  var endDate = new Date(year, month, 1);
-  var label;
-  if (numMonths === 1) {
-    label = Utilities.formatDate(endDate, tz, "MMMM yyyy");
-  } else {
-    var startDate = new Date(year, month - numMonths + 1, 1);
-    label = Utilities.formatDate(startDate, tz, "MMM yyyy") + " — " + Utilities.formatDate(endDate, tz, "MMM yyyy");
-  }
-
-  // Header with total
-  var inrTotal = data.spentByCurrency["INR"] || 0;
-  var msg = "📊 *" + label + "* — ₹" + formatAmount(inrTotal) + "\n\n";
-
-  // Other currencies if present
-  var otherCurs = Object.keys(data.spentByCurrency).filter(function (c) {
-    return c !== "INR" && data.spentByCurrency[c] > 0;
-  });
-  if (otherCurs.length > 0) {
-    var otherParts = otherCurs.map(function (c) {
-      return c + " " + formatAmount(data.spentByCurrency[c]);
-    });
-    msg += "🌍 " + otherParts.join(" · ") + "\n\n";
-  }
-
-  // Category breakdown — top 5 with deltas, rest collapsed
-  var sortedCats = Object.keys(data.categorySpend).sort(function (a, b) {
-    return data.categorySpend[b] - data.categorySpend[a];
-  });
-
-  var topCats = sortedCats.slice(0, 5);
-  var maxCatNameLen = 0;
-  topCats.forEach(function (catKey) {
-    var catName = shortCategoryName(catKey.split("|||")[0]);
-    if (catName.length > maxCatNameLen) maxCatNameLen = catName.length;
-  });
-
-  topCats.forEach(function (catKey) {
-    var parts = catKey.split("|||");
-    var cat = parts[0];
-    var amount = data.categorySpend[catKey];
-    var emoji = CATEGORY_EMOJIS[cat] || "•";
-    var shortName = shortCategoryName(cat);
-    var padded = shortName + " ".repeat(Math.max(0, maxCatNameLen - shortName.length));
-
-    msg += emoji + " `" + padded + "  ₹" + formatAmount(amount) + "`\n";
-  });
-
-  // Top 5 transactions by amount
-  if (data.topTransactions && data.topTransactions.length > 0) {
-    msg += "\n💳 *Top Transactions:*\n";
-    data.topTransactions.forEach(function (t, i) {
-      msg += i + 1 + ". " + escapeMarkdown(t.merchant || "Unknown") + "  ₹" + formatAmount(t.amount) + "\n";
-    });
-  }
-
-  // Per-user total spend. Skipped in solo personal sheets (1 user) since the
-  // total is already in the header line and the username adds no info.
-  var users = Object.keys(data.userSpend);
-  if (users.length > 1) {
-    msg += "\n";
-    users.forEach(function (user) {
-      var perCur = data.userSpend[user];
-      var inr = perCur["INR"] || 0;
-      msg += "👤 " + escapeMarkdown(user) + "  ₹" + formatAmount(inr) + "\n";
-    });
-  }
-
-  // Split + Partner settlement. Only meaningful with 2+ users on the sheet.
-  // Group splits live in their own group sheet and don't surface here.
-  var s = data.settlement;
-  var sharedCount = s ? (s.splitCount || 0) + (s.partnerCount || 0) : 0;
-  if (s && sharedCount > 0 && users.length > 1) {
-    var splitInr = (s.splitTotal && s.splitTotal["INR"]) || 0;
-    var partnerInr = (s.partnerTotal && s.partnerTotal["INR"]) || 0;
-    msg += "\n✂️ *Shared Total:* ₹" + formatAmount(splitInr + partnerInr);
-    if (partnerInr > 0) {
-      msg += "  _(split ₹" + formatAmount(splitInr) + " + partner ₹" + formatAmount(partnerInr) + ")_";
-    }
-    msg += "\n";
-    s.users.forEach(function (u) {
-      var paid = (s.userPaid[u] || {})["INR"] || 0;
-      msg += "   " + escapeMarkdown(u) + " paid  ₹" + formatAmount(paid) + "\n";
-    });
-
-    // Settlement lines
-    var inrSettlement = s.settlements["INR"];
-    if (inrSettlement) {
-      var overpaid = [];
-      var underpaid = [];
-      s.users.forEach(function (u) {
-        var bal = inrSettlement.balances[u];
-        if (bal > 0.01) overpaid.push({ user: u, amount: bal });
-        else if (bal < -0.01) underpaid.push({ user: u, amount: Math.abs(bal) });
-      });
-      underpaid.forEach(function (debtor) {
-        overpaid.forEach(function (creditor) {
-          var amt = Math.min(debtor.amount, creditor.amount);
-          if (amt > 0.01) {
-            msg +=
-              "   ➡️ " +
-              escapeMarkdown(debtor.user) +
-              " owes " +
-              escapeMarkdown(creditor.user) +
-              " ₹" +
-              formatAmount(amt) +
-              "\n";
-          }
-        });
-      });
-    }
-  }
-
-  return msg;
-}
-
 // ─── Weekly Analytics ────────────────────────────────────────────────
 
 // Rolling 7-day window ending yesterday (relative to `today`). Day-of-week
@@ -297,7 +112,7 @@ function formatWeeklyMessage(range, data) {
   });
   if (otherCurs.length > 0) {
     var otherParts = otherCurs.map(function (c) {
-      return c + " " + formatAmount(data.spentByCurrency[c]);
+      return currencySymbol(c) + formatAmount(data.spentByCurrency[c]);
     });
     msg += "🌍 " + otherParts.join(" · ") + "\n";
   }
@@ -430,7 +245,7 @@ function formatTrendsMessage(months) {
         var d = new Date(m.year, m.month, 1);
         var label = Utilities.formatDate(d, tz, "MMM yy");
         var parts = others.map(function (c) {
-          return c + " " + formatAmount(m.debitByCurrency[c]);
+          return currencySymbol(c) + formatAmount(m.debitByCurrency[c]);
         });
         msg += "`" + label + "` " + parts.join(", ") + "\n";
       }
@@ -449,7 +264,7 @@ function formatTrendsMessage(months) {
         var d = new Date(m.year, m.month, 1);
         var label = Utilities.formatDate(d, tz, "MMM yy");
         var parts = curs.map(function (c) {
-          return c + " " + formatAmount(m.creditByCurrency[c]);
+          return currencySymbol(c) + formatAmount(m.creditByCurrency[c]);
         });
         msg += "`" + label + "` " + parts.join(", ") + "\n";
       }
@@ -554,7 +369,7 @@ function formatWhoOwesMessage(year, month, data) {
   msg += "💳 *Each Person Paid:*\n";
   data.users.forEach(function (user) {
     var parts = Object.keys(data.userPaid[user]).map(function (cur) {
-      return cur + " " + formatAmount(data.userPaid[user][cur]);
+      return currencySymbol(cur) + formatAmount(data.userPaid[user][cur]);
     });
     msg += "• " + escapeMarkdown(user) + ": " + parts.join(", ") + "\n";
   });
@@ -563,9 +378,10 @@ function formatWhoOwesMessage(year, month, data) {
   msg += "\n⚖️ *Settlement:*\n";
   Object.keys(data.settlements).forEach(function (cur) {
     var s = data.settlements[cur];
-    var breakdown = "split " + formatAmount(s.splitTotal);
-    if (s.partnerTotal > 0) breakdown += ", partner " + formatAmount(s.partnerTotal);
-    msg += "\n*" + cur + "* (total: " + formatAmount(s.total) + " — " + breakdown + ")\n";
+    var sym = currencySymbol(cur);
+    var breakdown = "split " + sym + formatAmount(s.splitTotal);
+    if (s.partnerTotal > 0) breakdown += ", partner " + sym + formatAmount(s.partnerTotal);
+    msg += "\n*" + cur + "* (total: " + sym + formatAmount(s.total) + " — " + breakdown + ")\n";
 
     var overpaid = [];
     var underpaid = [];
@@ -587,8 +403,7 @@ function formatWhoOwesMessage(year, month, data) {
               "* owes *" +
               escapeMarkdown(creditor.user) +
               "* " +
-              cur +
-              " " +
+              sym +
               formatAmount(amt) +
               "\n";
           }
@@ -614,6 +429,18 @@ function formatAmount(num) {
     minimumFractionDigits: isWhole ? 0 : 2,
     maximumFractionDigits: 2
   });
+}
+
+// Currency-code → display prefix. Common currencies render with their symbol
+// (no trailing space: "₹100", "$50", "¥1000"). Currencies without a widely
+// recognized one-glyph symbol fall through to "CODE " with a trailing space
+// ("AED 200", "CHF 50"). Unknown codes use the same "CODE " fallback so we
+// never silently swallow a new currency.
+function currencySymbol(code) {
+  if (CURRENCY_SYMBOLS && Object.prototype.hasOwnProperty.call(CURRENCY_SYMBOLS, code)) {
+    return CURRENCY_SYMBOLS[code];
+  }
+  return (code || "") + " ";
 }
 
 // Display-only short labels for the category list. Keeps the analytics message

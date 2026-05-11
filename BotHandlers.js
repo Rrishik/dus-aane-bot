@@ -126,7 +126,7 @@ function handleHelpCommand(chatId, username) {
     `*Commands*\n` +
     `• /ask — ask anything about your spending\n` +
     `   _e.g. /ask how much on food last month?_\n` +
-    `• /stats — dashboard: recent, monthly, trends, who owes\n` +
+    `• /stats — dashboard: recent, trends, who owes\n` +
     `• /register — add another Gmail to forward from\n` +
     `• /account — status, sheet link, resend setup\n` +
     `• /help — this message`;
@@ -287,7 +287,7 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    // Handle stats callbacks: stats_monthly, stats_trends, stats_whoowes
+    // Handle stats callbacks: stats_recent, stats_trends, stats_whoowes
     if (action === "stats") {
       return handleStatsCallback(chatId, telegramMessageId, callbackQueryId, callbackPayload);
     }
@@ -623,7 +623,7 @@ function buildRecentTransactionsMessage(limit, userFilter) {
     var currency = row[CURRENCY_COLUMN - 1] || "INR";
 
     var emoji = type === "Debit" ? "💸" : "💰";
-    var money = (currency === "INR" ? "₹" : currency + " ") + formatAmount(amount);
+    var money = currencySymbol(currency) + formatAmount(amount);
     var catLabel = category ? " · " + shortCategoryName(category) : "";
 
     // Two lines per entry, blank line between. No ─── dividers — line
@@ -646,15 +646,16 @@ function handleStatsCommand(chatId) {
 }
 
 // Pure-data builder — used both by /stats entry and the back button.
-// Two rows of two keeps each button label readable on narrow phone screens;
-// a single row of four wraps awkwardly with the emoji prefixes.
+// One row of three keeps each button label readable on narrow phone screens.
+// Monthly was dropped: Trends already shows each month's INR debit total as
+// a bar chart and gives MoM deltas + biggest category movers, which covered
+// the same intent more compactly. Top-5-txns-by-amount and per-user breakdown
+// (Monthly's other features) are recoverable via /ask for the rare reader
+// who wants them.
 function buildStatsMenuKeyboard() {
   return [
     [
       { text: "🕒 Recent", callback_data: "stats_recent" },
-      { text: "📊 Monthly", callback_data: "stats_monthly" }
-    ],
-    [
       { text: "📉 Trends", callback_data: "stats_trends" },
       { text: "💰 Who Owes", callback_data: "stats_whoowes" }
     ]
@@ -752,23 +753,7 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
       return;
     }
 
-    if (subAction === "monthly") {
-      var data = getMonthlyAnalytics(year, month);
-      if (!data) {
-        sendTelegramMessage(chatId, "📊 *No transactions found.*", {
-          parse_mode: "Markdown",
-          message_id: telegramMessageId,
-          reply_markup: { inline_keyboard: [buildStatsBackRow()] }
-        });
-        return;
-      }
-      var msg = formatMonthlyMessage(year, month, data);
-      sendTelegramMessage(chatId, msg, {
-        parse_mode: "Markdown",
-        message_id: telegramMessageId,
-        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month), buildStatsBackRow()] }
-      });
-    } else if (subAction === "trends") {
+    if (subAction === "trends") {
       var months = getTrendsAnalytics(6);
       var msg = formatTrendsMessage(months);
       sendTelegramMessage(chatId, msg, {
@@ -805,11 +790,13 @@ function buildStatsBackRow() {
 
 function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, payload) {
   try {
-    // payload: "YYYY_M" or "YYYY_M_whoowes"
+    // payload: "YYYY_M_whoowes". Month-nav now exists only inside Who Owes —
+    // Monthly was retired (Trends covers the same intent across 6 months).
+    // We still parse a `mode` for forward-compat, but only "whoowes" is
+    // currently produced by buildMonthNavButtons.
     var parts = payload.split("_");
     var year = parseInt(parts[0], 10);
     var month = parseInt(parts[1], 10);
-    var mode = parts[2] || "monthly"; // "monthly" or "whoowes"
 
     if (action === "monthprev") {
       month--;
@@ -825,43 +812,23 @@ function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, actio
       }
     }
 
-    if (mode === "whoowes") {
-      var data = getWhoOwesAnalytics(year, month);
-      if (!data) {
-        var tz = Session.getScriptTimeZone();
-        var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
-        sendTelegramMessage(chatId, "💰 *No split transactions in " + label + "*", {
-          parse_mode: "Markdown",
-          message_id: telegramMessageId,
-          reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
-        });
-        return;
-      }
-      var msg = formatWhoOwesMessage(year, month, data);
-      sendTelegramMessage(chatId, msg, {
+    var data = getWhoOwesAnalytics(year, month);
+    if (!data) {
+      var tz = Session.getScriptTimeZone();
+      var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
+      sendTelegramMessage(chatId, "💰 *No split transactions in " + label + "*", {
         parse_mode: "Markdown",
         message_id: telegramMessageId,
         reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
       });
-    } else {
-      var data = getMonthlyAnalytics(year, month);
-      if (!data) {
-        var tz = Session.getScriptTimeZone();
-        var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
-        sendTelegramMessage(chatId, "📊 *No transactions in " + label + "*", {
-          parse_mode: "Markdown",
-          message_id: telegramMessageId,
-          reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month), buildStatsBackRow()] }
-        });
-        return;
-      }
-      var msg = formatMonthlyMessage(year, month, data);
-      sendTelegramMessage(chatId, msg, {
-        parse_mode: "Markdown",
-        message_id: telegramMessageId,
-        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month), buildStatsBackRow()] }
-      });
+      return;
     }
+    var msg = formatWhoOwesMessage(year, month, data);
+    sendTelegramMessage(chatId, msg, {
+      parse_mode: "Markdown",
+      message_id: telegramMessageId,
+      reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
+    });
   } catch (error) {
     console.error("Error in handleMonthNavigation:", error.message, error.stack);
     sendTelegramMessage(chatId, "❌ *Error:* " + escapeMarkdown(error.message));

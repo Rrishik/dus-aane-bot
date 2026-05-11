@@ -30,7 +30,7 @@ function setTelegramCommands() {
     { command: "/start", description: "Onboard / show welcome" },
     { command: "/register", description: "Register a Gmail address to forward from" },
     { command: "/ask", description: "Ask anything about your spending" },
-    { command: "/stats", description: "Dashboard: recent, monthly, trends, who owes" },
+    { command: "/stats", description: "Dashboard: recent, trends, who owes" },
     { command: "/account", description: "Account & settings" },
     { command: "/help", description: "Show available commands" }
   ];
@@ -323,7 +323,7 @@ function getTransactionMessageAsString(transaction_details, user) {
   var category = transaction_details.category;
   var currency = transaction_details.currency || "INR";
   var rawAmount = Number(transaction_details.amount) || 0;
-  var money = (currency === "INR" ? "₹" : currency + " ") + formatAmount(rawAmount);
+  var money = currencySymbol(currency) + formatAmount(rawAmount);
 
   var typeEmoji = transaction_details.transaction_type === "Debit" ? "💸" : "💰";
   var header = merchant
