@@ -163,15 +163,7 @@ function formatWeeklyMessage(range, data) {
       var dateStr = t.date instanceof Date ? Utilities.formatDate(t.date, tz, "MMM dd") : t.date;
       // "1." not "1\." — legacy Markdown doesn't escape ".".
       msg +=
-        i +
-        1 +
-        ". " +
-        escapeMarkdown(t.merchant || "Unknown") +
-        "  ₹" +
-        formatAmount(t.amount) +
-        "  " +
-        dateStr +
-        "\n";
+        i + 1 + ". " + escapeMarkdown(t.merchant || "Unknown") + "  ₹" + formatAmount(t.amount) + "  " + dateStr + "\n";
     });
   }
 
