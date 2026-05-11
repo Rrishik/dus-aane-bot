@@ -268,10 +268,13 @@ function formatTrendsMessage(buckets, opts) {
     return Math.max(w, b.label.length);
   }, 0);
 
-  // INR debits with bar chart — right-align amounts to a common width so the
-  // rightmost digit lines up across buckets. Use the compact "12.3K" form
-  // since the bar already conveys magnitude — the exact rupee count is
-  // noise here and steals horizontal space the bar needs.
+  // INR debits with bar chart. Use the compact "12.3K" form since the bar
+  // already conveys magnitude — the exact rupee count would just steal
+  // horizontal space the bar needs. Layout: the ₹ glyph is anchored to a
+  // fixed column (label width + bar width + 2 separator spaces) so it
+  // lines up vertically across rows, with the amount left-flowing after.
+  // Trailing pad keeps the closing backtick at a uniform column too,
+  // which is purely cosmetic but avoids ragged code-span edges.
   msg += "🔴 *Debits (INR):*\n";
   var inrAmounts = buckets.map(function (b) {
     return formatAmountCompact(b.debitByCurrency["INR"] || 0);
@@ -282,12 +285,9 @@ function formatTrendsMessage(buckets, opts) {
   buckets.forEach(function (b, i) {
     var inr = b.debitByCurrency["INR"] || 0;
     var bar = makeBar(inr, buckets, "debit");
-    // Pad to the LEFT of the ₹ so the symbol always sits flush against the
-    // number ("₹500" not "₹  500"). The column still right-aligns because
-    // every row gets the same total width up to the ₹.
-    var pad = " ".repeat(Math.max(0, maxInrWidth - inrAmounts[i].length));
+    var amt = inrAmounts[i].padEnd(maxInrWidth, " ");
     var label = b.label.padEnd(maxLabelWidth, " ");
-    msg += "`" + label + "  " + bar + "  " + pad + "₹" + inrAmounts[i] + "`\n";
+    msg += "`" + label + "  " + bar + "  ₹" + amt + "`\n";
   });
 
   // Non-INR debits — only buckets that have them, compact. Multi-currency
@@ -306,7 +306,7 @@ function formatTrendsMessage(buckets, opts) {
       });
       if (others.length > 0) {
         var parts = others.map(function (c) {
-          return currencySymbol(c) + formatAmount(b.debitByCurrency[c]);
+          return currencySymbol(c) + formatAmountCompact(b.debitByCurrency[c]);
         });
         msg += "`" + b.label.padEnd(maxLabelWidth, " ") + "  " + parts.join(", ") + "`\n";
       }
@@ -323,7 +323,7 @@ function formatTrendsMessage(buckets, opts) {
       var curs = Object.keys(b.creditByCurrency);
       if (curs.length > 0) {
         var parts = curs.map(function (c) {
-          return currencySymbol(c) + formatAmount(b.creditByCurrency[c]);
+          return currencySymbol(c) + formatAmountCompact(b.creditByCurrency[c]);
         });
         msg += "`" + b.label.padEnd(maxLabelWidth, " ") + "  " + parts.join(", ") + "`\n";
       }
@@ -347,7 +347,7 @@ function formatTrendsMessage(buckets, opts) {
         ":* " +
         arrow +
         "₹" +
-        formatAmount(Math.abs(delta)) +
+        formatAmountCompact(Math.abs(delta)) +
         " (" +
         (delta >= 0 ? "+" : "") +
         pct +
@@ -389,7 +389,7 @@ function formatTrendsMessage(buckets, opts) {
           " " +
           arrow +
           " ₹" +
-          formatAmount(Math.abs(d.delta)) +
+          formatAmountCompact(Math.abs(d.delta)) +
           "\n";
       });
     }

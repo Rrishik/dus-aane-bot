@@ -161,9 +161,11 @@ describe("formatTrendsMessage (shared core)", () => {
       buildTrendBucket([txn({ amount: 54321, currency: "INR" })], "May 04")
     ];
     var msg = formatTrendsMessage(buckets);
-    // Bar-row amounts use the compact form: sub-1K stays integer, ≥1K → "X.XK".
-    expect(msg).toMatch(/`Apr 27.*₹\s*500`/);
-    expect(msg).toMatch(/`May 04.*₹54\.3K`/);
+    // Bar-row amounts use the compact form (sub-1K integer, ≥1K → "X.XK")
+    // and are ₹-anchored — the ₹ sits flush against the digits, with any
+    // pad spaces *after* the amount so the symbol column aligns vertically.
+    expect(msg).toMatch(/`Apr 27.*₹500\s*`/);
+    expect(msg).toMatch(/`May 04.*₹54\.3K\s*`/);
   });
 
   it("hides Credits section entirely when no credits exist", () => {
@@ -182,6 +184,7 @@ describe("formatTrendsMessage (shared core)", () => {
     ];
     var msg = formatTrendsMessage(buckets);
     expect(msg).toContain("*Credits:*");
-    expect(msg).toContain("₹5000");
+    // Credits use the compact form too: 5000 → "5.0K".
+    expect(msg).toContain("₹5.0K");
   });
 });
