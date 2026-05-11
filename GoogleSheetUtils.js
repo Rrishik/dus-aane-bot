@@ -53,12 +53,15 @@ function getCategoryListForType(txnType) {
   return txnType && txnType.toString().toLowerCase() === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
 }
 
-// Fetch a single row from the main transactions sheet as a 0-indexed array.
-// Width covers all known columns up to EMAIL_LINK_COLUMN; extend the constant
-// (and this fetch implicitly stays in sync) when a new column is added.
-function getRowData(rowNumber) {
-  var sheet = getSpreadsheet().getSheets()[0];
-  return sheet.getRange(rowNumber, 1, 1, EMAIL_LINK_COLUMN).getValues()[0];
+// Normalized "is this a debit?" check. The sheet cell is supposed to hold
+// exactly "Debit" or "Credit" (produced by the LLM extraction prompt and the
+// backfill seed), but in practice we've seen "DEBIT"/"debit"/" Debit"/empty
+// strings sneak in via manual edits, backfills, or LLM drift. A strict
+// `type === "Debit"` check then falls through to the credit branch and
+// every row in /recent renders with the credit emoji. Normalize once here
+// and let callers use this everywhere instead of duplicating the check.
+function isDebit(txnType) {
+  return (txnType || "").toString().trim().toLowerCase() === "debit";
 }
 
 // Find the row number where a column has a specific value. Returns -1 if not found.
@@ -137,9 +140,7 @@ function ensureSheetHeaders() {
       "Split",
       "Message ID",
       "Currency",
-      "Email Link",
-      "Group Ref",
-      "Group Message ID"
+      "Email Link"
     ]);
   }
 }

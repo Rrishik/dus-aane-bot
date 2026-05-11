@@ -629,7 +629,7 @@ function buildRecentTransactionsMessage(limit, userFilter) {
     var category = row[CATEGORY_COLUMN - 1] || "";
     var currency = row[CURRENCY_COLUMN - 1] || "INR";
 
-    var emoji = type === "Debit" ? "💸" : "💰";
+    var emoji = isDebit(type) ? "📤" : "📥";
     var money = currencySymbol(currency) + formatAmount(amount);
     var catLabel = category ? " · " + shortCategoryName(category) : "";
 

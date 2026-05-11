@@ -8,7 +8,7 @@ const CREDIT_CATEGORIES = ["Salary", "Refund"];
 
 const SYMBOLS = [
   "getCategoryListForType",
-  "getRowData",
+  "isDebit",
   "findRowByColumnValue",
   "updateGoogleSheetCellWithFeedback",
   "ensureSheetHeaders",
@@ -43,7 +43,6 @@ beforeEach(() => {
     ADMIN_CHAT_ID: "CHAT",
     CATEGORIES,
     CREDIT_CATEGORIES,
-    EMAIL_LINK_COLUMN: 11,
     Logger: { log: () => {} }
   });
 });
@@ -63,25 +62,20 @@ describe("getCategoryListForType", () => {
   });
 });
 
-describe("getRowData", () => {
-  it("returns the row as a 0-indexed array", () => {
-    seed(mainSheet(), [
-      Array(11).fill("h"),
-      ["e1", "t1", "Amazon", 100, "Shopping", "Debit", "me", "", "msg-1", "INR", "link-1"]
-    ]);
-    var row = api.getRowData(2);
-    expect(row[2]).toBe("Amazon");
-    expect(row[8]).toBe("msg-1");
+describe("isDebit", () => {
+  it("matches 'Debit' case-insensitively and trimmed", () => {
+    expect(api.isDebit("Debit")).toBe(true);
+    expect(api.isDebit("debit")).toBe(true);
+    expect(api.isDebit("DEBIT")).toBe(true);
+    expect(api.isDebit("  Debit  ")).toBe(true);
   });
 
-  it("covers all columns up to EMAIL_LINK_COLUMN (was hardcoded to 10, truncating col K)", () => {
-    seed(mainSheet(), [
-      Array(11).fill("h"),
-      ["e1", "t1", "Amazon", 100, "Shopping", "Debit", "me", "", "msg-1", "INR", "link-1"]
-    ]);
-    var row = api.getRowData(2);
-    expect(row.length).toBe(11);
-    expect(row[10]).toBe("link-1"); // would be undefined under old width=10
+  it("returns false for credit and empty/missing values", () => {
+    expect(api.isDebit("Credit")).toBe(false);
+    expect(api.isDebit("")).toBe(false);
+    expect(api.isDebit(null)).toBe(false);
+    expect(api.isDebit(undefined)).toBe(false);
+    expect(api.isDebit("Unknown")).toBe(false);
   });
 });
 
