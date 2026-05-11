@@ -118,7 +118,10 @@ function formatWeeklyMessage(range, data) {
   }
   msg += "\n";
 
-  // Top 5 categories with collapsed remainder
+  // Top 5 categories with collapsed remainder. ₹ is anchored at a fixed
+  // column (after the padded name + 2 separator spaces) so the symbol
+  // lines up vertically across rows; amounts then flow right, with a
+  // trailing pad so the closing backtick column is uniform too.
   var sortedCats = Object.keys(data.categorySpend).sort(function (a, b) {
     return data.categorySpend[b] - data.categorySpend[a];
   });
@@ -128,37 +131,46 @@ function formatWeeklyMessage(range, data) {
     var name = catKey.split("|||")[0];
     if (name.length > maxCatNameLen) maxCatNameLen = name.length;
   });
-  topCats.forEach(function (catKey) {
+  var topAmounts = topCats.map(function (catKey) {
+    return formatAmount(data.categorySpend[catKey]);
+  });
+  var maxAmtLen = topAmounts.reduce(function (w, a) {
+    return Math.max(w, a.length);
+  }, 0);
+  topCats.forEach(function (catKey, idx) {
     var parts = catKey.split("|||");
     var cat = parts[0];
-    var amount = data.categorySpend[catKey];
     var emoji = CATEGORY_EMOJIS[cat] || "•";
     var padded = cat + " ".repeat(Math.max(0, maxCatNameLen - cat.length));
-    msg += emoji + " `" + padded + "  ₹" + formatAmount(amount) + "`\n";
+    var amt = topAmounts[idx] + " ".repeat(Math.max(0, maxAmtLen - topAmounts[idx].length));
+    msg += emoji + " `" + padded + "  ₹" + amt + "`\n";
   });
   if (sortedCats.length > 5) {
     var restAmount = 0;
     sortedCats.slice(5).forEach(function (catKey) {
       restAmount += data.categorySpend[catKey];
     });
-    msg +=
-      "   `\\+" +
-      (sortedCats.length - 5) +
-      " more" +
-      " ".repeat(Math.max(0, maxCatNameLen - 6)) +
-      "  ₹" +
-      formatAmount(restAmount) +
-      "`\n";
+    // "+N more" label sits in the same column as the category name. No
+    // backslash before the "+" — inside a code span Markdown escapes are
+    // literal characters, so "\+" used to render as a visible backslash.
+    var moreLabel = "+" + (sortedCats.length - 5) + " more";
+    var labelPad = " ".repeat(Math.max(0, maxCatNameLen - moreLabel.length));
+    var restAmt = formatAmount(restAmount);
+    var restPad = " ".repeat(Math.max(0, maxAmtLen - restAmt.length));
+    msg += "   `" + moreLabel + labelPad + "  ₹" + restAmt + restPad + "`\n";
   }
 
   if (data.topTransactions && data.topTransactions.length > 0) {
     msg += "\n💳 *Top:*\n";
     data.topTransactions.forEach(function (t, i) {
       var dateStr = t.date instanceof Date ? Utilities.formatDate(t.date, tz, "MMM dd") : t.date;
+      // "1." not "1\\." — the backslash was leftover from a MarkdownV2
+      // experiment; in legacy Markdown "." is not a special char, so
+      // escaping it produced a visible backslash in the rendered message.
       msg +=
         i +
         1 +
-        "\\. " +
+        ". " +
         escapeMarkdown(t.merchant || "Unknown") +
         "  ₹" +
         formatAmount(t.amount) +

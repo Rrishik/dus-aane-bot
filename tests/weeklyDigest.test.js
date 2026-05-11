@@ -127,7 +127,9 @@ describe("formatWeeklyMessage", () => {
       categorySpend: cats,
       topTransactions: []
     });
-    expect(msg).toContain("\\+2 more");
+    // No backslash escape — "+" isn't a special char in legacy Markdown,
+    // so the previous "\\+2 more" rendered as a visible backslash in chat.
+    expect(msg).toContain("+2 more");
     expect(msg).not.toContain("F  ₹"); // F is in collapsed bucket
   });
 
