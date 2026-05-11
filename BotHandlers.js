@@ -672,32 +672,42 @@ function buildStatsMenuKeyboard() {
 // ─── Ask Command (AI tool-calling) ───────────────────────────────────
 
 function handleAskCommand(chatId, messageText) {
-  var question = messageText.replace(/^\/ask(@\w+)?\s*/i, "").trim();
+  try {
+    var question = messageText.replace(/^\/ask(@\w+)?\s*/i, "").trim();
 
-  // Tapped /ask from the slash menu (or sent /ask with no question): stash a
-  // pending flag and prompt for the question. The next plain-text message
-  // from this chat is consumed by handleAskQuestionReply. Mirrors the
-  // /register-without-address flow.
-  if (!question) {
-    PropertiesService.getScriptProperties().setProperty("pending_ask_" + chatId, "1");
-    sendTelegramMessage(
-      chatId,
-      "❓ *What would you like to know about your spending?*\n\n" +
-        "_Examples:_\n" +
-        "• How much did we spend on food?\n" +
-        "• Top merchants this month\n" +
-        "• Who owes whom in March?\n" +
-        "• Compare grocery spending Feb vs Mar\n\n" +
-        "_Reply with your question, or send_ `/ask <question>` _directly._",
-      {
-        parse_mode: "Markdown",
-        reply_markup: { force_reply: true, input_field_placeholder: "Ask about your spending…" }
-      }
-    );
-    return;
+    // Tapped /ask from the slash menu (or sent /ask with no question): stash
+    // a pending flag and prompt for the question. The next plain-text message
+    // from this chat is consumed by handleAskQuestionReply. Mirrors the
+    // /register-without-address flow. Plain text (no parse_mode) — keeps the
+    // prompt bullet-proof against future markdown-special chars in the copy.
+    if (!question) {
+      PropertiesService.getScriptProperties().setProperty("pending_ask_" + chatId, "1");
+      sendTelegramMessage(
+        chatId,
+        "❓ What would you like to know about your spending?\n\n" +
+          "Examples:\n" +
+          "• How much did we spend on food?\n" +
+          "• Top merchants this month\n" +
+          "• Who owes whom in March?\n" +
+          "• Compare grocery spending Feb vs Mar\n\n" +
+          "Reply with your question, or send /ask <question> directly.",
+        {
+          reply_markup: { force_reply: true, input_field_placeholder: "Ask about your spending…" }
+        }
+      );
+      return;
+    }
+
+    // Direct /ask <question>: clear any stale pending-ask flag so a follow-up
+    // plain message isn't accidentally consumed as another question.
+    PropertiesService.getScriptProperties().deleteProperty("pending_ask_" + chatId);
+    runAskFlow(chatId, question);
+  } catch (e) {
+    console.error("handleAskCommand failed:", e && e.message, e && e.stack);
+    try {
+      sendTelegramMessage(chatId, "❌ Something went wrong handling /ask. Please try again.");
+    } catch (_) {}
   }
-
-  runAskFlow(chatId, question);
 }
 
 // Consume a plain-text reply when the user is mid-/ask flow. Returns true
@@ -718,35 +728,46 @@ function handleAskQuestionReply(chatId, messageText) {
 
 // Shared core: quota → typing indicator → LLM loop → send answer. Used by
 // both the direct /ask <question> path and the pending-input reply path.
+// Any uncaught throw inside the LLM loop, sheet read, or quota update is
+// surfaced to the user as a chat message — silent failure here means the
+// user sees nothing and assumes /ask is broken.
 function runAskFlow(chatId, question) {
-  // Daily /ask cap. consumeAskQuota is atomic (LockService) and tracks both
-  // the daily counter and lifetime/cap-hit metrics on the Tenants row. We
-  // consume *before* spending Azure tokens; if runAskLoop later throws we
-  // refund so a failed call doesn't burn a slot.
-  var quota = consumeAskQuota(chatId);
-  if (!quota.allowed) {
-    sendTelegramMessage(chatId, formatAskCapHitMessage(new Date()), {
-      reply_markup: buildAskCapHitKeyboard()
-    });
-    return;
-  }
-
-  // Show "typing..." in the chat header instead of a "🤔 Thinking..." message.
-  // Telegram clears the indicator automatically when the bot's next message
-  // arrives, so there's nothing to delete or edit on success. The indicator
-  // expires after ~5s, so runAskLoop re-emits it before each LLM iteration
-  // via the onProgress callback (most /ask runs take 5-15s).
-  sendChatAction(chatId, "typing");
-
+  var quotaConsumed = false;
   try {
+    // Daily /ask cap. consumeAskQuota is atomic (LockService) and tracks both
+    // the daily counter and lifetime/cap-hit metrics on the Tenants row. We
+    // consume *before* spending Azure tokens; if runAskLoop later throws we
+    // refund so a failed call doesn't burn a slot.
+    var quota = consumeAskQuota(chatId);
+    if (!quota.allowed) {
+      sendTelegramMessage(chatId, formatAskCapHitMessage(new Date()), {
+        reply_markup: buildAskCapHitKeyboard()
+      });
+      return;
+    }
+    quotaConsumed = true;
+
+    // Show "typing..." in the chat header instead of a "🤔 Thinking..." message.
+    // Telegram clears the indicator automatically when the bot's next message
+    // arrives, so there's nothing to delete or edit on success. The indicator
+    // expires after ~5s, so runAskLoop re-emits it before each LLM iteration
+    // via the onProgress callback (most /ask runs take 5-15s).
+    sendChatAction(chatId, "typing");
+
     var answer = runAskLoop(question, function () {
       sendChatAction(chatId, "typing");
     });
     sendTelegramMessage(chatId, escapeMarkdown(answer));
   } catch (error) {
-    refundAskQuota(chatId);
-    console.error("Error in runAskFlow:", error.message, error.stack);
-    sendTelegramMessage(chatId, "❌ Something went wrong. Try /stats for preset analytics.");
+    if (quotaConsumed) {
+      try {
+        refundAskQuota(chatId);
+      } catch (_) {}
+    }
+    console.error("runAskFlow failed:", error && error.message, error && error.stack);
+    try {
+      sendTelegramMessage(chatId, "❌ Something went wrong. Try /stats for preset analytics.");
+    } catch (_) {}
   }
 }
 
