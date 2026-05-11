@@ -311,12 +311,26 @@ function buildCategoryKeyboard(emailMessageId, categories, prefix) {
   return { inline_keyboard: rows };
 }
 
-// Function to escape special characters for Markdown
+// Escape special characters for Telegram **legacy** Markdown (parse_mode:
+// "Markdown"). Only four chars are syntactically special in legacy Markdown:
+//   _   italic
+//   *   bold
+//   [   link start (also implies ] paired in `[text](url)` — Telegram is
+//       lenient about stray `]` so we don't escape it)
+//   `   inline code / fenced code
+//
+// We deliberately do NOT escape MarkdownV2's extra specials (`( ) ~ > # + =
+// | { } ! .`). In legacy Markdown those chars are literal, and prefixing them
+// with a backslash leaks the backslash into the rendered output — that's
+// where the "\(May 01 to May 05\)" visible noise in /ask answers came from.
+//
+// If we ever move to MarkdownV2 (better support for nested formatting), this
+// helper needs to grow the broader set + add escapes for `\\` itself.
 function escapeMarkdown(text) {
   if (typeof text !== "string") {
     return text;
   }
-  return text.replace(/([_*\[\]()~`>#+=|{}!])/g, "\\$1");
+  return text.replace(/([_*\[`])/g, "\\$1");
 }
 
 // --- Merged from MessageUtils.js ---

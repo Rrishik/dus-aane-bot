@@ -117,7 +117,7 @@ function handleMessage(update) {
         var confirmMsg = "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*";
         if (resolved && resolved.category) {
           updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, "");
-          confirmMsg += " \\(" + escapeMarkdown(resolved.category) + "\\)";
+          confirmMsg += " (" + escapeMarkdown(resolved.category) + ")";
         }
         sendTelegramMessage(chatId, confirmMsg, {
           parse_mode: "Markdown"
