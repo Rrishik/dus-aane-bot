@@ -648,25 +648,32 @@ function buildRecentTransactionsMessage(limit, userFilter) {
 function handleStatsCommand(chatId) {
   sendTelegramMessage(chatId, "📊 *Stats* — pick a view:", {
     parse_mode: "Markdown",
-    reply_markup: { inline_keyboard: buildStatsMenuKeyboard() }
+    reply_markup: { inline_keyboard: buildStatsMenuKeyboard(getCurrentTenant()) }
   });
 }
 
 // Pure-data builder — used both by /stats entry and the back button.
-// One row of three keeps each button label readable on narrow phone screens.
+// One row keeps each button label readable on narrow phone screens.
+//
 // Monthly was dropped: Trends already shows each month's INR debit total as
 // a bar chart and gives MoM deltas + biggest category movers, which covered
 // the same intent more compactly. Top-5-txns-by-amount and per-user breakdown
-// (Monthly's other features) are recoverable via /ask for the rare reader
-// who wants them.
-function buildStatsMenuKeyboard() {
-  return [
-    [
-      { text: "🕒 Recent", callback_data: "stats_recent" },
-      { text: "📉 Trends", callback_data: "stats_trends" },
-      { text: "💰 Who Owes", callback_data: "stats_whoowes" }
-    ]
+// (Monthly's other features) are recoverable via /ask.
+//
+// Who Owes is conditional on chat_type. In a personal chat the sheet only
+// has one user (the owner), so calcSplitSettlement has no counterparty and
+// the report is always "All settled!" — splits with friends happen via the
+// 'Split with <group>' inline button and land in the group sheet, where Who
+// Owes lives. Hiding the button in personal chats removes the dead-end.
+function buildStatsMenuKeyboard(tenant) {
+  var row = [
+    { text: "🕒 Recent", callback_data: "stats_recent" },
+    { text: "📉 Trends", callback_data: "stats_trends" }
   ];
+  if (tenant && tenant.chat_type === TENANT_CHAT_TYPE.GROUP) {
+    row.push({ text: "💰 Who Owes", callback_data: "stats_whoowes" });
+  }
+  return [row];
 }
 
 // ─── Ask Command (AI tool-calling) ───────────────────────────────────
@@ -782,7 +789,7 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
       sendTelegramMessage(chatId, "📊 *Stats* — pick a view:", {
         parse_mode: "Markdown",
         message_id: telegramMessageId,
-        reply_markup: { inline_keyboard: buildStatsMenuKeyboard() }
+        reply_markup: { inline_keyboard: buildStatsMenuKeyboard(getCurrentTenant()) }
       });
       return;
     }
