@@ -63,7 +63,14 @@ function doPost(e) {
     // Text messages: onboarding commands are allowed for unknown/pending chats;
     // all other commands are gated inside handleMessage via gateTenantForCommand.
     var commandText = update.message && update.message.text ? update.message.text.split("@")[0].toLowerCase() : "";
-    var isDeferred = commandText.startsWith("/backfill") || commandText.startsWith("/ask");
+    // /backfill is the only deferred command — it runs in 5-minute chunks and
+    // would easily exceed Telegram's 60s webhook budget. /ask used to defer
+    // too, but it now runs inline: the round-trip is ~5-15s (sheet read + 1-3
+    // LLM iterations) which is well under the limit, and skipping the trigger
+    // queue saves the 1-30s schedule-wait that dominated /ask perceived
+    // latency. A sendChatAction("typing") inside handleAskCommand replaces the
+    // old "🤔 Thinking..." message.
+    var isDeferred = commandText.startsWith("/backfill");
 
     // Deferred commands touch tenant data — only active tenants can use them.
     if (isDeferred && !isActive) {
@@ -74,30 +81,16 @@ function doPost(e) {
 
     if (isDeferred) {
       var chatId = update.message.chat.id;
-      if (commandText.startsWith("/backfill")) {
-        var ackResp = sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
-        try {
-          var parsedAck = JSON.parse(ackResp);
-          if (parsedAck.result && parsedAck.result.message_id) {
-            var propsAck = PropertiesService.getScriptProperties();
-            propsAck.setProperty("backfill_ack_msg_id", parsedAck.result.message_id.toString());
-            propsAck.setProperty("backfill_ack_chat_id", chatId.toString());
-          }
-        } catch (e) {
-          console.error("Backfill ack parse error:", e);
+      var ackResp = sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
+      try {
+        var parsedAck = JSON.parse(ackResp);
+        if (parsedAck.result && parsedAck.result.message_id) {
+          var propsAck = PropertiesService.getScriptProperties();
+          propsAck.setProperty("backfill_ack_msg_id", parsedAck.result.message_id.toString());
+          propsAck.setProperty("backfill_ack_chat_id", chatId.toString());
         }
-      } else if (commandText.startsWith("/ask")) {
-        // Send thinking message immediately and store its ID for later editing
-        var thinkingResp = sendTelegramMessage(chatId, "🤔 _Thinking..._");
-        try {
-          var parsed = JSON.parse(thinkingResp);
-          if (parsed.result && parsed.result.message_id) {
-            var props2 = PropertiesService.getScriptProperties();
-            props2.setProperty("ask_thinking_msg_id", parsed.result.message_id.toString());
-          }
-        } catch (e) {
-          console.error("Ask thinking msg parse error:", e);
-        }
+      } catch (e) {
+        console.error("Backfill ack parse error:", e);
       }
 
       var props = PropertiesService.getScriptProperties();
@@ -112,7 +105,7 @@ function doPost(e) {
   return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
 }
 
-// Process the stored webhook update (runs async via trigger, for /backfill and /ask)
+// Process the stored webhook update (runs async via trigger, for /backfill)
 function processWebhookUpdate() {
   // Clean up this trigger
   ScriptApp.getProjectTriggers().forEach(function (trigger) {

@@ -667,14 +667,7 @@ function buildStatsMenuKeyboard() {
 function handleAskCommand(chatId, messageText) {
   var question = messageText.replace(/^\/ask(@\w+)?\s*/i, "").trim();
 
-  // Retrieve thinking message ID sent by doPost
-  var props = PropertiesService.getScriptProperties();
-  var thinkingMsgId = props.getProperty("ask_thinking_msg_id");
-  props.deleteProperty("ask_thinking_msg_id");
-  thinkingMsgId = thinkingMsgId ? parseInt(thinkingMsgId, 10) : null;
-
   if (!question) {
-    if (thinkingMsgId) deleteTelegramMessage(chatId, thinkingMsgId);
     sendTelegramMessage(
       chatId,
       "❓ *Ask me anything about your spending!*\n\n" +
@@ -693,34 +686,28 @@ function handleAskCommand(chatId, messageText) {
   // refund so a failed call doesn't burn a slot.
   var quota = consumeAskQuota(chatId);
   if (!quota.allowed) {
-    if (thinkingMsgId) deleteTelegramMessage(chatId, thinkingMsgId);
     sendTelegramMessage(chatId, formatAskCapHitMessage(new Date()), {
       reply_markup: buildAskCapHitKeyboard()
     });
     return;
   }
 
-  try {
-    var answer = runAskLoop(question);
-    var escaped = escapeMarkdown(answer);
+  // Show "typing..." in the chat header instead of a "🤔 Thinking..." message.
+  // Telegram clears the indicator automatically when the bot's next message
+  // arrives, so there's nothing to delete or edit on success. The indicator
+  // expires after ~5s, so runAskLoop re-emits it before each LLM iteration
+  // via the onProgress callback (most /ask runs take 5-15s).
+  sendChatAction(chatId, "typing");
 
-    if (thinkingMsgId) {
-      // Edit the thinking message with the answer
-      sendTelegramMessage(chatId, escaped, {
-        message_id: thinkingMsgId
-      });
-    } else {
-      sendTelegramMessage(chatId, escaped);
-    }
+  try {
+    var answer = runAskLoop(question, function () {
+      sendChatAction(chatId, "typing");
+    });
+    sendTelegramMessage(chatId, escapeMarkdown(answer));
   } catch (error) {
     refundAskQuota(chatId);
     console.error("Error in handleAskCommand:", error.message, error.stack);
-    var errorMsg = "❌ Something went wrong. Try /stats for preset analytics.";
-    if (thinkingMsgId) {
-      sendTelegramMessage(chatId, errorMsg, { message_id: thinkingMsgId });
-    } else {
-      sendTelegramMessage(chatId, errorMsg);
-    }
+    sendTelegramMessage(chatId, "❌ Something went wrong. Try /stats for preset analytics.");
   }
 }
 

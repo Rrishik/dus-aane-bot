@@ -90,6 +90,22 @@ function deleteTelegramMessage(chat_id, message_id) {
   sendRequest(BOT_DELETE_MESSAGE_URL, "post", payload);
 }
 
+// Fire-and-forget "typing..." (or other) chat-header indicator. Telegram auto-
+// clears it after ~5s, or as soon as the bot sends its next message. Used by
+// /ask to show activity while the LLM loop is running, since /ask now runs
+// inline (no thinking message to edit). Errors are swallowed — the indicator
+// is purely cosmetic; we never want it to fail an actual command.
+function sendChatAction(chat_id, action) {
+  try {
+    sendRequest(BOT_SEND_CHAT_ACTION_URL, "post", {
+      chat_id: chat_id,
+      action: action || "typing"
+    });
+  } catch (e) {
+    console.warn("sendChatAction failed (ignored): " + e);
+  }
+}
+
 // --- Group-lifecycle read helpers ---
 // Thin wrappers around Telegram's read APIs. All return the parsed `result`
 // payload on success, or null on any error/non-ok response. Callers must

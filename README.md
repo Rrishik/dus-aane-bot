@@ -199,8 +199,8 @@ Telegram → Cloudflare Worker (200 OK) → Apps Script Web App → process & re
 - **Inbound email path** is async via Gmail polling; no webhook from Cloudflare.
 - **Inbound Telegram path** goes through the Worker proxy so Apps Script 302 redirects don't retry webhooks.
 - **Per-message tenant routing** — `extractForwarderEmail(msg)` reads `X-Forwarded-For` (Gmail filter auto-forward) first, falls back to `From:` (manual forwards). That email keys into the Tenants registry.
-- **`/backfill` and `/ask`** are deferred to async time-based triggers (keeps the webhook under Telegram's 60s budget). `/backfill` self-schedules in 5-minute chunks until the range is done.
-- **`/ask`** sends an immediate "🤔 Thinking..." message and edits it with the final answer.
+- **`/backfill`** is deferred to an async time-based trigger (it self-schedules in 5-minute chunks until the range is done — well over Telegram's 60s webhook budget). `/ask` runs inline since its full round-trip (sheet read + 1–3 LLM iterations) is ~5–15s, comfortably under the webhook limit; skipping the trigger queue saves the 1–30s schedule wait that dominated `/ask` perceived latency.
+- **`/ask`** shows a `sendChatAction("typing")` indicator in the chat header while the LLM loop runs; the indicator is re-emitted before each iteration since Telegram auto-clears it after ~5s.
 
 ### Tool-calling (MCP-like pattern)
 

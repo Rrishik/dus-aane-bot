@@ -279,15 +279,32 @@ function getAskSystemPrompt() {
 
 var ASK_MAX_ITERATIONS = 3;
 
-function runAskLoop(question) {
+// Run the LLM tool-calling loop for a /ask question.
+//
+// `onProgress` (optional): invoked before each LLM iteration. Used by the
+// caller to re-emit a Telegram "typing..." chat action, which auto-expires
+// after ~5s while iterations can take 2-5s each. No-op default keeps the
+// function caller-agnostic and unit-testable.
+//
+// Transactions are loaded lazily — the first tool call triggers the sheet
+// read, then it's reused for the rest of the loop. If the LLM happens to
+// answer in iteration 1 with no tool call (rare, e.g. clarification), we
+// skip the read entirely and save 0.5-3s.
+function runAskLoop(question, onProgress) {
+  onProgress = onProgress || function () {};
   var messages = [
     { role: "system", content: getAskSystemPrompt() },
     { role: "user", content: question }
   ];
 
-  var allTransactions = getAllTransactions();
+  var _txns = null;
+  function getTxns() {
+    if (_txns === null) _txns = getAllTransactions();
+    return _txns;
+  }
 
   for (var i = 0; i < ASK_MAX_ITERATIONS; i++) {
+    onProgress();
     var response = callAIWithTools(messages, ASK_TOOLS);
 
     if (!response) {
@@ -309,7 +326,7 @@ function runAskLoop(question) {
       // Execute each tool call and add results
       choice.message.tool_calls.forEach(function (toolCall) {
         var args = JSON.parse(toolCall.function.arguments);
-        var result = executeAskTool(toolCall.function.name, args, allTransactions);
+        var result = executeAskTool(toolCall.function.name, args, getTxns());
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
