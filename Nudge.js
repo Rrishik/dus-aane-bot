@@ -34,13 +34,12 @@ var NUDGE_CONFIG = {
 //   config: { inactiveDays, pendingDays, cooldownDays, maxNudges }
 function shouldNudge(tenant, now, config) {
   if (!tenant) return null;
-  // PENDING and ACTIVE qualify; DORMANT/DISABLED are explicitly out.
+  // PENDING and ACTIVE qualify; DORMANT/DISABLED are out.
   if (tenant.status !== "active" && tenant.status !== "pending") return null;
   if ((tenant.nag_count || 0) >= config.maxNudges) return null;
 
   var nowMs = now.getTime();
 
-  // Cooldown: if we nudged recently, hold off regardless of other signals.
   if (tenant.last_nag_at) {
     var lastNagMs = new Date(tenant.last_nag_at).getTime();
     if (!isNaN(lastNagMs) && nowMs - lastNagMs < config.cooldownDays * 24 * 60 * 60 * 1000) {
@@ -48,9 +47,9 @@ function shouldNudge(tenant, now, config) {
     }
   }
 
-  // Pending branch: never forwarded once.
+  // Pending: never forwarded once.
   if (!tenant.last_forward_at) {
-    if (!tenant.created_at) return null; // no signal at all — can't decide
+    if (!tenant.created_at) return null;
     var createdMs = new Date(tenant.created_at).getTime();
     if (isNaN(createdMs)) return null;
     var daysSinceCreated = Math.floor((nowMs - createdMs) / (24 * 60 * 60 * 1000));
@@ -60,7 +59,7 @@ function shouldNudge(tenant, now, config) {
     return null;
   }
 
-  // Inactive branch: was forwarding, then stopped.
+  // Inactive: was forwarding, then stopped.
   var lastFwdMs = new Date(tenant.last_forward_at).getTime();
   if (isNaN(lastFwdMs)) return null;
   var daysSinceForward = Math.floor((nowMs - lastFwdMs) / (24 * 60 * 60 * 1000));
@@ -70,8 +69,7 @@ function shouldNudge(tenant, now, config) {
   return null;
 }
 
-// Pure formatter. Returns a Markdown message body for sendTelegramMessage.
-// The resend-setup inline button is attached by the caller (nudgeDormantTenants).
+// Pure formatter. Caller attaches the resend-setup inline button.
 function formatNudgeMessage(decision, tenantName) {
   var greeting = tenantName ? "Hi " + tenantName + "! 👋" : "Hi! 👋";
   if (decision.kind === "pending") {
@@ -94,10 +92,8 @@ function formatNudgeMessage(decision, tenantName) {
   );
 }
 
-// Time-based trigger handler. Walks every tenant sequentially and nudges the
-// ones that shouldNudge() flags. Mirrors the sendWeeklySummaries shape: one
-// trigger drives all tenants, per-tenant try/catch so one failure doesn't
-// halt the run.
+// Time-trigger handler: walk every tenant, nudge the ones shouldNudge flags.
+// Per-tenant try/catch so one failure doesn't halt the run.
 function nudgeDormantTenants() {
   var tenants = loadTenants();
   var now = new Date();
@@ -123,8 +119,7 @@ function nudgeDormantTenants() {
         }
       });
 
-      // Record the nudge: stamp last_nag_at + bump nag_count. If we just
-      // hit the cap, flip to DORMANT — they get one final nudge, then quiet.
+      // On hitting the cap, flip to DORMANT — one final nudge, then quiet.
       var newCount = (t.nag_count || 0) + 1;
       var rowNum = _findRowIndexByChatId(t.chat_id);
       if (rowNum !== -1) {

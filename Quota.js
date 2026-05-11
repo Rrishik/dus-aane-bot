@@ -1,40 +1,23 @@
-// --- /ask quota ---
+// /ask quota — hard cap of FREE_ASK_LIMIT successful calls per tenant per
+// IST calendar day. Counters live on the Tenants tab:
+//   ask_used_today      — successful /ask calls today
+//   ask_used_date       — IST "YYYY-MM-DD" the counter applies to
+//   ask_lifetime_count  — all-time successful /ask calls
+//   ask_cap_hit_count   — days that hit the cap
 //
-// Hard cap of FREE_ASK_LIMIT (Constants.js) successful /ask calls per tenant
-// per IST calendar day. There is no premium tier yet — when the cap is hit
-// we show a "Premium coming soon" upsell so we can measure who hits the
-// limit before deciding pricing and quota for an eventual paid tier.
-//
-// Counters live on the Tenants tab (see TenantRegistry.js schema):
-//   ask_used_today      — successful /ask calls today (0..FREE_ASK_LIMIT)
-//   ask_used_date       — IST "YYYY-MM-DD" the ask_used_today applies to
-//   ask_lifetime_count  — all-time successful /ask calls (never resets)
-//   ask_cap_hit_count   — days on which ask_used_today reached FREE_ASK_LIMIT
-//
-// Definition note: ask_cap_hit_count increments on the transition from 4→5
-// (i.e., the day's 5th successful call) — not on blocked attempts. Reasoning:
-// it's a clean "user consumed all 5 quota slots today" signal, indexable
-// directly off ask_used_today without an extra dedupe column. Per-day, not
-// per-blocked-attempt — so the metric is "user-days at cap", not "blocked
-// taps". Refunds (see refundAskQuota) reverse it for failed asks so we never
-// count a day that never actually used 5 successful calls.
-//
-// Lock: a 5s script lock wraps the read-modify-write. If the lock can't
-// be acquired we fail open (allow the ask) rather than block a real user
-// over a phantom contention event.
+// ask_cap_hit_count increments on the 4→5 transition (not on blocked
+// attempts) — a clean "user-days at cap" signal. Refunds reverse it.
+// Read-modify-write is wrapped in a 5s script lock; on contention we fail
+// open (allow the ask) rather than hard-block a real user.
 
-// Returns the IST calendar date for `now` as "YYYY-MM-DD".
+// IST calendar date for `now` as "YYYY-MM-DD".
 function _istDateString(now) {
   return Utilities.formatDate(now, IST_TIMEZONE, "yyyy-MM-dd");
 }
 
-// Minutes until the next IST midnight (00:00 IST) from `now`. Used to tell
-// the user when their quota resets. Returns an integer ≥ 1.
+// Minutes to the next IST midnight (the cap reset boundary). Returns ≥1.
 function _minutesUntilIstMidnight(now) {
-  // Get IST "yyyy-MM-dd HH:mm:ss" string, parse into IST-local components,
-  // then compute minutes to the next midnight in IST. The raw `now` may be
-  // in any wall-clock timezone (Apps Script runs in script-tz); IST is the
-  // only thing that matters for the cap reset.
+  // Compute purely from IST wall-clock; the raw `now` may be in any tz.
   var istNow = Utilities.formatDate(now, IST_TIMEZONE, "HH:mm:ss");
   var parts = istNow.split(":");
   var hours = parseInt(parts[0], 10);
@@ -73,24 +56,10 @@ function buildAskCapHitKeyboard() {
   return { inline_keyboard: [[{ text: "💎 Upgrade to Premium", callback_data: "premium_info" }]] };
 }
 
-// Consume one /ask slot for `chatId`. Increments the per-day counter and
-// (on the 5th successful call of the day) ask_cap_hit_count. Atomic via
-// LockService.getScriptLock — this is a standalone Apps Script project,
-// not bound to a document, so getDocumentLock() returns null. Script-scope
-// is the right granularity anyway: the Tenants tab is global, not per-doc.
-//
-// Returns:
-//   { allowed: true,  usedToday: N }    when N ≤ FREE_ASK_LIMIT and the
-//                                       caller should proceed.
-//   { allowed: false, usedToday: FREE_ASK_LIMIT,
-//     resetInMinutes: M }               when the caller should reject.
-//
-// Edge cases:
-// - No tenant row found → allowed=true with no counter writes (we don't
-//   want to silently block a legitimate user mid-onboarding). Lifetime
-//   tracking only kicks in once they're in the registry.
-// - Lock contention → fail open (allowed=true), no writes. Better than
-//   blocking on a rare race.
+// Consume one /ask slot. Returns {allowed, usedToday[, resetInMinutes]}.
+// Atomic via getScriptLock — this is a standalone script (not bound to a
+// document) so getDocumentLock() returns null. Edge cases: no tenant row
+// or lock contention → fail open with no writes.
 function consumeAskQuota(chatId, now) {
   now = now || new Date();
   var todayIst = _istDateString(now);
@@ -120,8 +89,7 @@ function consumeAskQuota(chatId, now) {
     }
 
     if (used >= FREE_ASK_LIMIT) {
-      // Still write back the (possibly reset) date so a fresh midnight rollover
-      // is reflected even on a blocked attempt.
+      // Still write the date so a midnight rollover lands even on blocked taps.
       tab.getRange(rowNum, TENANT_COLS.ASK_USED_DATE).setValue(usedDate);
       tab.getRange(rowNum, TENANT_COLS.ASK_USED_TODAY).setValue(used);
       invalidateTenantCache();
@@ -145,13 +113,9 @@ function consumeAskQuota(chatId, now) {
   }
 }
 
-// Refund a previously-consumed /ask slot (decrement counters). Called when
-// runAskLoop throws or the content filter rejects, so a failed call doesn't
-// burn a quota slot or pollute the lifetime/cap metrics.
-//
-// Clamped at 0 so a double-refund (defensive caller) can't push counters
-// negative. Cap-hit reversal happens iff used-was-at-limit before this
-// refund (i.e., we're undoing the very transition that incremented it).
+// Refund a previously-consumed /ask slot. Called when runAskLoop throws,
+// so a failed call doesn't burn the quota or pollute lifetime/cap metrics.
+// Clamped at 0; cap-hit reversal only when used-was-at-limit before refund.
 function refundAskQuota(chatId, now) {
   now = now || new Date();
   var todayIst = _istDateString(now);
@@ -169,8 +133,7 @@ function refundAskQuota(chatId, now) {
     var lifetime = parseInt(row[TENANT_COLS.ASK_LIFETIME_COUNT - 1], 10) || 0;
     var capHits = parseInt(row[TENANT_COLS.ASK_CAP_HIT_COUNT - 1], 10) || 0;
 
-    // Only reverse if the consume happened today; a stale failure from a prior
-    // day shouldn't touch today's counters.
+    // Only reverse a same-day consume — stale failures from a prior day are no-ops.
     if (usedDate !== todayIst || used <= 0) {
       return;
     }

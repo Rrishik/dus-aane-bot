@@ -3,10 +3,11 @@ function getAllTransactions() {
   var sheet = getSpreadsheet().getSheets()[0];
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
-  data.shift(); // remove header
+  data.shift();
 
   return data.map(function (row) {
-    var rawDate = row[TRANSACTION_DATE_COLUMN - 1] || row[EMAIL_DATE_COLUMN - 1]; // Transaction Date preferred, fall back to Email Date
+    // Transaction Date preferred, fall back to Email Date.
+    var rawDate = row[TRANSACTION_DATE_COLUMN - 1] || row[EMAIL_DATE_COLUMN - 1];
     var dateObj = rawDate instanceof Date ? rawDate : new Date(rawDate);
     return {
       date: dateObj,
@@ -29,9 +30,8 @@ function filterByMonth(transactions, year, month) {
 
 // ─── Weekly Analytics ────────────────────────────────────────────────
 
-// Rolling 7-day window ending yesterday (relative to `today`). Day-of-week
-// independent so the digest is always fresh regardless of which weekday the
-// trigger fires on. Friday-morning trigger → covers prior Fri 00:00 - Thu 23:59.
+// Rolling 7-day window ending yesterday. Day-of-week independent so the
+// digest is always fresh regardless of which weekday the trigger fires on.
 function weekRangeFor(today) {
   var end = new Date(today);
   end.setDate(end.getDate() - 1);
@@ -59,7 +59,6 @@ function getWeeklyAnalytics(startDate, endDate) {
     categorySpend[key] = (categorySpend[key] || 0) + t.amount;
   });
 
-  // Previous week for delta
   var prevEnd = new Date(startDate);
   prevEnd.setMilliseconds(prevEnd.getMilliseconds() - 1);
   var prevStart = new Date(prevEnd);
@@ -119,9 +118,8 @@ function formatWeeklyMessage(range, data) {
   msg += "\n";
 
   // Top 5 categories with collapsed remainder. ₹ is anchored at a fixed
-  // column (after the padded name + 2 separator spaces) so the symbol
-  // lines up vertically across rows; amounts then flow right, with a
-  // trailing pad so the closing backtick column is uniform too.
+  // column so the symbol lines up vertically across rows; trailing pad
+  // keeps the closing backtick uniform too.
   var sortedCats = Object.keys(data.categorySpend).sort(function (a, b) {
     return data.categorySpend[b] - data.categorySpend[a];
   });
@@ -150,9 +148,8 @@ function formatWeeklyMessage(range, data) {
     sortedCats.slice(5).forEach(function (catKey) {
       restAmount += data.categorySpend[catKey];
     });
-    // "+N more" label sits in the same column as the category name. No
-    // backslash before the "+" — inside a code span Markdown escapes are
-    // literal characters, so "\+" used to render as a visible backslash.
+    // No backslash before "+" — inside a code span Markdown escapes are
+    // literal, so "\+" used to render as a visible backslash.
     var moreLabel = "+" + (sortedCats.length - 5) + " more";
     var labelPad = " ".repeat(Math.max(0, maxCatNameLen - moreLabel.length));
     var restAmt = formatAmount(restAmount);
@@ -164,9 +161,7 @@ function formatWeeklyMessage(range, data) {
     msg += "\n💳 *Top:*\n";
     data.topTransactions.forEach(function (t, i) {
       var dateStr = t.date instanceof Date ? Utilities.formatDate(t.date, tz, "MMM dd") : t.date;
-      // "1." not "1\\." — the backslash was leftover from a MarkdownV2
-      // experiment; in legacy Markdown "." is not a special char, so
-      // escaping it produced a visible backslash in the rendered message.
+      // "1." not "1\." — legacy Markdown doesn't escape ".".
       msg +=
         i +
         1 +
@@ -203,17 +198,13 @@ function getTrendsAnalytics(numMonths) {
 }
 
 // Weekly counterpart of getTrendsAnalytics. Each bucket is a rolling 7-day
-// window anchored on the same boundary as the Friday-morning cron (prior
-// 7 days ending yesterday for the current bucket), then stepping back in
-// 7-day blocks. Symmetric shape to the monthly version so formatTrendsCore
-// can render either without branching.
+// window anchored on the same boundary as the Friday cron, then stepping
+// back in 7-day blocks. Symmetric shape so formatTrendsMessage handles either.
 function getWeeklyTrendsAnalytics(numWeeks) {
   numWeeks = numWeeks || 5;
   var all = getAllTransactions();
   var tz = Session.getScriptTimeZone();
 
-  // Anchor: the current bucket matches weekRangeFor(today) — last 7 days
-  // ending yesterday. Older buckets step back in 7-day blocks from there.
   var anchor = weekRangeFor(new Date());
 
   var buckets = [];
@@ -225,20 +216,15 @@ function getWeeklyTrendsAnalytics(numWeeks) {
     start.setHours(0, 0, 0, 0);
 
     var txns = filterByDateRange(all, start, end);
-    // Compact two-line label too clutters the column; pick a single short
-    // anchor — the week-start date is enough (MMM dd). Years don't appear
-    // unless the window straddles Dec-Jan, but the relative ordering is
-    // unambiguous since buckets are always rendered oldest-to-newest.
+    // Week-start date is enough; years collide only across Dec-Jan but
+    // ordering is unambiguous since buckets render oldest-to-newest.
     var label = Utilities.formatDate(start, tz, "MMM dd");
     buckets.push(buildTrendBucket(txns, label));
   }
   return buckets;
 }
 
-// Shared bucket builder for monthly + weekly trends. Each bucket carries the
-// per-currency debit/credit totals, per-category debit spend (used by the
-// "Biggest Changes" section), and a pre-formatted label. Centralizing here
-// means the formatter doesn't need to know how each axis was bucketed.
+// Shared bucket builder for monthly + weekly trends.
 function buildTrendBucket(txns, label) {
   var debits = txns.filter(function (t) {
     return t.type === "Debit";
@@ -267,26 +253,17 @@ function formatTrendsMessage(buckets, opts) {
   var comparisonLabel = opts.comparisonLabel || "vs Previous";
   var msg = title + "\n\n";
 
-  // Each row is wrapped in a single backtick code span so Telegram renders it
-  // monospaced — that's what keeps the date, bar, and amount columns visually
-  // aligned across rows even when amount widths differ (₹500 vs ₹54321).
-  // Outside a code span, Telegram collapses runs of spaces and uses a
-  // proportional font, so columns drift.
+  // Each row is wrapped in a backtick code span so Telegram renders it
+  // monospaced — outside a code span Telegram uses a proportional font
+  // and collapses runs of spaces, so columns drift.
 
-  // Find the widest label so the bar columns line up vertically across
-  // buckets — weekly labels ("MMM dd") and monthly labels ("MMM yy") are
-  // both six chars but pad anyway to stay defensive against future formats.
   var maxLabelWidth = buckets.reduce(function (w, b) {
     return Math.max(w, b.label.length);
   }, 0);
 
-  // INR debits with bar chart. Use the compact "12.3K" form since the bar
-  // already conveys magnitude — the exact rupee count would just steal
-  // horizontal space the bar needs. Layout: the ₹ glyph is anchored to a
-  // fixed column (label width + bar width + 2 separator spaces) so it
-  // lines up vertically across rows, with the amount left-flowing after.
-  // Trailing pad keeps the closing backtick at a uniform column too,
-  // which is purely cosmetic but avoids ragged code-span edges.
+  // INR debits with bar chart. Compact "12.3K" form — the bar already
+  // conveys magnitude. ₹ is anchored to a fixed column with the amount
+  // left-flowing after; trailing pad keeps the closing backtick uniform.
   msg += "🔴 *Debits (INR):*\n";
   var inrAmounts = buckets.map(function (b) {
     return formatAmountCompact(b.debitByCurrency["INR"] || 0);
@@ -302,9 +279,8 @@ function formatTrendsMessage(buckets, opts) {
     msg += "`" + label + "  " + bar + "  ₹" + amt + "`\n";
   });
 
-  // Non-INR debits — only buckets that have them, compact. Multi-currency
-  // composition varies per row so amounts are left-flowed inside the code span
-  // rather than column-aligned.
+  // Non-INR debits — multi-currency rows left-flow inside the code span
+  // rather than column-aligning, since composition varies per row.
   var hasOtherDebits = buckets.some(function (b) {
     return Object.keys(b.debitByCurrency).some(function (c) {
       return c !== "INR";
@@ -447,7 +423,6 @@ function formatWhoOwesMessage(year, month, data) {
     msg += "• " + escapeMarkdown(user) + ": " + parts.join(", ") + "\n";
   });
 
-  // Settlement
   msg += "\n⚖️ *Settlement:*\n";
   Object.keys(data.settlements).forEach(function (cur) {
     var s = data.settlements[cur];
@@ -490,23 +465,17 @@ function formatWhoOwesMessage(year, month, data) {
   return msg;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────
 
-// Format a numeric amount for display. Rounds to a whole number and drops
-// thousands separators — phone-width messages already pack currency symbol,
-// amount, date, and category onto crowded lines, so "₹549" reads better than
-// "₹549.50" or "₹1,234". Decimal precision was never the point of these
-// summaries; if a user wants to-the-paisa accuracy they open the sheet.
+// Whole rupees, no thousands separators — phone-width messages already pack
+// currency symbol, amount, date, and category on crowded lines.
 function formatAmount(num) {
   return Math.round(num).toLocaleString("en-IN", { useGrouping: false });
 }
 
-// Compact variant used where horizontal space is tight (e.g. the column
-// next to the trends bar chart). 12345 → "12.3K", 1500000 → "1.5M".
-// Sub-1K stays as integers so small weeks don't get a misleading "0.5K".
-// One decimal under 100 keeps resolution for the typical INR debit range
-// (a few thousand to a few lakh); ≥100 we drop the decimal to keep the
-// column to four chars max ("123K", "1.2M").
+// Compact variant for tight columns (e.g. trends bar chart): 12345 → "12.3K".
+// Sub-1K stays integer to avoid a misleading "0.5K". One decimal under 100
+// keeps resolution for typical INR debits; ≥100 drops it for a 4-char ceiling.
 function formatAmountCompact(num) {
   var n = Math.round(num);
   if (n < 1000) return String(n);
@@ -518,11 +487,8 @@ function formatAmountCompact(num) {
   return (m < 100 ? m.toFixed(1) : Math.round(m).toString()) + "M";
 }
 
-// Currency-code → display prefix. Common currencies render with their symbol
-// (no trailing space: "₹100", "$50", "¥1000"). Currencies without a widely
-// recognized one-glyph symbol fall through to "CODE " with a trailing space
-// ("AED 200", "CHF 50"). Unknown codes use the same "CODE " fallback so we
-// never silently swallow a new currency.
+// Currency-code → display prefix. Common ones use their symbol ("₹100");
+// the rest fall through to "CODE " with trailing space ("AED 200").
 function currencySymbol(code) {
   if (CURRENCY_SYMBOLS && Object.prototype.hasOwnProperty.call(CURRENCY_SYMBOLS, code)) {
     return CURRENCY_SYMBOLS[code];
@@ -530,9 +496,7 @@ function currencySymbol(code) {
   return (code || "") + " ";
 }
 
-// Display-only short labels for the category list. Keeps the analytics message
-// narrow on phones where long names like "Health & Wellness" wrap. Unknown
-// categories (custom ones the user may add) fall through to the original.
+// Display-only short labels — keeps the analytics message narrow on phones.
 var CATEGORY_SHORT_NAMES = {
   "Food & Dining": "Food",
   "Bills & Utilities": "Bills",
@@ -546,17 +510,13 @@ function shortCategoryName(cat) {
   return CATEGORY_SHORT_NAMES[cat] || cat;
 }
 
-// Render an 8-char horizontal bar inside a Telegram code span. Uses U+2588
-// FULL BLOCK + U+2591 LIGHT SHADE specifically — these two render at the
-// same width in every monospace fallback font Telegram uses (iOS SF Mono,
-// macOS, Roboto Mono on Android, Consolas/Cascadia on Desktop). Earlier
-// versions used ▓ (medium shade), which Android Telegram pulls from a
-// different glyph table than ░ and renders ~5-10% narrower, making bars
-// look ragged across rows.
+// 8-char horizontal bar inside a Telegram code span. Uses U+2588 FULL BLOCK
+// + U+2591 LIGHT SHADE specifically — these render at the same width in every
+// monospace fallback. Earlier U+2593 (medium shade) rendered ~5-10% narrower
+// on Android Telegram because it's pulled from a different glyph table.
 //
-// Minimum-1 rule: a positive value always gets at least one filled block,
-// even if it would round to 0. Otherwise a tiny-but-nonzero week renders
-// identically to a true-zero week, which silently lies in the chart.
+// Min-1 rule: positive values always get ≥1 filled block so tiny-nonzero
+// weeks aren't visually identical to true-zero weeks.
 function makeBar(value, buckets, type) {
   var max = 0;
   buckets.forEach(function (b) {
@@ -564,8 +524,7 @@ function makeBar(value, buckets, type) {
     var inr = (bucket || {})["INR"] || 0;
     if (inr > max) max = inr;
   });
-  // All-zero data: render 8 empty cells so the column still has uniform
-  // width across rows (early `return ""` here used to leave gaps).
+  // All-zero data: render 8 empty cells so the column keeps uniform width.
   if (max === 0) return "░░░░░░░░";
   var len = Math.round((value / max) * 8);
   if (value > 0 && len === 0) len = 1;
@@ -641,15 +600,14 @@ function calcSplitSettlement(debits) {
   var userPaidSplit = aggregateByUser(splitTxns);
   var userPaidPartner = aggregateByUser(partnerTxns);
 
-  // All known users = union of payers in split/partner txns + anyone else seen in debits
-  // (needed so Partner txns can identify "the other user" for settlement)
+  // Union of payers in split/partner txns + anyone else in debits — needed
+  // so Partner txns can identify "the other user" for settlement.
   var userSet = {};
   debits.forEach(function (t) {
     if (t.user) userSet[t.user] = true;
   });
   var users = Object.keys(userSet);
 
-  // All currencies seen in shared txns
   var currencySet = {};
   Object.keys(splitTotal).forEach(function (c) {
     currencySet[c] = true;

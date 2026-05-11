@@ -2,17 +2,15 @@ function deleteWebhook() {
   sendRequest(BOT_DELETE_WEBHOOK_URL, "post", {});
 }
 
-// Set up webhook (Run this once)
-// Points to Cloudflare Worker proxy which forwards to Apps Script
+// Webhook setup — points Telegram at the Cloudflare Worker proxy that
+// forwards to Apps Script. Run once.
 function setTelegramWebhook() {
-  // First delete any existing webhook
   deleteWebhook();
   var payload = {
     url: WORKER_PROXY_URL,
-    // chat_member + my_chat_member don't ship by default — we need them so the
-    // bot can detect being added to a group and members joining/leaving.
-    // For chat_member to fire reliably the bot must be a group admin (per
-    // Telegram docs); we enforce that at /start time.
+    // chat_member / my_chat_member aren't in the default set — we need them
+    // to detect group adds + member joins/leaves. chat_member only fires
+    // reliably when the bot is a group admin (enforced at /start).
     allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "chat_member"]
   };
 
@@ -20,12 +18,9 @@ function setTelegramWebhook() {
 }
 
 function setTelegramCommands() {
-  // Only list commands that work without arguments. Commands like /register,
-  // /ask, and /settle need args; Telegram's menu auto-sends on tap with no
-  // chance to add an argument, so listing them here just produces usage errors.
-  //
-  // Commands are scoped: the personal menu shows in DMs only, the group menu
-  // shows in any group/supergroup the bot is in.
+  // Only list zero-arg commands. Tapping a slash-menu item sends the command
+  // immediately with no chance to add arguments, so listing /register, /ask,
+  // etc. here just produces usage errors. Scoped per-chat-type.
   var personalCommands = [
     { command: "/start", description: "Onboard / show welcome" },
     { command: "/register", description: "Register a Gmail address to forward from" },
@@ -90,11 +85,9 @@ function deleteTelegramMessage(chat_id, message_id) {
   sendRequest(BOT_DELETE_MESSAGE_URL, "post", payload);
 }
 
-// Fire-and-forget "typing..." (or other) chat-header indicator. Telegram auto-
-// clears it after ~5s, or as soon as the bot sends its next message. Used by
-// /ask to show activity while the LLM loop is running, since /ask now runs
-// inline (no thinking message to edit). Errors are swallowed — the indicator
-// is purely cosmetic; we never want it to fail an actual command.
+// Fire-and-forget chat-header indicator ("typing", etc.). Auto-clears after
+// ~5s or on the bot's next message. Used by /ask while the LLM loop runs.
+// Errors are swallowed — cosmetic only.
 function sendChatAction(chat_id, action) {
   try {
     sendRequest(BOT_SEND_CHAT_ACTION_URL, "post", {
@@ -106,10 +99,9 @@ function sendChatAction(chat_id, action) {
   }
 }
 
-// --- Group-lifecycle read helpers ---
-// Thin wrappers around Telegram's read APIs. All return the parsed `result`
-// payload on success, or null on any error/non-ok response. Callers must
-// tolerate null (network failures, bot kicked, privacy mode, etc.).
+// ─── Group-lifecycle read helpers ───────────────────────────────────────────
+// Thin wrappers — return parsed `result` on success, null on any error.
+// Callers must tolerate null (network failures, bot kicked, privacy mode, etc.).
 
 function getTelegramChat(chat_id) {
   try {
@@ -123,9 +115,8 @@ function getTelegramChat(chat_id) {
   }
 }
 
-// Returns array of ChatMember objects for the chat's owner + admins. Works
-// without the bot being an admin itself. Used during /start to seed the
-// initial member list (regular non-admin members aren't enumerable via API).
+// Chat owner + admins. Works without the bot being an admin. Used at /start
+// to seed the initial member list — non-admin regulars aren't enumerable.
 function getTelegramChatAdministrators(chat_id) {
   try {
     var resp = sendRequest(BOT_GET_CHAT_ADMINISTRATORS_URL, "post", { chat_id: chat_id });
@@ -138,13 +129,9 @@ function getTelegramChatAdministrators(chat_id) {
   }
 }
 
-// Best-effort lookup of one user's profile within a chat. Returns
-// { name, username } where:
-//   - name = first_name (preferred), then username, then ""
-//   - username = the @-handle without the @, or ""
-// NEVER throws. Per-execution memo (Apps Script clears globals between
-// runs) keeps repeat renders within one callback dispatch from re-hitting
-// Telegram.
+// One user's profile within a chat. Returns { name, username } — name falls
+// back to username then "", username strips the @. Never throws. Per-execution
+// memo (Apps Script clears globals between runs).
 var _CHAT_MEMBER_INFO_CACHE = {};
 function getTelegramChatMemberInfo(chat_id, user_chat_id) {
   var key = String(chat_id) + ":" + String(user_chat_id);
@@ -169,14 +156,13 @@ function getTelegramChatMemberInfo(chat_id, user_chat_id) {
   return info;
 }
 
-// Backwards-compatible name-only accessor used by the split-UI keyboards.
+// Backwards-compat name-only accessor.
 function getTelegramChatMemberName(chat_id, user_chat_id) {
   return getTelegramChatMemberInfo(chat_id, user_chat_id).name;
 }
 
-// Returns the bot's own User object (id, username, ...). Cached in
-// ScriptProperties because it never changes for a given BOT_TOKEN — used in
-// every my_chat_member / chat_member event to detect "is this about us".
+// The bot's own User object. Cached in ScriptProperties (BOT_TOKEN-stable).
+// Used in every my_chat_member / chat_member event for self-detection.
 function getTelegramBotUserId() {
   var props = PropertiesService.getScriptProperties();
   var cached = props.getProperty("bot_user_id");
@@ -197,15 +183,15 @@ function getTelegramBotUserId() {
 }
 
 function sendRequest(url, method, payload) {
-  var MAX_RETRIES = 5; // Maximum number of retries for rate-limited requests
-  var INITIAL_RETRY_DELAY_MS = 1000; // Initial delay in milliseconds if retry_after is not provided
+  var MAX_RETRIES = 5;
+  var INITIAL_RETRY_DELAY_MS = 1000;
 
   for (var attempt = 0; attempt < MAX_RETRIES; attempt++) {
     var options = {
       method: method,
       contentType: "application/json",
       payload: JSON.stringify(payload),
-      muteHttpExceptions: true // Crucial for manually handling HTTP errors
+      muteHttpExceptions: true
     };
 
     var response = UrlFetchApp.fetch(url, options);
@@ -213,7 +199,7 @@ function sendRequest(url, method, payload) {
     var response_body = response.getContentText();
 
     if (response_code === 200) {
-      return response; // Success
+      return response;
     } else if (response_code === 429) {
       console.warn(
         "API rate limit hit (429) for URL: " + url + ". Attempt " + (attempt + 1) + " of " + MAX_RETRIES + "."
@@ -224,12 +210,11 @@ function sendRequest(url, method, payload) {
       try {
         var error_data = JSON.parse(response_body);
 
-        // 1. Check for standard Telegram `parameters.retry_after`
+        // Standard Telegram `parameters.retry_after`
         if (error_data && error_data.parameters && error_data.parameters.retry_after) {
           retry_after_seconds = parseInt(error_data.parameters.retry_after, 10);
         }
-
-        // 2. Check for `error.message` containing "Please retry in Xs"
+        // "Please retry in Xs" in error.message
         else if (error_data && error_data.error && error_data.error.message) {
           var message = error_data.error.message;
           var match = message.match(/Please retry in\s+([\d\.]+)\s*s/);
@@ -237,12 +222,10 @@ function sendRequest(url, method, payload) {
             retry_after_seconds = Math.ceil(parseFloat(match[1]));
           }
         }
-
-        // 3. Check for Google RPC RetryInfo in `error.details`
+        // Google RPC RetryInfo in error.details (e.g. "52s")
         if (!retry_after_seconds && error_data && error_data.error && error_data.error.details) {
           error_data.error.details.forEach(function (detail) {
             if (detail["@type"] && detail["@type"].includes("RetryInfo") && detail.retryDelay) {
-              // detail.retryDelay might be "52s"
               var delayStr = detail.retryDelay;
               if (delayStr.endsWith("s")) {
                 retry_after_seconds = Math.ceil(parseFloat(delayStr));
@@ -256,19 +239,17 @@ function sendRequest(url, method, payload) {
 
       var delay_ms = retry_after_seconds * 1000 || INITIAL_RETRY_DELAY_MS;
 
-      // If we got a specific 429, we should probably wait closer to the suggestion + buffer
+      // Specific suggestion: honor it + 1s buffer. Otherwise exponential backoff.
       if (retry_after_seconds > 0) {
-        delay_ms += 1000; // Add 1s buffer
+        delay_ms += 1000;
       } else {
-        // Exponential backoff if no specific time given
         delay_ms = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
       }
 
       if (attempt < MAX_RETRIES - 1) {
         Utilities.sleep(delay_ms);
       } else {
-        console.error("Max retries (" + MAX_RETRIES + ") reached for URL: " + url + ". Giving up on this request.");
-        // Throw an error to indicate persistent failure, which will be caught by the calling function's try-catch
+        console.error("Max retries (" + MAX_RETRIES + ") reached for URL: " + url + ". Giving up.");
         throw new Error(
           "API request failed after " +
             MAX_RETRIES +
@@ -279,14 +260,12 @@ function sendRequest(url, method, payload) {
         );
       }
     } else {
-      // Handle other non-200, non-429 errors
       console.error(
         "API request failed for URL: " + url + ". Response Code: " + response_code + ". Response Body: " + response_body
       );
       throw new Error("API request failed. Response Code: " + response_code + ", body: " + response_body);
     }
   }
-  // Fallback, should ideally not be reached if logic above is correct
   throw new Error("API request failed unexpectedly after all retries for URL: " + url);
 }
 
@@ -311,21 +290,11 @@ function buildCategoryKeyboard(emailMessageId, categories, prefix) {
   return { inline_keyboard: rows };
 }
 
-// Escape special characters for Telegram **legacy** Markdown (parse_mode:
-// "Markdown"). Only four chars are syntactically special in legacy Markdown:
-//   _   italic
-//   *   bold
-//   [   link start (also implies ] paired in `[text](url)` — Telegram is
-//       lenient about stray `]` so we don't escape it)
-//   `   inline code / fenced code
-//
-// We deliberately do NOT escape MarkdownV2's extra specials (`( ) ~ > # + =
-// | { } ! .`). In legacy Markdown those chars are literal, and prefixing them
-// with a backslash leaks the backslash into the rendered output — that's
-// where the "\(May 01 to May 05\)" visible noise in /ask answers came from.
-//
-// If we ever move to MarkdownV2 (better support for nested formatting), this
-// helper needs to grow the broader set + add escapes for `\\` itself.
+// Escape Telegram **legacy** Markdown (parse_mode: "Markdown"). Only four
+// chars are syntactically special: _ * [ `. Stray `]` is left as-is —
+// Telegram tolerates it. Do NOT escape MarkdownV2's extras (( ) ~ > # + =
+// | { } ! .) here — in legacy Markdown those are literal, and prefixing
+// with backslash leaks the backslash into rendered output.
 function escapeMarkdown(text) {
   if (typeof text !== "string") {
     return text;
@@ -333,21 +302,10 @@ function escapeMarkdown(text) {
   return text.replace(/([_*\[`])/g, "\\$1");
 }
 
-// --- Merged from MessageUtils.js ---
-
-// Compact, label-free transaction notification. Replaces a 5-line "field: value"
-// layout where every line was prefixed with an emoji that just relabelled what
-// the value already showed (🗓 *Date:* …, 🏪 *Merchant:* …). Today: 3 lines max.
-//
-// Headline merges merchant + amount so the most-scanned facts are line 1.
-// 🔴 / 🟢 alone signal debit vs credit — the "Debited" verb is gone.
-// Date moves onto the category line (one inline icon, no "Date:" label).
-// The previous 💸/💰 pair was ambiguous (💰 reads as generic "money", not
-// specifically credit), then 📤/📥 didn't render in every Telegram client,
-// then 🔻/🟢 looked inconsistent (triangle + circle). Final answer:
-// 🔴 (red circle) and 🟢 (green circle) — same shape, color does all the
-// work, matches the universal finance-UI convention of red=outflow,
-// green=inflow.
+// ─── Transaction notification card ─────────────────────────────────────────────
+// 3-line compact card. Headline merges merchant + amount; 🔴/🟢 alone signal
+// debit/credit (same shape, color does the work — universal finance UI
+// convention of red=outflow, green=inflow). Date rides on the category line.
 function getTransactionMessageAsString(transaction_details, user) {
   var rawDate = transaction_details.email_date || transaction_details.transaction_date;
   var date = escapeMarkdown(
@@ -384,11 +342,10 @@ function sendTransactionMessage(transaction_details, messageId, user, isNewMerch
   };
 
   if (messageId) {
-    // Legacy ✂️ Split (cycles personal→split→50/50→partner-100) is only useful
-    // for users who are in zero groups. Once the user is in any group, the
-    // 👥 Split with <Group> ▾ parent button is the canonical path — keeping the
-    // legacy split alongside it just clutters the keyboard. ✏️ Category and
-    // 🗑️ Delete still apply to the personal row in either case.
+    // Legacy ✂️ Split (personal→split→50/50→partner-100) only applies when
+    // the user is in zero groups; the 👥 Split with <Group> ▾ parent button
+    // supersedes it once any group exists. ✏️ Category and 🗑️ Delete stay
+    // either way.
     var inAnyGroup = buildGroupParentButtonRows(getTenantChatId(), messageId).length > 0;
     var buttons = inAnyGroup
       ? [
@@ -412,10 +369,8 @@ function sendTransactionMessage(transaction_details, messageId, user, isNewMerch
       rows.unshift([{ text: "🏪 Edit Merchant", callback_data: "editmerchname_" + messageId }]);
       rows.unshift([{ text: saveLabel, callback_data: "savemerch_" + messageId }]);
     }
-    // Group-split parent buttons (one row per group the user belongs to).
-    // Stacked above the action row so the per-group action is the most
-    // prominent option. When the user is in zero groups this is [] and we
-    // fall back to the legacy ✂️ Split flow unchanged (see above).
+    // Group-split parent buttons (one row per group). Stacked above the
+    // action row so the per-group action is the most prominent option.
     var groupRows = buildGroupParentButtonRows(getTenantChatId(), messageId);
     for (var gi = 0; gi < groupRows.length; gi++) {
       rows.unshift(groupRows[groupRows.length - 1 - gi]);
