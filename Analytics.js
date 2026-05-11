@@ -269,10 +269,12 @@ function formatTrendsMessage(buckets, opts) {
   }, 0);
 
   // INR debits with bar chart — right-align amounts to a common width so the
-  // rightmost digit lines up across buckets.
+  // rightmost digit lines up across buckets. Use the compact "12.3K" form
+  // since the bar already conveys magnitude — the exact rupee count is
+  // noise here and steals horizontal space the bar needs.
   msg += "🔴 *Debits (INR):*\n";
   var inrAmounts = buckets.map(function (b) {
-    return formatAmount(b.debitByCurrency["INR"] || 0);
+    return formatAmountCompact(b.debitByCurrency["INR"] || 0);
   });
   var maxInrWidth = inrAmounts.reduce(function (w, a) {
     return Math.max(w, a.length);
@@ -482,6 +484,23 @@ function formatWhoOwesMessage(year, month, data) {
 // summaries; if a user wants to-the-paisa accuracy they open the sheet.
 function formatAmount(num) {
   return Math.round(num).toLocaleString("en-IN", { useGrouping: false });
+}
+
+// Compact variant used where horizontal space is tight (e.g. the column
+// next to the trends bar chart). 12345 → "12.3K", 1500000 → "1.5M".
+// Sub-1K stays as integers so small weeks don't get a misleading "0.5K".
+// One decimal under 100 keeps resolution for the typical INR debit range
+// (a few thousand to a few lakh); ≥100 we drop the decimal to keep the
+// column to four chars max ("123K", "1.2M").
+function formatAmountCompact(num) {
+  var n = Math.round(num);
+  if (n < 1000) return String(n);
+  if (n < 1000000) {
+    var k = n / 1000;
+    return (k < 100 ? k.toFixed(1) : Math.round(k).toString()) + "K";
+  }
+  var m = n / 1000000;
+  return (m < 100 ? m.toFixed(1) : Math.round(m).toString()) + "M";
 }
 
 // Currency-code → display prefix. Common currencies render with their symbol

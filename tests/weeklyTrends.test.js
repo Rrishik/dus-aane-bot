@@ -161,8 +161,9 @@ describe("formatTrendsMessage (shared core)", () => {
       buildTrendBucket([txn({ amount: 54321, currency: "INR" })], "May 04")
     ];
     var msg = formatTrendsMessage(buckets);
+    // Bar-row amounts use the compact form: sub-1K stays integer, ≥1K → "X.XK".
     expect(msg).toMatch(/`Apr 27.*₹\s*500`/);
-    expect(msg).toMatch(/`May 04.*₹54321`/);
+    expect(msg).toMatch(/`May 04.*₹54\.3K`/);
   });
 
   it("hides Credits section entirely when no credits exist", () => {
