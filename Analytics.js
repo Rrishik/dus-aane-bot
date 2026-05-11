@@ -177,47 +177,83 @@ function getTrendsAnalytics(numMonths) {
   numMonths = numMonths || 6;
   var all = getAllTransactions();
   var now = new Date();
+  var tz = Session.getScriptTimeZone();
 
-  var months = [];
+  var buckets = [];
   for (var i = numMonths - 1; i >= 0; i--) {
     var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     var year = d.getFullYear();
     var month = d.getMonth();
     var txns = filterByMonth(all, year, month);
-    var debits = txns.filter(function (t) {
-      return t.type === "Debit";
-    });
-    var credits = txns.filter(function (t) {
-      return t.type === "Credit";
-    });
-
-    var debitByCurrency = {};
-    var creditByCurrency = {};
-    var categorySpend = {};
-    debits.forEach(function (t) {
-      debitByCurrency[t.currency] = (debitByCurrency[t.currency] || 0) + t.amount;
-      categorySpend[t.category] = (categorySpend[t.category] || 0) + t.amount;
-    });
-    credits.forEach(function (t) {
-      creditByCurrency[t.currency] = (creditByCurrency[t.currency] || 0) + t.amount;
-    });
-
-    months.push({
-      year: year,
-      month: month,
-      txnCount: txns.length,
-      debitByCurrency: debitByCurrency,
-      creditByCurrency: creditByCurrency,
-      categorySpend: categorySpend
-    });
+    buckets.push(buildTrendBucket(txns, Utilities.formatDate(d, tz, "MMM yy")));
   }
-
-  return months;
+  return buckets;
 }
 
-function formatTrendsMessage(months) {
+// Weekly counterpart of getTrendsAnalytics. Each bucket is a rolling 7-day
+// window anchored on the same boundary as the Friday-morning cron (prior
+// 7 days ending yesterday for the current bucket), then stepping back in
+// 7-day blocks. Symmetric shape to the monthly version so formatTrendsCore
+// can render either without branching.
+function getWeeklyTrendsAnalytics(numWeeks) {
+  numWeeks = numWeeks || 5;
+  var all = getAllTransactions();
   var tz = Session.getScriptTimeZone();
-  var msg = "📉 *Spending Trends*\n\n";
+
+  // Anchor: the current bucket matches weekRangeFor(today) — last 7 days
+  // ending yesterday. Older buckets step back in 7-day blocks from there.
+  var anchor = weekRangeFor(new Date());
+
+  var buckets = [];
+  for (var i = numWeeks - 1; i >= 0; i--) {
+    var end = new Date(anchor.end);
+    end.setDate(end.getDate() - 7 * i);
+    var start = new Date(end);
+    start.setDate(end.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+
+    var txns = filterByDateRange(all, start, end);
+    // Compact two-line label too clutters the column; pick a single short
+    // anchor — the week-start date is enough (MMM dd). Years don't appear
+    // unless the window straddles Dec-Jan, but the relative ordering is
+    // unambiguous since buckets are always rendered oldest-to-newest.
+    var label = Utilities.formatDate(start, tz, "MMM dd");
+    buckets.push(buildTrendBucket(txns, label));
+  }
+  return buckets;
+}
+
+// Shared bucket builder for monthly + weekly trends. Each bucket carries the
+// per-currency debit/credit totals, per-category debit spend (used by the
+// "Biggest Changes" section), and a pre-formatted label. Centralizing here
+// means the formatter doesn't need to know how each axis was bucketed.
+function buildTrendBucket(txns, label) {
+  var debits = txns.filter(function (t) {
+    return t.type === "Debit";
+  });
+  var credits = txns.filter(function (t) {
+    return t.type === "Credit";
+  });
+
+  var categorySpend = {};
+  debits.forEach(function (t) {
+    categorySpend[t.category] = (categorySpend[t.category] || 0) + t.amount;
+  });
+
+  return {
+    label: label,
+    txnCount: txns.length,
+    debitByCurrency: sumByCurrency(debits),
+    creditByCurrency: sumByCurrency(credits),
+    categorySpend: categorySpend
+  };
+}
+
+function formatTrendsMessage(buckets, opts) {
+  opts = opts || {};
+  var title = opts.title || "📉 *Spending Trends*";
+  var comparisonLabel = opts.comparisonLabel || "vs Previous";
+  var msg = title + "\n\n";
 
   // Each row is wrapped in a single backtick code span so Telegram renders it
   // monospaced — that's what keeps the date, bar, and amount columns visually
@@ -225,72 +261,74 @@ function formatTrendsMessage(months) {
   // Outside a code span, Telegram collapses runs of spaces and uses a
   // proportional font, so columns drift.
 
+  // Find the widest label so the bar columns line up vertically across
+  // buckets — weekly labels ("MMM dd") and monthly labels ("MMM yy") are
+  // both six chars but pad anyway to stay defensive against future formats.
+  var maxLabelWidth = buckets.reduce(function (w, b) {
+    return Math.max(w, b.label.length);
+  }, 0);
+
   // INR debits with bar chart — right-align amounts to a common width so the
-  // rightmost digit lines up across months.
+  // rightmost digit lines up across buckets.
   msg += "🔴 *Debits (INR):*\n";
-  var inrAmounts = months.map(function (m) {
-    return formatAmount(m.debitByCurrency["INR"] || 0);
+  var inrAmounts = buckets.map(function (b) {
+    return formatAmount(b.debitByCurrency["INR"] || 0);
   });
   var maxInrWidth = inrAmounts.reduce(function (w, a) {
     return Math.max(w, a.length);
   }, 0);
-  months.forEach(function (m, i) {
-    var d = new Date(m.year, m.month, 1);
-    var label = Utilities.formatDate(d, tz, "MMM yy");
-    var inr = m.debitByCurrency["INR"] || 0;
-    var bar = makeBar(inr, months, "debit");
+  buckets.forEach(function (b, i) {
+    var inr = b.debitByCurrency["INR"] || 0;
+    var bar = makeBar(inr, buckets, "debit");
     var amt = inrAmounts[i].padStart(maxInrWidth, " ");
+    var label = b.label.padEnd(maxLabelWidth, " ");
     msg += "`" + label + "  " + bar + "  ₹" + amt + "`\n";
   });
 
-  // Non-INR debits — only months that have them, compact. Multi-currency
+  // Non-INR debits — only buckets that have them, compact. Multi-currency
   // composition varies per row so amounts are left-flowed inside the code span
   // rather than column-aligned.
-  var hasOtherDebits = months.some(function (m) {
-    return Object.keys(m.debitByCurrency).some(function (c) {
+  var hasOtherDebits = buckets.some(function (b) {
+    return Object.keys(b.debitByCurrency).some(function (c) {
       return c !== "INR";
     });
   });
   if (hasOtherDebits) {
     msg += "\n🌍 *Other Currency Debits:*\n";
-    months.forEach(function (m) {
-      var others = Object.keys(m.debitByCurrency).filter(function (c) {
-        return c !== "INR" && m.debitByCurrency[c] > 0;
+    buckets.forEach(function (b) {
+      var others = Object.keys(b.debitByCurrency).filter(function (c) {
+        return c !== "INR" && b.debitByCurrency[c] > 0;
       });
       if (others.length > 0) {
-        var d = new Date(m.year, m.month, 1);
-        var label = Utilities.formatDate(d, tz, "MMM yy");
         var parts = others.map(function (c) {
-          return currencySymbol(c) + formatAmount(m.debitByCurrency[c]);
+          return currencySymbol(c) + formatAmount(b.debitByCurrency[c]);
         });
-        msg += "`" + label + "  " + parts.join(", ") + "`\n";
+        msg += "`" + b.label.padEnd(maxLabelWidth, " ") + "  " + parts.join(", ") + "`\n";
       }
     });
   }
 
   // Credits — separate section, same code-span treatment.
-  var hasCredits = months.some(function (m) {
-    return Object.keys(m.creditByCurrency).length > 0;
+  var hasCredits = buckets.some(function (b) {
+    return Object.keys(b.creditByCurrency).length > 0;
   });
   if (hasCredits) {
     msg += "\n🟢 *Credits:*\n";
-    months.forEach(function (m) {
-      var curs = Object.keys(m.creditByCurrency);
+    buckets.forEach(function (b) {
+      var curs = Object.keys(b.creditByCurrency);
       if (curs.length > 0) {
-        var d = new Date(m.year, m.month, 1);
-        var label = Utilities.formatDate(d, tz, "MMM yy");
         var parts = curs.map(function (c) {
-          return currencySymbol(c) + formatAmount(m.creditByCurrency[c]);
+          return currencySymbol(c) + formatAmount(b.creditByCurrency[c]);
         });
-        msg += "`" + label + "  " + parts.join(", ") + "`\n";
+        msg += "`" + b.label.padEnd(maxLabelWidth, " ") + "  " + parts.join(", ") + "`\n";
       }
     });
   }
 
-  // Month-over-month delta (debits only)
-  if (months.length >= 2) {
-    var curr = months[months.length - 1];
-    var prev = months[months.length - 2];
+  // Period-over-period delta (debits only)
+  if (buckets.length >= 2) {
+    var curr = buckets[buckets.length - 1];
+    var prev = buckets[buckets.length - 2];
     var currTotal = curr.debitByCurrency["INR"] || 0;
     var prevTotal = prev.debitByCurrency["INR"] || 0;
 
@@ -299,7 +337,9 @@ function formatTrendsMessage(months) {
       var pct = ((delta / prevTotal) * 100).toFixed(1);
       var arrow = delta >= 0 ? "📈 +" : "📉 ";
       msg +=
-        "\n*vs Last Month:* " +
+        "\n*" +
+        comparisonLabel +
+        ":* " +
         arrow +
         "₹" +
         formatAmount(Math.abs(delta)) +
@@ -472,10 +512,10 @@ function shortCategoryName(cat) {
   return CATEGORY_SHORT_NAMES[cat] || cat;
 }
 
-function makeBar(value, months, type) {
+function makeBar(value, buckets, type) {
   var max = 0;
-  months.forEach(function (m) {
-    var bucket = type === "debit" ? m.debitByCurrency : m.creditByCurrency;
+  buckets.forEach(function (b) {
+    var bucket = type === "debit" ? b.debitByCurrency : b.creditByCurrency;
     var inr = (bucket || {})["INR"] || 0;
     if (inr > max) max = inr;
   });

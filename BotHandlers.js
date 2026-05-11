@@ -884,13 +884,31 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
       return;
     }
 
-    if (subAction === "trends") {
-      var months = getTrendsAnalytics(6);
-      var msg = formatTrendsMessage(months);
+    if (subAction === "trends" || subAction === "trendsweekly" || subAction === "trendsmonthly") {
+      // Default Trends view is weekly — finer-grained signal than the monthly
+      // bars, more useful day-to-day, and lines up with the Friday cron's
+      // weekly digest. Tap the toggle row to switch granularity. The whole
+      // thing is one editMessageText per tap so the message body stays in
+      // place; only the body + toggle button label change.
+      var mode = subAction === "trendsmonthly" ? "monthly" : "weekly";
+      var msg;
+      if (mode === "monthly") {
+        var months = getTrendsAnalytics(6);
+        msg = formatTrendsMessage(months, {
+          title: "📉 *Spending Trends* — Monthly",
+          comparisonLabel: "vs Last Month"
+        });
+      } else {
+        var weeks = getWeeklyTrendsAnalytics(5);
+        msg = formatTrendsMessage(weeks, {
+          title: "📉 *Spending Trends* — Weekly",
+          comparisonLabel: "vs Last Week"
+        });
+      }
       sendTelegramMessage(chatId, msg, {
         parse_mode: "Markdown",
         message_id: telegramMessageId,
-        reply_markup: { inline_keyboard: [buildStatsBackRow()] }
+        reply_markup: { inline_keyboard: [buildTrendsToggleRow(mode), buildStatsBackRow()] }
       });
     } else if (subAction === "whoowes") {
       var data = getWhoOwesAnalytics(year, month);
@@ -917,6 +935,17 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
 
 function buildStatsBackRow() {
   return [{ text: "🔙 Back", callback_data: "stats_back" }];
+}
+
+// Toggle row inside Trends: shows a single button labelled with the OTHER
+// granularity (i.e. when viewing weekly, button says "📊 Monthly" so the
+// affordance is "switch to monthly"). Keeps the view stateless — no need
+// to remember mode in callback data anywhere else, just encode the target.
+function buildTrendsToggleRow(currentMode) {
+  if (currentMode === "monthly") {
+    return [{ text: "📅 Weekly", callback_data: "stats_trendsweekly" }];
+  }
+  return [{ text: "📊 Monthly", callback_data: "stats_trendsmonthly" }];
 }
 
 function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, payload) {
