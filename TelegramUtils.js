@@ -340,11 +340,13 @@ function escapeMarkdown(text) {
 // the value already showed (🗓 *Date:* …, 🏪 *Merchant:* …). Today: 3 lines max.
 //
 // Headline merges merchant + amount so the most-scanned facts are line 1.
-// � / 📥 alone signal debit vs credit — the "Debited" verb is gone.
+// 🔻 / 🟢 alone signal debit vs credit — the "Debited" verb is gone.
 // Date moves onto the category line (one inline icon, no "Date:" label).
 // The previous 💸/💰 pair was ambiguous (💰 reads as generic "money", not
-// specifically credit). 📤 (outbox = money sent out) / 📥 (inbox = money
-// received) maps directly to debit/credit direction.
+// specifically credit), and the 📤/📥 (outbox/inbox tray) pair didn't
+// render in every Telegram client. 🔻 (red down triangle, Unicode 6.0) and
+// 🟢 (green circle, Unicode 12.0) are universally rendered and follow the
+// finance-UI standard of red-down for outflow / green for inflow.
 function getTransactionMessageAsString(transaction_details, user) {
   var rawDate = transaction_details.email_date || transaction_details.transaction_date;
   var date = escapeMarkdown(
@@ -358,7 +360,7 @@ function getTransactionMessageAsString(transaction_details, user) {
   var rawAmount = Number(transaction_details.amount) || 0;
   var money = currencySymbol(currency) + formatAmount(rawAmount);
 
-  var typeEmoji = isDebit(transaction_details.transaction_type) ? "📤" : "📥";
+  var typeEmoji = isDebit(transaction_details.transaction_type) ? "�" : "🟢";
   var header = merchant
     ? typeEmoji + " *" + escapeMarkdown(merchant) + "* — " + money
     : typeEmoji + " *" + money + " " + transaction_details.transaction_type + "ed*";

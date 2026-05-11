@@ -639,7 +639,7 @@ function buildRecentTransactionsMessage(limit, userFilter) {
     var currency = row[CURRENCY_COLUMN - 1] || "INR";
     var user = (row[USER_COLUMN - 1] || "").toString();
 
-    var emoji = isDebit(type) ? "📤" : "📥";
+    var emoji = isDebit(type) ? "�" : "🟢";
     var money = currencySymbol(currency) + formatAmount(amount);
     var catLabel = category ? " · " + shortCategoryName(category) : "";
     var userTag = showUser && user ? " · 👤 " + escapeMarkdown(user) : "";

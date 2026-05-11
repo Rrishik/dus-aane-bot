@@ -98,7 +98,7 @@ function formatWeeklyMessage(range, data) {
   var inrTotal = data.spentByCurrency["INR"] || 0;
   var prevInr = (data.prevSpentByCurrency && data.prevSpentByCurrency["INR"]) || 0;
   var msg = "📅 *Last Week* — " + label + "\n";
-  msg += "� ₹" + formatAmount(inrTotal);
+  msg += "🔻 ₹" + formatAmount(inrTotal);
   if (prevInr > 0) {
     var diff = inrTotal - prevInr;
     var pct = Math.round((diff / prevInr) * 100);
@@ -227,7 +227,7 @@ function formatTrendsMessage(months) {
 
   // INR debits with bar chart — right-align amounts to a common width so the
   // rightmost digit lines up across months.
-  msg += "� *Debits (INR):*\n";
+  msg += "🔻 *Debits (INR):*\n";
   var inrAmounts = months.map(function (m) {
     return formatAmount(m.debitByCurrency["INR"] || 0);
   });
@@ -273,7 +273,7 @@ function formatTrendsMessage(months) {
     return Object.keys(m.creditByCurrency).length > 0;
   });
   if (hasCredits) {
-    msg += "\n� *Credits:*\n";
+    msg += "\n🟢 *Credits:*\n";
     months.forEach(function (m) {
       var curs = Object.keys(m.creditByCurrency);
       if (curs.length > 0) {
