@@ -431,7 +431,13 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
 
   if (!silent) {
     data.email_date = emailDate;
-    sendTransactionMessage(data, messageId, user, isNewMerchant);
+    // Only show the 👤 line in the chat notification when the tenant actually
+    // has more than one forwarder email — otherwise it's the same name on
+    // every message and just clutters the card. The sheet column is still
+    // populated above so multi-forwarder attribution remains available there.
+    var tenant = findTenantByChatId(getTenantChatId());
+    var displayUser = tenant && tenant.emails && tenant.emails.length > 1 ? user : null;
+    sendTransactionMessage(data, messageId, displayUser, isNewMerchant);
   }
 }
 
