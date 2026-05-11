@@ -35,7 +35,7 @@ function makeLockService() {
     tryLock: () => true,
     releaseLock: () => {}
   };
-  return { getDocumentLock: () => lock };
+  return { getScriptLock: () => lock };
 }
 
 // Standard tenant column headers + 4 quota columns.

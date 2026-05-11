@@ -19,7 +19,7 @@
 // taps". Refunds (see refundAskQuota) reverse it for failed asks so we never
 // count a day that never actually used 5 successful calls.
 //
-// Lock: a 5s document lock wraps the read-modify-write. If the lock can't
+// Lock: a 5s script lock wraps the read-modify-write. If the lock can't
 // be acquired we fail open (allow the ask) rather than block a real user
 // over a phantom contention event.
 
@@ -75,7 +75,9 @@ function buildAskCapHitKeyboard() {
 
 // Consume one /ask slot for `chatId`. Increments the per-day counter and
 // (on the 5th successful call of the day) ask_cap_hit_count. Atomic via
-// LockService.
+// LockService.getScriptLock — this is a standalone Apps Script project,
+// not bound to a document, so getDocumentLock() returns null. Script-scope
+// is the right granularity anyway: the Tenants tab is global, not per-doc.
 //
 // Returns:
 //   { allowed: true,  usedToday: N }    when N ≤ FREE_ASK_LIMIT and the
@@ -93,7 +95,7 @@ function consumeAskQuota(chatId, now) {
   now = now || new Date();
   var todayIst = _istDateString(now);
 
-  var lock = LockService.getDocumentLock();
+  var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) {
     // Couldn't acquire the lock; let the call through rather than hard-block.
     return { allowed: true, usedToday: 0 };
@@ -154,7 +156,7 @@ function refundAskQuota(chatId, now) {
   now = now || new Date();
   var todayIst = _istDateString(now);
 
-  var lock = LockService.getDocumentLock();
+  var lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) return;
   try {
     var rowNum = _findRowIndexByChatId(chatId);
