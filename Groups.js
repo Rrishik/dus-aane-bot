@@ -984,16 +984,20 @@ function computeSplitShareSet(group, callerChatId, mode, totalAmount) {
 // Member names come from a lookup function so we don't import findTenantByChatId
 // at test time.
 //
-// Layout:
-//   ✂️ *<merchant> · <currency> <amount>*
-//   👤 Paid by <Caller>
-//   👥 Shared by Alice (₹100), Bob (₹100)
-//   📂 <Category>
+// Layout — first two lines mirror the personal transaction card exactly
+// (same 🔴/🟢 lead emoji, same merchant — money headline, same category·date
+// row), with two extra lines for the split context:
+//   🔴 *<merchant>* — ₹<amount>
+//   📂 <short category> · <date>
+//   👤 *<Payer>* paid
+//   👥 Alice ₹100 · Bob ₹100
 function formatGroupSplitNotification(opts) {
-  var merchant = opts.merchant || "(no merchant)";
+  var merchant = opts.merchant || "";
   var amount = opts.amount;
   var currency = opts.currency || "INR";
   var category = opts.category || "";
+  var rawDate = opts.date;
+  var txType = opts.txType || "Debit";
   var payerName = opts.payerName || String(opts.payerChatId || "");
   var holders = opts.holders || [];
   var shares = opts.shares || [];
@@ -1003,17 +1007,34 @@ function formatGroupSplitNotification(opts) {
       return String(id);
     };
 
+  var sym = currencySymbol(currency);
+  var money = sym + formatAmount(amount);
+  var typeEmoji = isDebit(txType) ? "🔴" : "🟢";
+
+  var date = "";
+  if (rawDate) {
+    date = escapeMarkdown(
+      rawDate instanceof Date ? Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy") : rawDate
+    );
+  }
+
   var sharePieces = [];
   for (var i = 0; i < holders.length; i++) {
     var name = nameOf(holders[i]) || String(holders[i]);
-    sharePieces.push(escapeMarkdown(name) + " (" + currency + " " + formatAmount(shares[i]) + ")");
+    sharePieces.push(escapeMarkdown(name) + " " + sym + formatAmount(shares[i]));
   }
 
   var lines = [];
-  lines.push("✂️ *" + escapeMarkdown(merchant) + " · " + currency + " " + formatAmount(amount) + "*");
-  lines.push("👤 Paid by " + escapeMarkdown(payerName));
-  lines.push("👥 Shared by " + sharePieces.join(", "));
-  if (category) lines.push("📂 " + escapeMarkdown(category));
+  lines.push(merchant ? typeEmoji + " *" + escapeMarkdown(merchant) + "* — " + money : typeEmoji + " *" + money + "*");
+  if (category && date) {
+    lines.push("📂 " + escapeMarkdown(shortCategoryName(category)) + " · " + date);
+  } else if (category) {
+    lines.push("📂 " + escapeMarkdown(shortCategoryName(category)));
+  } else if (date) {
+    lines.push("🗓 " + date);
+  }
+  lines.push("👤 *" + escapeMarkdown(payerName) + "* paid");
+  if (sharePieces.length) lines.push("👥 " + sharePieces.join(" · "));
   return lines.join("\n");
 }
 
@@ -1080,6 +1101,8 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
     amount: amount,
     currency: currency,
     category: category,
+    date: txDate || emailDate,
+    txType: txType,
     payerChatId: callerChatId,
     payerName: nameOf(callerChatId),
     holders: shareSet.holders,

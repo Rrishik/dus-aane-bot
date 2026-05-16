@@ -1492,11 +1492,20 @@ describe("computeSplitShareSet", () => {
 
 describe("formatGroupSplitNotification", () => {
   function load() {
-    return loadAppsScript(["TelegramUtils.js", "Analytics.js", "Groups.js"], ["formatGroupSplitNotification"], {
-      // TelegramUtils references Telegram URL constants we don't exercise here.
-      UrlFetchApp: {},
-      PropertiesService: {}
-    });
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "Analytics.js", "Groups.js"],
+      ["formatGroupSplitNotification"],
+      {
+        // TelegramUtils references Telegram URL constants we don't exercise here.
+        UrlFetchApp: {},
+        PropertiesService: {},
+        // currencySymbol() in Analytics.js reads this from the global namespace.
+        CURRENCY_SYMBOLS: { INR: "₹", USD: "$", EUR: "€" },
+        // formatGroupSplitNotification uses these when the date arg is a Date object.
+        Utilities: { formatDate: (d, _tz, _fmt) => "16 May 2026" },
+        Session: { getScriptTimeZone: () => "UTC" }
+      }
+    );
   }
 
   it("renders payer, holders with per-share amounts, and category", () => {
@@ -1506,6 +1515,7 @@ describe("formatGroupSplitNotification", () => {
       amount: 600,
       currency: "INR",
       category: "Food",
+      date: new Date(Date.UTC(2026, 4, 16, 0, 0, 0)),
       payerChatId: "111",
       payerName: "Alice",
       holders: ["111", "222", "333"],
@@ -1515,11 +1525,20 @@ describe("formatGroupSplitNotification", () => {
       }
     });
     expect(msg).toContain("Swiggy");
-    expect(msg).toContain("INR 600");
-    expect(msg).toContain("Paid by Alice");
-    expect(msg).toContain("Alice (INR 200)");
-    expect(msg).toContain("Bob (INR 200)");
-    expect(msg).toContain("Charlie (INR 200)");
+    // Headline uses currency symbol, not the 3-letter code, and leads with 🔴 for debits
+    // (mirroring the personal transaction card).
+    expect(msg).toContain("🔴");
+    expect(msg).toContain("₹600");
+    expect(msg).not.toContain("INR 600");
+    // Payer line: bold name + "paid" suffix (no more "Paid by" prefix label).
+    expect(msg).toContain("*Alice* paid");
+    // Share line: per-person amounts with currency symbol, " · " separator.
+    expect(msg).toContain("Alice ₹200");
+    expect(msg).toContain("Bob ₹200");
+    expect(msg).toContain("Charlie ₹200");
+    expect(msg).toContain("·"); // share separator + date separator
+    // Date format: "16 May 2026" (date-only, no time).
+    expect(msg).toContain("16 May 2026");
     expect(msg).toContain("Food");
   });
 
@@ -1529,7 +1548,6 @@ describe("formatGroupSplitNotification", () => {
       merchant: "Some_Place",
       amount: 100,
       currency: "INR",
-      payerChatId: "111",
       payerName: "Al*ice",
       holders: ["222"],
       shares: [100],
@@ -1556,6 +1574,24 @@ describe("formatGroupSplitNotification", () => {
       }
     });
     expect(msg).not.toContain("📂");
+  });
+
+  it("uses 🟢 lead emoji for credit transactions (refunds split with the group)", () => {
+    var { formatGroupSplitNotification } = load();
+    var msg = formatGroupSplitNotification({
+      merchant: "Refund",
+      amount: 200,
+      currency: "INR",
+      txType: "Credit",
+      payerName: "Alice",
+      holders: ["111", "222"],
+      shares: [100, 100],
+      nameOf: function (id) {
+        return { 111: "Alice", 222: "Bob" }[id] || id;
+      }
+    });
+    expect(msg).toContain("🟢");
+    expect(msg).not.toContain("🔴");
   });
 });
 
@@ -1655,6 +1691,8 @@ describe("handleGroupCallback gsp execution", () => {
     return {
       ...urlStubs(),
       ...PERSONAL_COL_STUBS,
+      // currencySymbol() in Analytics.js reads this from the global namespace.
+      CURRENCY_SYMBOLS: { INR: "₹", USD: "$", EUR: "€" },
       SpreadsheetApp: SpreadsheetApp,
       ADMIN_SHEET_ID: ADMIN_SHEET_ID,
       UrlFetchApp: makeFetch(sent),
@@ -1706,7 +1744,7 @@ describe("handleGroupCallback gsp execution", () => {
     var groupSend = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === "-100");
     expect(groupSend).toBeTruthy();
     expect(groupSend.payload.text).toContain("Swiggy");
-    expect(groupSend.payload.text).toContain("Paid by Alice");
+    expect(groupSend.payload.text).toContain("*Alice* paid");
     expect(groupSend.payload.text).toContain("Bob");
 
     // DM keyboard was swapped via editMessageText.
