@@ -1062,7 +1062,7 @@ describe("buildTransactionLevel0Keyboard", () => {
     var kb = buildTransactionLevel0Keyboard("111", "msg-X", "Swiggy", "Food & Dining");
     expect(kb.inline_keyboard.length).toBe(2); // status row + action row, no group rows
     expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Swiggy ▾", "📂 Food ▾"]);
-    expect(kb.inline_keyboard[1].map((b) => b.text)).toEqual(["✂️ Split", "🗑️ Delete"]);
+    expect(kb.inline_keyboard[1].map((b) => b.text)).toEqual(["✂️ Split", "❓"]);
   });
 
   it("user in ≥1 group drops the legacy Split — group parent button is canonical", () => {
@@ -1076,7 +1076,7 @@ describe("buildTransactionLevel0Keyboard", () => {
     var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
     var actionRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
     expect(statusRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾"]);
-    expect(actionRow.map((b) => b.text)).toEqual(["🗑️ Delete"]);
+    expect(actionRow.map((b) => b.text)).toEqual(["❓"]);
   });
 
   it("renders Untagged / Uncategorized fallbacks when row pills are missing", () => {
@@ -1407,7 +1407,7 @@ describe("handleGroupCallback dispatch", () => {
     var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
     var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
     expect(statusRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
-    expect(lastRow.map((b) => b.text)).toEqual(["🗑️ Delete"]);
+    expect(lastRow.map((b) => b.text)).toEqual(["❓"]);
   });
 
   it("gbk:1 → returns from Level 2 to Level 1", () => {
@@ -1784,13 +1784,13 @@ describe("handleGroupCallback gsp execution", () => {
     expect(groupSend.payload.text).toContain("Bob");
 
     // DM keyboard was swapped via editMessageText. After gsp: undo row,
-    // status pill row (🏷 Tag / 📂 Category), then a Delete-only action row.
+    // status pill row (🏷 Tag / 📂 Category), then a ❓ overflow row.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Make personal again");
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
     expect(kb.inline_keyboard[1].map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
-    expect(kb.inline_keyboard[2].map((b) => b.text)).toEqual(["🗑️ Delete"]);
+    expect(kb.inline_keyboard[2].map((b) => b.text)).toEqual(["❓"]);
   });
 
   it("rejects re-split when GROUP_REF is already set, makes no writes", () => {
@@ -2037,7 +2037,7 @@ describe("handleGroupCallback gun execution (undo)", () => {
     var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
     var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
     expect(statusRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
-    expect(lastRow.map((b) => b.text)).toEqual(["🗑️ Delete"]);
+    expect(lastRow.map((b) => b.text)).toEqual(["❓"]);
   });
 
   it("rejects when GROUP_REF is empty (row was never split)", () => {

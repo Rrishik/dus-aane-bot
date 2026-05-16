@@ -69,12 +69,15 @@ function handleMessage(update) {
       if (handleAskQuestionReply(chatId, messageText)) return;
       if (handleRegisterEmailReply(chatId, username, messageText)) return;
 
-      // Pending 🏷 Tag input (user tapped the Tag pill, we stashed the
-      // email message id, now they're typing the brand name).
+      // Pending 🏷 Tag input (user tapped the Tag pill, we stashed
+      // <emailMsgId>|<tgMsgId>; now they're typing the brand name).
       var userId = update.message.from.id;
       var props = PropertiesService.getScriptProperties();
-      var pendingTagMsgId = props.getProperty("pending_tag_" + userId);
-      if (pendingTagMsgId) {
+      var pendingTagStash = props.getProperty("pending_tag_" + userId);
+      if (pendingTagStash) {
+        var stashParts = pendingTagStash.split("|");
+        var pendingTagMsgId = stashParts[0];
+        var pendingTgMsgId = stashParts[1] ? parseInt(stashParts[1], 10) : null;
         if (/^\/cancel\b/i.test(messageText.trim())) {
           props.deleteProperty("pending_tag_" + userId);
           sendTelegramMessage(chatId, "↩️ *Tag unchanged.*", { parse_mode: "Markdown" });
@@ -93,7 +96,7 @@ function handleMessage(update) {
           return;
         }
         props.deleteProperty("pending_tag_" + userId);
-        applyMerchantTag(chatId, pendingTagMsgId, newTag);
+        applyMerchantTag(chatId, pendingTagMsgId, newTag, pendingTgMsgId);
         return;
       }
     }
@@ -111,7 +114,9 @@ var TAG_MAX_LEN = 18;
 //      pre-update merchant — so future emails with the same raw payee
 //      string auto-resolve to this tag. If no such row exists (rare —
 //      addNewMerchantIfNeeded runs at save time), append one.
-function applyMerchantTag(chatId, emailMessageId, newTag) {
+//   3. Refresh the original card's keyboard so the 🏷 pill shows the new
+//      tag in-place (no extra confirmation message).
+function applyMerchantTag(chatId, emailMessageId, newTag, telegramMessageId) {
   var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
   if (rowNumber < 0) {
     sendTelegramMessage(chatId, "❌ *Transaction not found.*", { parse_mode: "Markdown" });
@@ -139,9 +144,39 @@ function applyMerchantTag(chatId, emailMessageId, newTag) {
   // Reflect the tag on this row immediately so /recent and /ask see it.
   updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, newTag, currentMerchant);
 
+  // Refresh the original card's keyboard so the 🏷 pill now reads as the
+  // new tag. No new confirmation message — the in-place change is the ack.
+  // We can't editMessageText without the card body, and we don't have it
+  // here, so use editMessageReplyMarkup instead (keyboard-only edit).
+  if (telegramMessageId) {
+    var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
+    var newKb = buildKeyboardForRow(
+      chatId,
+      emailMessageId,
+      newTag,
+      rowData[CATEGORY_COLUMN - 1],
+      rowData[GROUP_REF_COLUMN - 1]
+    );
+    editTelegramReplyMarkup(chatId, telegramMessageId, newKb);
+    return;
+  }
+
+  // Fallback (no telegramMessageId stashed): keep the old behavior of
+  // sending a confirmation message. Shouldn't fire in practice.
   sendTelegramMessage(chatId, "✅ *Tagged as " + escapeMarkdown(newTag) + ".* Future transactions will auto-tag.", {
     parse_mode: "Markdown"
   });
+}
+
+// Pick the correct default keyboard for a txn row. Post-split rows (those
+// with a GROUP_REF) get the "↩️ Make personal again" undo keyboard;
+// regular personal rows get the Level 0 keyboard with the group-split
+// parent buttons.
+function buildKeyboardForRow(chatId, emailMessageId, merchant, category, groupRef) {
+  if (groupRef) {
+    return buildPostSplitDMKeyboard(emailMessageId, merchant, category);
+  }
+  return buildTransactionLevel0Keyboard(chatId, emailMessageId, merchant, category);
 }
 
 // Method to handle the /help command (also handles /start)
@@ -329,7 +364,9 @@ function handleCallbackQuery(update) {
       return handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, callbackPayload);
     }
 
-    // Handle "Edit Category" — show category picker
+    // Handle "📂 Category" pill — swap the card's keyboard to the category
+    // picker in place (no new message). The picker has a back row so the
+    // user can bail without picking.
     if (action === "editcat") {
       var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, callbackPayload);
       var catList = CATEGORIES;
@@ -337,14 +374,13 @@ function handleCallbackQuery(update) {
         var sheet = getSpreadsheet().getSheets()[0];
         catList = getCategoryListForType(sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue());
       }
-      sendTelegramMessage(chatId, "📂 *Select a category:*", {
-        parse_mode: "Markdown",
-        reply_markup: buildCategoryKeyboard(callbackPayload, catList)
-      });
+      editTelegramReplyMarkup(chatId, telegramMessageId, buildCategoryKeyboard(callbackPayload, catList));
       return;
     }
 
-    // Handle category selection: cat_{messageId}_{index}
+    // Handle category selection: cat_{messageId}_{index}. Writes the new
+    // category + override, then restores the default keyboard on the same
+    // card (pills row reflects the new category).
     if (action === "cat") {
       var lastUnderscore = callbackPayload.lastIndexOf("_");
       if (lastUnderscore < 0) {
@@ -355,11 +391,11 @@ function handleCallbackQuery(update) {
       var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
 
       // Look up transaction type to determine which category list to use
-      var rowNumber = requireRowForCallback(callbackQueryId, emailMessageId);
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
 
       var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
       var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
 
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
@@ -382,16 +418,24 @@ function handleCallbackQuery(update) {
       // the implicit "this is what I mean for this merchant" signal.
       if (currentMerchant) setCategoryOverride(currentMerchant, newCategory);
 
-      // Edit the picker message to show confirmation
-      sendTelegramMessage(chatId, "✅ *Category updated to " + newCategory + "*", {
-        parse_mode: "Markdown",
-        message_id: telegramMessageId
-      });
+      // Swap back to the default keyboard so the 📂 pill now reads the new
+      // category. No "✅ Updated" message — the in-place pill update is the
+      // ack.
+      var newKb = buildKeyboardForRow(
+        chatId,
+        emailMessageId,
+        currentMerchant,
+        newCategory,
+        rowData[GROUP_REF_COLUMN - 1]
+      );
+      editTelegramReplyMarkup(chatId, telegramMessageId, newKb);
       return;
     }
 
     // Handle "🏷 Tag" — prompt for a short brand name; stored against the row's
     // current merchant in MerchantResolution so future emails auto-tag.
+    // We also stash the txn card's telegram message id so the post-reply
+    // handler can refresh the 🏷 pill on the original card in place.
     if (action === "tag") {
       var emailMessageId = callbackPayload;
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
@@ -400,7 +444,7 @@ function handleCallbackQuery(update) {
       var currentTag = (sheet.getRange(rowNumber, MERCHANT_COLUMN).getValue() || "").toString().trim();
       var userIdTag = update.callback_query.from.id;
       var propsTag = PropertiesService.getScriptProperties();
-      propsTag.setProperty("pending_tag_" + userIdTag, emailMessageId);
+      propsTag.setProperty("pending_tag_" + userIdTag, emailMessageId + "|" + telegramMessageId);
       var prompt = currentTag
         ? "🏷 *Tag merchant*\nCurrently tagged as *" +
           escapeMarkdown(currentTag) +
@@ -417,8 +461,44 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    // Handle delete transaction: del_{messageId}
+    // Handle "❓" help-menu open. Swaps the action row to the help menu
+    // (Report + Delete, with a Back).
+    if (action === "help") {
+      editTelegramReplyMarkup(chatId, telegramMessageId, buildHelpMenuKeyboard(callbackPayload));
+      return;
+    }
+
+    // Handle "← Back" / "← Cancel" from the picker / help / confirm menus.
+    // Re-derives the default keyboard from the row (so any pill changes the
+    // user made via the picker are reflected).
+    if (action === "back") {
+      var emailMessageId = callbackPayload;
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
+      if (rowNumber < 0) return;
+      var sheet = getSpreadsheet().getSheets()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
+      var newKb = buildKeyboardForRow(
+        chatId,
+        emailMessageId,
+        rowData[MERCHANT_COLUMN - 1],
+        rowData[CATEGORY_COLUMN - 1],
+        rowData[GROUP_REF_COLUMN - 1]
+      );
+      editTelegramReplyMarkup(chatId, telegramMessageId, newKb);
+      return;
+    }
+
+    // Handle delete request: swap to a two-step confirm. The actual delete
+    // happens on `delyes` so an accidental tap from the help menu is
+    // recoverable.
     if (action === "del") {
+      editTelegramReplyMarkup(chatId, telegramMessageId, buildDeleteConfirmKeyboard(callbackPayload));
+      return;
+    }
+
+    // Handle delete confirm: delyes_{messageId}. Executes the deletion,
+    // tombstones the card body, drops the keyboard.
+    if (action === "delyes") {
       var emailMessageId = callbackPayload;
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
@@ -428,6 +508,51 @@ function handleCallbackQuery(update) {
       sendTelegramMessage(chatId, "🗑️ *Transaction deleted*", {
         parse_mode: "Markdown",
         message_id: telegramMessageId
+      });
+      return;
+    }
+
+    // Handle "⚠ Report error" — DM the admin with row context so we can
+    // investigate the parser miss, then swap the keyboard to a "reported"
+    // acknowledgement with a Back so the user isn't stuck.
+    if (action === "report") {
+      var emailMessageId = callbackPayload;
+      var rowNumber = requireRowForCallback(chatId, emailMessageId);
+      if (rowNumber < 0) return;
+      var sheet = getSpreadsheet().getSheets()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
+      var reportMerchant = rowData[MERCHANT_COLUMN - 1] || "(unknown)";
+      var reportAmount = rowData[AMOUNT_COLUMN - 1];
+      var reportCurrency = "INR"; // personal sheet has no currency column today
+      var reportEmailLink = rowData[EMAIL_LINK_COLUMN - 1] || "";
+      var reportFrom = update.callback_query.from || {};
+      var reportName = reportFrom.first_name || reportFrom.username || String(chatId);
+      var adminBody =
+        "⚠️ *Reported txn*\n" +
+        "from: " +
+        escapeMarkdown(reportName) +
+        " (chat " +
+        chatId +
+        ")\n" +
+        "merchant: " +
+        escapeMarkdown(String(reportMerchant)) +
+        "\n" +
+        "amount: " +
+        reportCurrency +
+        " " +
+        reportAmount +
+        "\n" +
+        "msg id: " +
+        emailMessageId +
+        (reportEmailLink ? "\n" + reportEmailLink : "");
+      try {
+        sendTelegramMessage(ADMIN_CHAT_ID, adminBody, { parse_mode: "Markdown", disable_web_page_preview: true });
+      } catch (e) {
+        console.error("[report] admin DM failed:", e && e.message);
+      }
+      // Show ack in the help-menu shape (Back returns to default).
+      editTelegramReplyMarkup(chatId, telegramMessageId, {
+        inline_keyboard: [[{ text: "📩 Reported — thanks!", callback_data: "back_" + emailMessageId }]]
       });
       return;
     }
@@ -481,7 +606,7 @@ function handleCallbackQuery(update) {
         ],
         [
           { text: toggleText, callback_data: toggleAction + "_" + emailMessageId },
-          { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+          { text: "❓", callback_data: "help_" + emailMessageId }
         ]
       ]),
       message_id: telegramMessageId

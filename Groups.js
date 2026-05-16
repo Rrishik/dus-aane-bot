@@ -913,14 +913,34 @@ function buildTransactionLevel0Keyboard(callerChatId, emailMessageId, merchant, 
   ];
   var actionRow =
     rows.length > 0
-      ? [{ text: "🗑️ Delete", callback_data: "del_" + emailMessageId }]
+      ? [{ text: "❓", callback_data: "help_" + emailMessageId }]
       : [
           { text: "✂️ Split", callback_data: "split_" + emailMessageId },
-          { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+          { text: "❓", callback_data: "help_" + emailMessageId }
         ];
   rows.push(statusRow);
   rows.push(actionRow);
   return { inline_keyboard: rows };
+}
+
+// Keyboard shown on the DM card after a personal txn has been split or
+// settled. Top row offers undo via gun:; pills row sits beneath; the ❓
+// overflow holds Delete + Report. Same shape for both gsp and gst leaves
+// (undo is symmetric, "make personal again" reverses either).
+function buildPostSplitDMKeyboard(emailMessageId, merchant, category) {
+  return {
+    inline_keyboard: [
+      [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
+      [
+        { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
+        {
+          text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
+          callback_data: "editcat_" + emailMessageId
+        }
+      ],
+      [{ text: "❓", callback_data: "help_" + emailMessageId }]
+    ]
+  };
 }
 
 // --- Step 4 pure helpers (share computation + notification text) ---
@@ -1187,20 +1207,8 @@ function _executeGroupSplitLocked(cb, decoded, callerChatId, dmChatId, telegramM
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
 
   // Replace the DM keyboard. Group parent buttons are gone (would re-split);
-  // 🏷 Tag, 📂 Category and 🗑️ Delete still apply to the personal row.
-  var newKb = {
-    inline_keyboard: [
-      [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
-      [
-        { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
-        {
-          text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
-          callback_data: "editcat_" + emailMessageId
-        }
-      ],
-      [{ text: "🗑️ Delete", callback_data: "del_" + emailMessageId }]
-    ]
-  };
+  // 🏷 Tag, 📂 Category and ❓ overflow still apply to the personal row.
+  var newKb = buildPostSplitDMKeyboard(emailMessageId, merchant, category);
   sendTelegramMessage(dmChatId, bodyText, {
     parse_mode: "Markdown",
     message_id: telegramMessageId,
@@ -1471,19 +1479,7 @@ function _executeGroupSettlementLocked(cb, decoded, callerChatId, dmChatId, tele
     (settledDate ? "\n🗓 " + escapeMarkdown(settledDate) : "");
 
   // Same DM keyboard as gsp — undo wires through the same gun path.
-  var newKb = {
-    inline_keyboard: [
-      [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
-      [
-        { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
-        {
-          text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
-          callback_data: "editcat_" + emailMessageId
-        }
-      ],
-      [{ text: "🗑️ Delete", callback_data: "del_" + emailMessageId }]
-    ]
-  };
+  var newKb = buildPostSplitDMKeyboard(emailMessageId, merchant, category);
   sendTelegramMessage(dmChatId, newBody, {
     parse_mode: "Markdown",
     message_id: telegramMessageId,

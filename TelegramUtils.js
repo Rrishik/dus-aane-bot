@@ -85,6 +85,19 @@ function deleteTelegramMessage(chat_id, message_id) {
   sendRequest(BOT_DELETE_MESSAGE_URL, "post", payload);
 }
 
+// Keyboard-only edit. Use when we want to swap the inline buttons without
+// touching the message body (e.g. show a category picker / help menu /
+// confirm step in place of the default action row). The body would
+// require a re-render if we used sendTelegramMessage(message_id).
+function editTelegramReplyMarkup(chat_id, message_id, reply_markup) {
+  var payload = {
+    chat_id: chat_id,
+    message_id: message_id,
+    reply_markup: reply_markup ? JSON.stringify(reply_markup) : undefined
+  };
+  sendRequest(BOT_EDIT_REPLY_MARKUP_URL, "post", payload);
+}
+
 // Fire-and-forget chat-header indicator ("typing", etc.). Auto-clears after
 // ~5s or on the bot's next message. Used by /ask while the LLM loop runs.
 // Errors are swallowed — cosmetic only.
@@ -300,7 +313,38 @@ function buildCategoryKeyboard(emailMessageId, categories, prefix) {
       row = [];
     }
   }
+  // Back row — picker is shown as an in-place keyboard swap on the txn card,
+  // so the user needs an explicit way out without picking something.
+  rows.push([{ text: "← Back", callback_data: "back_" + emailMessageId }]);
   return { inline_keyboard: rows };
+}
+
+// Help/overflow menu — shown when the ❓ button on a txn card is tapped.
+// Hosts the low-frequency destructive actions (Delete, Report error) so the
+// default action row stays focused on the common ops (Split / toggle / pills).
+function buildHelpMenuKeyboard(emailMessageId) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "⚠️ Report error", callback_data: "report_" + emailMessageId },
+        { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
+      ],
+      [{ text: "← Back", callback_data: "back_" + emailMessageId }]
+    ]
+  };
+}
+
+// Two-step delete confirm. Tapped from the help menu; either commits the
+// deletion (delyes_) or aborts back to the default keyboard (back_).
+function buildDeleteConfirmKeyboard(emailMessageId) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "✓ Yes, delete", callback_data: "delyes_" + emailMessageId },
+        { text: "← Cancel", callback_data: "back_" + emailMessageId }
+      ]
+    ]
+  };
 }
 
 // Escape Telegram **legacy** Markdown (parse_mode: "Markdown"). Only four
@@ -372,10 +416,10 @@ function sendTransactionMessage(transaction_details, messageId, user) {
     // supersedes it once any group exists.
     var inAnyGroup = buildGroupParentButtonRows(getTenantChatId(), messageId).length > 0;
     var actionRow = inAnyGroup
-      ? [{ text: "🗑️ Delete", callback_data: "del_" + messageId }]
+      ? [{ text: "❓", callback_data: "help_" + messageId }]
       : [
           { text: "✂️ Split", callback_data: "split_" + messageId },
-          { text: "🗑️ Delete", callback_data: "del_" + messageId }
+          { text: "❓", callback_data: "help_" + messageId }
         ];
 
     var rows = [

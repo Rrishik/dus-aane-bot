@@ -1,4 +1,5 @@
 const BOT_EDIT_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`;
+const BOT_EDIT_REPLY_MARKUP_URL = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageReplyMarkup`;
 const BOT_SEND_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
 const BOT_DELETE_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`;
 const BOT_ANSWER_CALLBACK_QUERY_URL = `https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`;
