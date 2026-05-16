@@ -23,6 +23,20 @@ function handleMessage(update) {
     if (messageText.startsWith("/")) {
       var command = messageText.split(" ")[0].split("@")[0].toLowerCase();
 
+      // Group / supergroup chats get their own command set — group-context
+      // handlers do member-roster ops, group-sheet reads, and admin checks
+      // that the personal handlers don't understand. /register, /ask,
+      // /backfill, /recent are personal-only (no analog in groups). Returns
+      // here to bypass the personal command switch entirely.
+      var chatType = update.message.chat.type;
+      if (chatType === "group" || chatType === "supergroup") {
+        if (dispatchGroupCommand(command, update)) return;
+        // Unknown / unsupported in a group — stay silent to avoid spamming
+        // unrelated group chats where someone types /something for a
+        // different bot.
+        return;
+      }
+
       // Onboarding commands always allowed (they're how tenants are created).
       var ONBOARDING = ["/start", "/register", "/account"];
       if (ONBOARDING.indexOf(command) === -1) {
@@ -100,6 +114,37 @@ function handleMessage(update) {
         return;
       }
     }
+  }
+}
+
+// Route a slash command coming from a group/supergroup chat to the group-
+// context handler. Returns true if handled (including when the handler
+// itself emitted a "group not set up" reply), false if the command isn't
+// supported in groups (caller decides whether to ignore or warn).
+//
+// /start is the provisioning command and intentionally bypasses
+// gateTenantForCommand — the whole point is that the tenant doesn't exist
+// yet. Every other group command gates first so the same "send /start"
+// guidance comes out of handleGroup*Command's own status check.
+function dispatchGroupCommand(command, update) {
+  switch (command) {
+    case "/start":
+      handleGroupStartCommand(update);
+      return true;
+    case "/help":
+      handleGroupHelpCommand(update);
+      return true;
+    case "/account":
+      handleGroupAccountCommand(update);
+      return true;
+    case "/stats":
+      handleGroupStatsCommand(update);
+      return true;
+    case "/settle":
+      handleGroupSettleCommand(update);
+      return true;
+    default:
+      return false;
   }
 }
 
