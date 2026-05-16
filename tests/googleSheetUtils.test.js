@@ -17,6 +17,7 @@ const SYMBOLS = [
   "setCategoryOverride",
   "getCategoryOverrides",
   "getMerchantResolutions",
+  "shortenMerchantPattern",
   "deleteSheetRow"
 ];
 
@@ -288,6 +289,29 @@ describe("getMerchantResolutions", () => {
     api.setCategoryOverride("zomato", "Food & Dining");
     var out = api.getMerchantResolutions();
     expect(out[0]).toEqual({ pattern: "zomato", resolved: "", category: "Food & Dining" });
+  });
+});
+
+describe("shortenMerchantPattern", () => {
+  it("strips trailing transaction-id digits", () => {
+    expect(api.shortenMerchantPattern("bundl tech 12345")).toBe("bundl tech");
+    expect(api.shortenMerchantPattern("AMAZON #123-456")).toBe("AMAZON");
+    expect(api.shortenMerchantPattern("Uber Trip 2026-05")).toBe("Uber Trip");
+  });
+
+  it("is a no-op when the tail isn't a digit run", () => {
+    expect(api.shortenMerchantPattern("Spotify 9.99 USD")).toBe("Spotify 9.99 USD");
+    expect(api.shortenMerchantPattern("Amazon")).toBe("Amazon");
+  });
+
+  it("leaves leading digits and embedded digits alone", () => {
+    expect(api.shortenMerchantPattern("7Eleven")).toBe("7Eleven");
+    expect(api.shortenMerchantPattern("B12 Vitamins Store")).toBe("B12 Vitamins Store");
+  });
+
+  it("returns the original value when shortening would empty the string", () => {
+    expect(api.shortenMerchantPattern("12345")).toBe("12345");
+    expect(api.shortenMerchantPattern("")).toBe("");
   });
 });
 

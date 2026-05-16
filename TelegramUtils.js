@@ -260,6 +260,19 @@ function sendRequest(url, method, payload) {
         );
       }
     } else {
+      // Telegram returns this specific 400 when an editMessageText call edits
+      // a message to the same body + reply_markup it already has — happens on
+      // double-taps of menu buttons (gnav/gset/gbk) and on webhook retries.
+      // Treat it as a successful no-op so the user never sees a confusing
+      // error for an intent that's already been fulfilled.
+      if (response_code === 400) {
+        try {
+          var parsed_err = JSON.parse(response_body);
+          if (parsed_err && parsed_err.description && /message is not modified/i.test(parsed_err.description)) {
+            return response;
+          }
+        } catch (_) {}
+      }
       console.error(
         "API request failed for URL: " + url + ". Response Code: " + response_code + ". Response Body: " + response_body
       );
@@ -303,9 +316,10 @@ function escapeMarkdown(text) {
 }
 
 // ─── Transaction notification card ─────────────────────────────────────────────
-// 3-line compact card. Headline merges merchant + amount; 🔴/🟢 alone signal
-// debit/credit (same shape, color does the work — universal finance UI
-// convention of red=outflow, green=inflow). Date rides on the category line.
+// 2-line body, 4 buttons in a fixed 2x2 grid. Tag + Category render as status
+// pills with a ▾ glyph — current value lives on the affordance to change it,
+// so the body stays minimal and there's no conditional rendering for "new
+// merchant" / "empty merchant" cases (every card looks the same).
 function getTransactionMessageAsString(transaction_details, user) {
   var rawDate = transaction_details.email_date || transaction_details.transaction_date;
   var date = escapeMarkdown(
@@ -314,7 +328,6 @@ function getTransactionMessageAsString(transaction_details, user) {
       : rawDate || "Unknown Date"
   );
   var merchant = transaction_details.merchant;
-  var category = transaction_details.category;
   var currency = transaction_details.currency || "INR";
   var rawAmount = Number(transaction_details.amount) || 0;
   var money = currencySymbol(currency) + formatAmount(rawAmount);
@@ -324,17 +337,26 @@ function getTransactionMessageAsString(transaction_details, user) {
     ? typeEmoji + " *" + escapeMarkdown(merchant) + "* — " + money
     : typeEmoji + " *" + money + " " + transaction_details.transaction_type + "ed*";
 
-  var lines = [header];
-  if (category) {
-    lines.push("📂 " + escapeMarkdown(shortCategoryName(category)) + " · " + date);
-  } else {
-    lines.push("🗓 " + date);
-  }
+  var lines = [header, "🗓 " + date];
   if (user) lines.push("👤 " + escapeMarkdown(user));
   return lines.join("\n");
 }
 
-function sendTransactionMessage(transaction_details, messageId, user, isNewMerchant) {
+// Tag input cap. Keep in lockstep with the BotHandlers validation —
+// buttons never wrap on narrow phones if labels stay within this budget.
+var TAG_MAX_LEN = 18;
+
+// Trim long tag/category labels for button display. Inputs are already capped
+// at TAG_MAX_LEN, but defensively guard pre-existing CategoryOverrides values
+// and free-form category names like "Bills & Utilities" → "Bills".
+function pillLabel(value, fallback) {
+  var v = (value || "").toString().trim();
+  if (!v) return fallback;
+  if (v.length > TAG_MAX_LEN) return v.substring(0, TAG_MAX_LEN - 1) + "…";
+  return v;
+}
+
+function sendTransactionMessage(transaction_details, messageId, user) {
   var message = getTransactionMessageAsString(transaction_details, user);
 
   var options = {
@@ -342,33 +364,28 @@ function sendTransactionMessage(transaction_details, messageId, user, isNewMerch
   };
 
   if (messageId) {
+    var tagPill = "🏷 " + pillLabel(transaction_details.merchant, "Untagged") + " ▾";
+    var catPill = "📂 " + pillLabel(shortCategoryName(transaction_details.category), "Uncategorized") + " ▾";
+
     // Legacy ✂️ Split (personal→split→50/50→partner-100) only applies when
     // the user is in zero groups; the 👥 Split with <Group> ▾ parent button
-    // supersedes it once any group exists. ✏️ Category and 🗑️ Delete stay
-    // either way.
+    // supersedes it once any group exists.
     var inAnyGroup = buildGroupParentButtonRows(getTenantChatId(), messageId).length > 0;
-    var buttons = inAnyGroup
-      ? [
-          { text: "✏️ Category", callback_data: "editcat_" + messageId },
-          { text: "🗑️ Delete", callback_data: "del_" + messageId }
-        ]
+    var actionRow = inAnyGroup
+      ? [{ text: "🗑️ Delete", callback_data: "del_" + messageId }]
       : [
           { text: "✂️ Split", callback_data: "split_" + messageId },
-          { text: "✏️ Category", callback_data: "editcat_" + messageId },
           { text: "🗑️ Delete", callback_data: "del_" + messageId }
         ];
-    var rows = [buttons];
-    // Add "Set Merchant" button if merchant is empty
-    if (!transaction_details.merchant) {
-      rows.unshift([{ text: "🏠 Set Merchant", callback_data: "setmerch_" + messageId }]);
-    }
-    // New-merchant flow: one-tap Save plus Edit Merchant (which then prompts for category).
-    if (isNewMerchant && transaction_details.merchant) {
-      var saveLabel =
-        "🆕 Save: " + transaction_details.merchant + " → " + (transaction_details.category || "Uncategorized");
-      rows.unshift([{ text: "🏪 Edit Merchant", callback_data: "editmerchname_" + messageId }]);
-      rows.unshift([{ text: saveLabel, callback_data: "savemerch_" + messageId }]);
-    }
+
+    var rows = [
+      [
+        { text: tagPill, callback_data: "tag_" + messageId },
+        { text: catPill, callback_data: "editcat_" + messageId }
+      ],
+      actionRow
+    ];
+
     // Group-split parent buttons (one row per group). Stacked above the
     // action row so the per-group action is the most prominent option.
     var groupRows = buildGroupParentButtonRows(getTenantChatId(), messageId);

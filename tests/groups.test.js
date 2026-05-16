@@ -1038,7 +1038,20 @@ describe("buildGroupParentButtonRows", () => {
 
 describe("buildTransactionLevel0Keyboard", () => {
   function load(stubs) {
-    return loadAppsScript(["TenantRegistry.js", "Groups.js"], ["buildTransactionLevel0Keyboard"], stubs);
+    return loadAppsScript(
+      ["Analytics.js", "GoogleSheetUtils.js", "TelegramUtils.js", "TenantRegistry.js", "Groups.js"],
+      ["buildTransactionLevel0Keyboard"],
+      Object.assign(
+        {
+          CATEGORIES: [],
+          CREDIT_CATEGORIES: [],
+          CATEGORY_EMOJIS: {},
+          CURRENCY_SYMBOLS: { INR: "₹" },
+          SHORT_CATEGORY_NAMES: {}
+        },
+        stubs
+      )
+    );
   }
 
   it("zero-group user keeps the legacy ✂️ Split button (their only split path)", () => {
@@ -1046,9 +1059,10 @@ describe("buildTransactionLevel0Keyboard", () => {
       ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"]
     ]);
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
-    var kb = buildTransactionLevel0Keyboard("111", "msg-X");
-    expect(kb.inline_keyboard.length).toBe(1); // no group rows
-    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["✂️ Split", "✏️ Category", "🗑️ Delete"]);
+    var kb = buildTransactionLevel0Keyboard("111", "msg-X", "Swiggy", "Food & Dining");
+    expect(kb.inline_keyboard.length).toBe(2); // status row + action row, no group rows
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Swiggy ▾", "📂 Food ▾"]);
+    expect(kb.inline_keyboard[1].map((b) => b.text)).toEqual(["✂️ Split", "🗑️ Delete"]);
   });
 
   it("user in ≥1 group drops the legacy Split — group parent button is canonical", () => {
@@ -1057,10 +1071,21 @@ describe("buildTransactionLevel0Keyboard", () => {
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
     ]);
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
-    var kb = buildTransactionLevel0Keyboard("111", "msg-X");
+    var kb = buildTransactionLevel0Keyboard("111", "msg-X", "Amazon", "Shopping");
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
-    var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(lastRow.map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
+    var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
+    var actionRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(statusRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾"]);
+    expect(actionRow.map((b) => b.text)).toEqual(["🗑️ Delete"]);
+  });
+
+  it("renders Untagged / Uncategorized fallbacks when row pills are missing", () => {
+    var { SpreadsheetApp } = setupRegistry([
+      ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
+    var kb = buildTransactionLevel0Keyboard("111", "msg-X");
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Untagged ▾", "📂 Uncategorized ▾"]);
   });
 });
 
@@ -1158,7 +1183,7 @@ describe("buildSplitLevel1Keyboard", () => {
     var labels = kb.inline_keyboard.map((r) => r.map((b) => b.text));
     expect(labels[0][0]).toBe("👥 50-50 with Bob");
     expect(labels[1][0]).toBe("💝 Bob owes 100%");
-    expect(labels[2][0]).toBe("💸 Settlement ▾");
+    expect(labels[2][0]).toBe("🤝 Settle up ▾");
     expect(labels[3][0]).toBe("← Back");
     // Callback for 50-50 encodes mode "50"; back returns to level 0.
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gsp:m1:-100:50");
@@ -1232,9 +1257,9 @@ describe("buildSplitLevel2Keyboard", () => {
     var group = { chat_id: "-100", group_members: ["111", "222", "333"] };
     var kb = buildSplitLevel2Keyboard(group, "111", "m1");
     expect(kb.inline_keyboard.length).toBe(3); // 2 targets + Back
-    expect(kb.inline_keyboard[0][0].text).toBe("💸 To Bob");
+    expect(kb.inline_keyboard[0][0].text).toBe("→ Bob");
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gst:m1:-100:1");
-    expect(kb.inline_keyboard[1][0].text).toBe("💸 To Charlie");
+    expect(kb.inline_keyboard[1][0].text).toBe("→ Charlie");
     expect(kb.inline_keyboard[1][0].callback_data).toBe("gst:m1:-100:2");
     // Back returns to Level 1.
     expect(kb.inline_keyboard[2][0].callback_data).toBe("gbk:m1:-100:1");
@@ -1244,9 +1269,16 @@ describe("buildSplitLevel2Keyboard", () => {
 describe("handleGroupCallback dispatch", () => {
   function load(stubs) {
     return loadAppsScript(
-      ["TelegramUtils.js", "TenantRegistry.js", "Analytics.js", "Groups.js"],
+      ["TelegramUtils.js", "TenantRegistry.js", "Analytics.js", "GoogleSheetUtils.js", "Groups.js"],
       ["handleGroupCallback"],
-      stubs
+      Object.assign(
+        {
+          MESSAGE_ID_COLUMN: 9,
+          MERCHANT_COLUMN: 3,
+          CATEGORY_COLUMN: 5
+        },
+        stubs
+      )
     );
   }
 
@@ -1340,7 +1372,7 @@ describe("handleGroupCallback dispatch", () => {
 
     var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(edit.payload.reply_markup);
-    expect(kb.inline_keyboard[0][0].text).toContain("To Bob");
+    expect(kb.inline_keyboard[0][0].text).toContain("→ Bob");
   });
 
   it("gbk:0 → restores Level 0 keyboard with parent button", () => {
@@ -1369,11 +1401,13 @@ describe("handleGroupCallback dispatch", () => {
 
     var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(edit.payload.reply_markup);
-    // First row should be the group parent button; last row is the action
-    // row. Legacy ✂️ Split is dropped when the user has at least one group.
+    // First row should be the group parent button; status + action rows
+    // follow. Legacy ✂️ Split is dropped when the user has at least one group.
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
+    var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
     var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(lastRow.map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
+    expect(statusRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
+    expect(lastRow.map((b) => b.text)).toEqual(["🗑️ Delete"]);
   });
 
   it("gbk:1 → returns from Level 2 to Level 1", () => {
@@ -1698,6 +1732,8 @@ describe("handleGroupCallback gsp execution", () => {
       UrlFetchApp: makeFetch(sent),
       Utilities: { sleep: () => {}, getUuid: () => "tx-uuid-1" },
       PropertiesService: { getScriptProperties: () => makeProps() },
+      LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
+      Session: { getScriptTimeZone: () => "UTC" },
       Logger: { log: () => {} }
     };
   }
@@ -1747,12 +1783,14 @@ describe("handleGroupCallback gsp execution", () => {
     expect(groupSend.payload.text).toContain("*Alice* paid");
     expect(groupSend.payload.text).toContain("Bob");
 
-    // DM keyboard was swapped via editMessageText.
+    // DM keyboard was swapped via editMessageText. After gsp: undo row,
+    // status pill row (🏷 Tag / 📂 Category), then a Delete-only action row.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Make personal again");
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
-    expect(kb.inline_keyboard[1].map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
+    expect(kb.inline_keyboard[1].map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
+    expect(kb.inline_keyboard[2].map((b) => b.text)).toEqual(["🗑️ Delete"]);
   });
 
   it("rejects re-split when GROUP_REF is already set, makes no writes", () => {
@@ -1936,6 +1974,7 @@ describe("handleGroupCallback gun execution (undo)", () => {
       UrlFetchApp: fetchOverride || makeFetch(sent),
       Utilities: { sleep: () => {}, getUuid: () => "tx-uuid-1" },
       PropertiesService: { getScriptProperties: () => makeProps() },
+      LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
       Logger: { log: () => {} }
     };
   }
@@ -1989,14 +2028,16 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
 
-    // DM keyboard restored to Level 0 (parent + action row). Legacy ✂️ Split
-    // is dropped because the user is in at least one group.
+    // DM keyboard restored to Level 0 (parent + status + action rows).
+    // Legacy ✂️ Split is dropped because the user is in at least one group.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
     expect(dmEdit).toBeTruthy();
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
+    var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
     var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(lastRow.map((b) => b.text)).toEqual(["✏️ Category", "🗑️ Delete"]);
+    expect(statusRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
+    expect(lastRow.map((b) => b.text)).toEqual(["🗑️ Delete"]);
   });
 
   it("rejects when GROUP_REF is empty (row was never split)", () => {
@@ -2110,15 +2151,23 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     );
   }
 
-  function makeStubs(SpreadsheetApp, sent) {
+  function makeStubs(SpreadsheetApp, sent, lockStub) {
     return {
       ...urlStubs(),
       ...PERSONAL_COL_STUBS,
+      // currencySymbol() reads this off the global namespace.
+      CURRENCY_SYMBOLS: { INR: "₹", USD: "$", EUR: "€" },
       SpreadsheetApp: SpreadsheetApp,
       ADMIN_SHEET_ID: ADMIN_SHEET_ID,
       UrlFetchApp: makeFetch(sent),
-      Utilities: { sleep: () => {}, getUuid: () => "tx-settle-1" },
+      Utilities: {
+        sleep: () => {},
+        getUuid: () => "tx-settle-1",
+        formatDate: (d, _tz, _fmt) => (d && d.toISOString ? d.toISOString().slice(0, 10) : String(d || ""))
+      },
+      Session: { getScriptTimeZone: () => "UTC" },
       PropertiesService: { getScriptProperties: () => makeProps() },
+      LockService: lockStub || { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
       Logger: { log: () => {} }
     };
   }
@@ -2158,10 +2207,11 @@ describe("handleGroupCallback gst execution (settlement)", () => {
 
     var groupSend = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === "-100");
     expect(groupSend).toBeTruthy();
-    expect(groupSend.payload.text).toContain("Alice");
+    expect(groupSend.payload.text).toContain("🤝");
+    expect(groupSend.payload.text).toContain("*Alice*");
     expect(groupSend.payload.text).toContain("settled");
-    expect(groupSend.payload.text).toContain("INR 500");
-    expect(groupSend.payload.text).toContain("Bob");
+    expect(groupSend.payload.text).toContain("*₹500*");
+    expect(groupSend.payload.text).toContain("*Bob*");
 
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("-100:tx-settle-1");
 
@@ -2169,6 +2219,12 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
+    // DM body was rewritten to a settlement summary (not the original txn card).
+    expect(dmEdit.payload.text).toContain("🤝");
+    expect(dmEdit.payload.text).toContain("Settled");
+    expect(dmEdit.payload.text).toContain("₹500");
+    expect(dmEdit.payload.text).toContain("Bob");
+    expect(dmEdit.payload.text).not.toContain("txn body");
   });
 
   it("rejects when target index points at the caller (can't settle with self)", () => {
@@ -2248,6 +2304,39 @@ describe("handleGroupCallback gst execution (settlement)", () => {
     expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
     var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
     expect(reply.payload.text).toContain("Already split");
+  });
+
+  it("races: tryLock failure → busy toast, no group/personal writes", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 500 }
+    );
+    var lockStub = { getScriptLock: () => ({ tryLock: () => false, releaseLock: () => {} }) };
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent, lockStub));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    mod.handleGroupCallback({
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: "gst:msg-X:-100:1",
+        message: { chat: { id: 111 }, message_id: 42, text: "txn" }
+      }
+    });
+
+    // No group row, no personal stamp.
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+    expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
+
+    // User got a "busy" toast.
+    var reply = sent.find((s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === 111);
+    expect(reply).toBeTruthy();
+    expect(reply.payload.text).toContain("Busy");
   });
 });
 

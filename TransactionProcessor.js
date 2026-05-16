@@ -388,10 +388,10 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
           data.category = resolved.category;
         }
       }
-      // Register new merchant for resolution review (must run BEFORE the transaction message
-      // so the inline keyboard can include a one-tap "Save mapping" button when applicable)
-      var isNewMerchant = !!(rawMerchant && addNewMerchantIfNeeded(rawMerchant));
-      saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent, isNewMerchant);
+      // Register the raw extracted merchant in MerchantResolution so the user
+      // can later 🏷️ Tag it without having to type the pattern themselves.
+      if (rawMerchant) addNewMerchantIfNeeded(rawMerchant);
+      saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
       return { saved: true, duplicate: false, data: data };
     } else {
       // AI response was not valid JSON
@@ -405,7 +405,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
 /**
  * Saves the transaction structure to the sheet and sends a notification.
  */
-function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent, isNewMerchant) {
+function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent) {
   var transactionDate = data.transaction_date || "N/A";
   var merchant = data.merchant || "Unknown";
   var amount = data.amount || 0;
@@ -437,7 +437,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
     // populated above so multi-forwarder attribution remains available there.
     var tenant = findTenantByChatId(getTenantChatId());
     var displayUser = tenant && tenant.emails && tenant.emails.length > 1 ? user : null;
-    sendTransactionMessage(data, messageId, displayUser, isNewMerchant);
+    sendTransactionMessage(data, messageId, displayUser);
   }
 }
 

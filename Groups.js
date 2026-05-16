@@ -491,7 +491,7 @@ function handleGroupHelpCommand(update) {
     "• `/stats` — who owes whom (per currency)\n" +
     "• `/settle @member <amount>` — record a cash payment to a member\n" +
     "• `/help` — this message\n\n" +
-    "_Email-based settlements: forward the UPI confirmation in DM, tap_ 👥 *Split with <group>* _→_ 💸 *Settlement* _→ recipient._";
+    "_Email-based settlements: forward the UPI confirmation in DM, tap_ 👥 *Split with <group>* _→_ 🤝 *Settle up* _→ recipient._";
   var opts = { parse_mode: "Markdown" };
   if (group.sheet_id) {
     opts.reply_markup = {
@@ -685,7 +685,17 @@ function handleGroupCallback(update) {
         reply_markup: kbBack1
       });
     } else {
-      var kbBack0 = buildTransactionLevel0Keyboard(callerChatId, emailMessageIdBk);
+      // Restore the pre-split keyboard with the row's current Tag / Category
+      // values so the pills mirror what's in the body text.
+      var pillRow = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageIdBk);
+      var pillMerchant = "";
+      var pillCategory = "";
+      if (pillRow > 0) {
+        var pillData = getSpreadsheet().getSheets()[0].getRange(pillRow, 1, 1, 10).getValues()[0];
+        pillMerchant = (pillData[MERCHANT_COLUMN - 1] || "").toString().trim();
+        pillCategory = (pillData[CATEGORY_COLUMN - 1] || "").toString().trim();
+      }
+      var kbBack0 = buildTransactionLevel0Keyboard(callerChatId, emailMessageIdBk, pillMerchant, pillCategory);
       sendTelegramMessage(chatId, bodyText, {
         parse_mode: "Markdown",
         message_id: telegramMessageId,
@@ -782,7 +792,7 @@ function listOtherMembers(group, callerChatId) {
 //   4-person: [👥 All 4]
 //             [➖ Without <X>]   [➖ Without <Y>]   [➖ Without <Z>]
 //             [👥 With <X>]      [👥 With <Y>]      [👥 With <Z>]
-// Plus a [💸 Settlement ▾] row and [← Back] row.
+// Plus a [🤝 Settle up ▾] row and [← Back] row.
 function buildSplitLevel1Keyboard(group, callerChatId, emailMessageId) {
   var groupChatId = group.chat_id;
   var others = listOtherMembers(group, callerChatId);
@@ -843,7 +853,7 @@ function buildSplitLevel1Keyboard(group, callerChatId, emailMessageId) {
   // Settlement sub-menu
   rows.push([
     {
-      text: "💸 Settlement ▾",
+      text: "🤝 Settle up ▾",
       callback_data: encodeGroupCallback("gset", [emailMessageId, groupChatId])
     }
   ]);
@@ -868,7 +878,7 @@ function buildSplitLevel2Keyboard(group, callerChatId, emailMessageId) {
     var idx = group.group_members.indexOf(others[i].chat_id);
     rows.push([
       {
-        text: "💸 To " + others[i].label,
+        text: "→ " + others[i].label,
         callback_data: encodeGroupCallback("gst", [emailMessageId, groupChatId, String(idx)])
       }
     ]);
@@ -888,21 +898,27 @@ function buildSplitLevel2Keyboard(group, callerChatId, emailMessageId) {
 // Mirrors sendTransactionMessage's keyboard rules: the legacy ✂️ Split is
 // dropped when the user has at least one group (the 👥 Split with <Group>
 // parent buttons are the canonical path then; keeping both clutters the UI).
-// Step 3.2 doesn't try to recreate the new-merchant Save / Edit Merchant
-// rows after back nav — those flows aren't entered from the split menu.
-function buildTransactionLevel0Keyboard(callerChatId, emailMessageId) {
+//
+// merchant + category are optional — callers that already have the row in
+// hand pass them so the 🏷 / 📂 pills mirror the body text. When omitted
+// (e.g. tests) the pills render with the "Untagged" / "Uncategorized"
+// fallbacks rather than triggering an extra sheet read here.
+function buildTransactionLevel0Keyboard(callerChatId, emailMessageId, merchant, category) {
   var rows = buildGroupParentButtonRows(callerChatId, emailMessageId);
+  var tagPill = "🏷 " + pillLabel(merchant, "Untagged") + " ▾";
+  var catPill = "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾";
+  var statusRow = [
+    { text: tagPill, callback_data: "tag_" + emailMessageId },
+    { text: catPill, callback_data: "editcat_" + emailMessageId }
+  ];
   var actionRow =
     rows.length > 0
-      ? [
-          { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
-          { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
-        ]
+      ? [{ text: "🗑️ Delete", callback_data: "del_" + emailMessageId }]
       : [
           { text: "✂️ Split", callback_data: "split_" + emailMessageId },
-          { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
           { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
         ];
+  rows.push(statusRow);
   rows.push(actionRow);
   return { inline_keyboard: rows };
 }
@@ -1046,6 +1062,24 @@ function formatGroupSplitNotification(opts) {
 // The caller's tenant context (their personal sheet) is set by doPost before
 // the callback is dispatched; tests must call setCurrentTenant beforehand.
 function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
+  // Serialize against double-taps and webhook retries. Without this, two
+  // dispatches can both pass the GROUP_REF "already split" guard, then both
+  // post to the group + write to the sheet — yielding duplicate posts and
+  // duplicate rows. tryLock fails-open after 5s: better to risk a rare
+  // duplicate than to silently drop a legitimate split.
+  var __lock = LockService.getScriptLock();
+  if (!__lock.tryLock(5000)) {
+    sendTelegramMessage(dmChatId, "⏳ *Busy — try again in a moment.*", { parse_mode: "Markdown" });
+    return;
+  }
+  try {
+    return _executeGroupSplitLocked(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText);
+  } finally {
+    __lock.releaseLock();
+  }
+}
+
+function _executeGroupSplitLocked(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
   var emailMessageId = decoded.parts[0];
   var groupChatId = decoded.parts[1];
   var mode = decoded.parts[2];
@@ -1153,14 +1187,18 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
 
   // Replace the DM keyboard. Group parent buttons are gone (would re-split);
-  // ✏️ Category and 🗑️ Delete still apply to the personal row.
+  // 🏷 Tag, 📂 Category and 🗑️ Delete still apply to the personal row.
   var newKb = {
     inline_keyboard: [
       [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
       [
-        { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
-        { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
-      ]
+        { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
+        {
+          text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
+          callback_data: "editcat_" + emailMessageId
+        }
+      ],
+      [{ text: "🗑️ Delete", callback_data: "del_" + emailMessageId }]
     ]
   };
   sendTelegramMessage(dmChatId, bodyText, {
@@ -1180,6 +1218,19 @@ function executeGroupSplit(cb, decoded, callerChatId, dmChatId, telegramMessageI
 // rows — keeping state consistent and prompting the user to clean the sheet
 // manually.
 function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
+  var __lock = LockService.getScriptLock();
+  if (!__lock.tryLock(5000)) {
+    sendTelegramMessage(dmChatId, "⏳ *Busy — try again in a moment.*", { parse_mode: "Markdown" });
+    return;
+  }
+  try {
+    return _executeGroupUndoLocked(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText);
+  } finally {
+    __lock.releaseLock();
+  }
+}
+
+function _executeGroupUndoLocked(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
   var emailMessageId = decoded.parts[0];
 
   var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
@@ -1249,8 +1300,14 @@ function executeGroupUndo(cb, decoded, callerChatId, dmChatId, telegramMessageId
   personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue("");
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue("");
 
-  // Restore the original transaction keyboard (group parents + legacy row).
-  var newKb = buildTransactionLevel0Keyboard(callerChatId, emailMessageId);
+  // Restore the original transaction keyboard (group parents + status / action rows).
+  var personalRow = personalSheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+  var newKb = buildTransactionLevel0Keyboard(
+    callerChatId,
+    emailMessageId,
+    (personalRow[MERCHANT_COLUMN - 1] || "").toString().trim(),
+    (personalRow[CATEGORY_COLUMN - 1] || "").toString().trim()
+  );
   sendTelegramMessage(dmChatId, bodyText, {
     parse_mode: "Markdown",
     message_id: telegramMessageId,
@@ -1273,6 +1330,19 @@ function escapeHtml(s) {
 // write rows, then stamp the personal row, then swap the DM keyboard) so
 // gun undoes a settlement the same way it undoes a split.
 function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
+  var __lock = LockService.getScriptLock();
+  if (!__lock.tryLock(5000)) {
+    sendTelegramMessage(dmChatId, "⏳ *Busy — try again in a moment.*", { parse_mode: "Markdown" });
+    return;
+  }
+  try {
+    return _executeGroupSettlementLocked(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText);
+  } finally {
+    __lock.releaseLock();
+  }
+}
+
+function _executeGroupSettlementLocked(cb, decoded, callerChatId, dmChatId, telegramMessageId, bodyText) {
   var emailMessageId = decoded.parts[0];
   var groupChatId = decoded.parts[1];
   var targetIdxRaw = decoded.parts[2];
@@ -1319,6 +1389,7 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
   var emailDate = rowData[EMAIL_DATE_COLUMN - 1];
   var txDate = rowData[TRANSACTION_DATE_COLUMN - 1];
   var merchant = rowData[MERCHANT_COLUMN - 1];
+  var category = rowData[CATEGORY_COLUMN - 1];
   var currency = rowData[CURRENCY_COLUMN - 1] || group.primary_currency || "INR";
   var emailLink = rowData[EMAIL_LINK_COLUMN - 1];
 
@@ -1332,13 +1403,12 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
   var targetName = nameOf(targetChatId);
 
   var notificationText =
-    "💸 *" +
+    "🤝 *" +
     escapeMarkdown(payerName) +
-    "* settled " +
-    currency +
-    " " +
+    "* settled *" +
+    currencySymbol(currency) +
     formatAmount(amount) +
-    " with *" +
+    "* with *" +
     escapeMarkdown(targetName) +
     "*";
 
@@ -1378,17 +1448,43 @@ function executeGroupSettlement(cb, decoded, callerChatId, dmChatId, telegramMes
   personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue(group.chat_id + ":" + txId);
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
 
+  // Replace the DM card body with a settlement summary so the message text
+  // actually matches the keyboard underneath it. The original card said
+  // "🔴 <merchant> — <amount>" which is the *outgoing* payment — confusing
+  // once it's been settled with someone.
+  var settledDate = "";
+  try {
+    var rawDate = txDate || emailDate;
+    if (rawDate instanceof Date) {
+      settledDate = Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "dd MMM yyyy");
+    } else if (rawDate) {
+      settledDate = String(rawDate);
+    }
+  } catch (_) {}
+  var newBody =
+    "🤝 *Settled " +
+    currencySymbol(currency) +
+    formatAmount(amount) +
+    " with " +
+    escapeMarkdown(targetName) +
+    "*" +
+    (settledDate ? "\n🗓 " + escapeMarkdown(settledDate) : "");
+
   // Same DM keyboard as gsp — undo wires through the same gun path.
   var newKb = {
     inline_keyboard: [
       [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
       [
-        { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
-        { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
-      ]
+        { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
+        {
+          text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
+          callback_data: "editcat_" + emailMessageId
+        }
+      ],
+      [{ text: "🗑️ Delete", callback_data: "del_" + emailMessageId }]
     ]
   };
-  sendTelegramMessage(dmChatId, bodyText, {
+  sendTelegramMessage(dmChatId, newBody, {
     parse_mode: "Markdown",
     message_id: telegramMessageId,
     reply_markup: newKb

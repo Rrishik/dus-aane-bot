@@ -292,6 +292,22 @@ function addNewMerchantIfNeeded(rawMerchant) {
   return true;
 }
 
+// Strip trailing transaction-id-looking digit runs from a payment-merchant
+// string so a single MerchantResolution row covers all numbered variants.
+//   "bundl tech 12345"   → "bundl tech"
+//   "AMAZON #123-456"    → "AMAZON"
+//   "Uber Trip 2026-05"  → "Uber Trip"
+//   "Spotify 9.99 USD"   → "Spotify 9.99 USD"  (non-digit tail → no-op)
+//   "7Eleven"            → "7Eleven"           (no leading separator → no-op)
+function shortenMerchantPattern(raw) {
+  if (!raw) return raw;
+  var trimmed = raw
+    .toString()
+    .replace(/[\s_\-#.]+\d[\d\s_\-#.]*$/, "")
+    .trim();
+  return trimmed || raw;
+}
+
 // Update Resolved Name for a Pattern row in MerchantResolution.
 // Returns { success, message }. Used by the "Save Mapping" inline button.
 function setMerchantResolution(rawMerchant, resolvedName) {

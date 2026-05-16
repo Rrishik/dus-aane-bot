@@ -69,62 +69,79 @@ function handleMessage(update) {
       if (handleAskQuestionReply(chatId, messageText)) return;
       if (handleRegisterEmailReply(chatId, username, messageText)) return;
 
-      // Check for pending merchant input
+      // Pending 🏷 Tag input (user tapped the Tag pill, we stashed the
+      // email message id, now they're typing the brand name).
       var userId = update.message.from.id;
       var props = PropertiesService.getScriptProperties();
-      var pendingEditMsgId = props.getProperty("pending_editmerch_" + userId);
-      if (pendingEditMsgId) {
-        // User is editing the merchant name as part of the new-merchant flow.
-        // Capture the typed name, then prompt them to pick a category for the mapping.
-        props.deleteProperty("pending_editmerch_" + userId);
-        var newName = messageText.trim();
-        if (!newName) {
-          sendTelegramMessage(chatId, "❌ Empty name, edit cancelled");
+      var pendingTagMsgId = props.getProperty("pending_tag_" + userId);
+      if (pendingTagMsgId) {
+        if (/^\/cancel\b/i.test(messageText.trim())) {
+          props.deleteProperty("pending_tag_" + userId);
+          sendTelegramMessage(chatId, "↩️ *Tag unchanged.*", { parse_mode: "Markdown" });
           return;
         }
-        var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, pendingEditMsgId);
-        if (rowNumber < 0) {
-          sendTelegramMessage(chatId, "❌ Transaction not found");
+        var newTag = messageText.trim();
+        if (!newTag || newTag.length > TAG_MAX_LEN) {
+          // Don't clear pending state — let the user try again without re-tapping.
+          sendTelegramMessage(
+            chatId,
+            "❌ *Tag must be 1–" +
+              TAG_MAX_LEN +
+              " characters.* Try a shorter name, or /cancel to keep the current tag.",
+            { parse_mode: "Markdown" }
+          );
           return;
         }
-        // Stash the new name keyed by the email message id so whoever picks the category completes the mapping.
-        props.setProperty("editmerch_newname_" + pendingEditMsgId, newName);
-
-        var sheet = getSpreadsheet().getSheets()[0];
-        var txnType = sheet.getRange(rowNumber, TRANSACTION_TYPE_COLUMN).getValue();
-        sendTelegramMessage(chatId, "📂 *Pick a category for " + escapeMarkdown(newName) + ":*", {
-          parse_mode: "Markdown",
-          reply_markup: buildCategoryKeyboard(pendingEditMsgId, getCategoryListForType(txnType), "mapcat")
-        });
+        props.deleteProperty("pending_tag_" + userId);
+        applyMerchantTag(chatId, pendingTagMsgId, newTag);
         return;
-      }
-
-      var pendingEmailId = props.getProperty("pending_merchant_" + userId);
-      if (pendingEmailId) {
-        // Clear pending state
-        props.deleteProperty("pending_merchant_" + userId);
-        var merchantName = messageText.trim();
-        var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, pendingEmailId);
-        if (rowNumber < 0) {
-          sendTelegramMessage(chatId, "❌ Transaction not found");
-          return;
-        }
-        updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, merchantName, "");
-        // Add to MerchantResolution and auto-populate category if available
-        addNewMerchantIfNeeded(merchantName);
-        var resolutions = getMerchantResolutions();
-        var resolved = lookupMerchantCategory(merchantName, resolutions);
-        var confirmMsg = "✅ *Merchant set to " + escapeMarkdown(merchantName) + "*";
-        if (resolved && resolved.category) {
-          updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, resolved.category, "");
-          confirmMsg += " (" + escapeMarkdown(resolved.category) + ")";
-        }
-        sendTelegramMessage(chatId, confirmMsg, {
-          parse_mode: "Markdown"
-        });
       }
     }
   }
+}
+
+// Shared input cap for tag values. Mirrors TelegramUtils.TAG_MAX_LEN so a typed
+// tag never overflows the button pill (both pieces are deliberately kept the
+// same constant value; duplicated to keep the two files independent).
+var TAG_MAX_LEN = 18;
+
+// Write a user-supplied tag for the merchant on this transaction row.
+//   1. Update the row's MERCHANT column so this card now reads as the tag.
+//   2. Update the MerchantResolution row whose pattern equals the row's
+//      pre-update merchant — so future emails with the same raw payee
+//      string auto-resolve to this tag. If no such row exists (rare —
+//      addNewMerchantIfNeeded runs at save time), append one.
+function applyMerchantTag(chatId, emailMessageId, newTag) {
+  var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
+  if (rowNumber < 0) {
+    sendTelegramMessage(chatId, "❌ *Transaction not found.*", { parse_mode: "Markdown" });
+    return;
+  }
+  var sheet = getSpreadsheet().getSheets()[0];
+  var currentMerchant = (sheet.getRange(rowNumber, MERCHANT_COLUMN).getValue() || "").toString().trim();
+
+  // Make sure a MerchantResolution row exists for the current merchant,
+  // then point its Resolved column at the new tag. Also generalize the
+  // pattern — strip trailing transaction-id digits so future numbered
+  // variants ("bundl tech 99999") auto-resolve to the same tag too.
+  // addNewMerchantIfNeeded is a no-op if the row already exists;
+  // setMerchantResolution succeeds either way.
+  if (currentMerchant) {
+    var pattern = shortenMerchantPattern(currentMerchant);
+    if (pattern && pattern !== currentMerchant) {
+      addNewMerchantIfNeeded(pattern);
+      setMerchantResolution(pattern, newTag);
+    }
+    addNewMerchantIfNeeded(currentMerchant);
+    setMerchantResolution(currentMerchant, newTag);
+  }
+
+  // Reflect the tag on this row immediately so /recent and /ask see it.
+  updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, newTag, currentMerchant);
+
+  sendTelegramMessage(chatId, "✅ *Tagged as " + escapeMarkdown(newTag) + ".* Future transactions will auto-tag.", {
+    parse_mode: "Markdown"
+  });
 }
 
 // Method to handle the /help command (also handles /start)
@@ -351,6 +368,7 @@ function handleCallbackQuery(update) {
       }
 
       var newCategory = catList[categoryIndex];
+      var currentMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
       var currentCategory = rowData[CATEGORY_COLUMN - 1];
       var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, newCategory, currentCategory);
 
@@ -358,6 +376,11 @@ function handleCallbackQuery(update) {
         sendTelegramMessage(chatId, "❌ " + updateResult.message);
         return;
       }
+
+      // Silently teach the bot: next time this merchant shows up, default to
+      // the same category. No extra prompt — the explicit per-row tap is also
+      // the implicit "this is what I mean for this merchant" signal.
+      if (currentMerchant) setCategoryOverride(currentMerchant, newCategory);
 
       // Edit the picker message to show confirmation
       sendTelegramMessage(chatId, "✅ *Category updated to " + newCategory + "*", {
@@ -367,17 +390,29 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    // Handle "Set Merchant" — ask user to type merchant name
-    if (action === "setmerch") {
+    // Handle "🏷 Tag" — prompt for a short brand name; stored against the row's
+    // current merchant in MerchantResolution so future emails auto-tag.
+    if (action === "tag") {
       var emailMessageId = callbackPayload;
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
-      // Store pending state per user per user
-      var userId = update.callback_query.from.id;
-      var props = PropertiesService.getScriptProperties();
-      props.setProperty("pending_merchant_" + userId, emailMessageId);
-      sendTelegramMessage(chatId, "🏪 *Type the merchant name for this transaction:*", {
-        parse_mode: "Markdown"
+      var sheet = getSpreadsheet().getSheets()[0];
+      var currentTag = (sheet.getRange(rowNumber, MERCHANT_COLUMN).getValue() || "").toString().trim();
+      var userIdTag = update.callback_query.from.id;
+      var propsTag = PropertiesService.getScriptProperties();
+      propsTag.setProperty("pending_tag_" + userIdTag, emailMessageId);
+      var prompt = currentTag
+        ? "🏷 *Tag merchant*\nCurrently tagged as *" +
+          escapeMarkdown(currentTag) +
+          "*.\n\nReply with a new brand name (up to " +
+          TAG_MAX_LEN +
+          " chars), or /cancel to keep " +
+          escapeMarkdown(currentTag) +
+          "."
+        : "🏷 *Tag merchant*\nReply with the brand name (up to " + TAG_MAX_LEN + " chars), or /cancel.";
+      sendTelegramMessage(chatId, prompt, {
+        parse_mode: "Markdown",
+        reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. Swiggy" }
       });
       return;
     }
@@ -394,114 +429,6 @@ function handleCallbackQuery(update) {
         parse_mode: "Markdown",
         message_id: telegramMessageId
       });
-      return;
-    }
-
-    // Handle "Save Mapping" — confirm the LLM-suggested merchant + category mapping
-    if (action === "savemerch") {
-      var emailMessageId = callbackPayload;
-      var rowNumber = requireRowForCallback(chatId, emailMessageId);
-      if (rowNumber < 0) return;
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
-      var merchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
-      var category = (rowData[CATEGORY_COLUMN - 1] || "").toString().trim();
-      if (!merchant) {
-        sendTelegramMessage(chatId, "❌ *No merchant on this row to save.*");
-        return;
-      }
-      var result = setMerchantResolution(merchant, merchant);
-      if (!result.success) {
-        sendTelegramMessage(chatId, "❌ " + result.message);
-        return;
-      }
-      if (category) setCategoryOverride(merchant, category);
-
-      // Rebuild keyboard without the Save Mapping row
-      var newRows = [
-        [
-          { text: "✂️ Split", callback_data: "split_" + emailMessageId },
-          { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
-          { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
-        ]
-      ];
-      sendTelegramMessage(chatId, messageText, {
-        parse_mode: "Markdown",
-        message_id: telegramMessageId,
-        reply_markup: buildReplyMarkup(newRows)
-      });
-      return;
-    }
-
-    // Handle "Edit Merchant" — prompt for a new merchant name; category picker follows after reply
-    if (action === "editmerchname") {
-      var emailMessageId = callbackPayload;
-      var rowNumber = requireRowForCallback(chatId, emailMessageId);
-      if (rowNumber < 0) return;
-      var userIdEdit = update.callback_query.from.id;
-      var propsEdit = PropertiesService.getScriptProperties();
-      propsEdit.setProperty("pending_editmerch_" + userIdEdit, emailMessageId);
-      sendTelegramMessage(chatId, "🏪 *Type the new merchant name (category picker follows):*", {
-        parse_mode: "Markdown",
-        reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. Flipkart" }
-      });
-      return;
-    }
-
-    // Handle category pick for the new-merchant mapping flow: mapcat_<msgId>_<index>
-    // Reads pending new merchant name (if user came via Edit Merchant); else keeps current merchant.
-    // Updates both the main-sheet row (merchant + category) and the MerchantResolution row.
-    if (action === "mapcat") {
-      var lastUnderscore = callbackPayload.lastIndexOf("_");
-      if (lastUnderscore < 0) {
-        sendTelegramMessage(chatId, "❌ *Invalid data*");
-        return;
-      }
-      var emailMessageId = callbackPayload.substring(0, lastUnderscore);
-      var categoryIndex = parseInt(callbackPayload.substring(lastUnderscore + 1), 10);
-      var rowNumber = requireRowForCallback(chatId, emailMessageId);
-      if (rowNumber < 0) return;
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
-      var rawMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim(); // current value in col C; for new-merchant flow this == the original raw pattern
-      var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
-      if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
-        sendTelegramMessage(chatId, "❌ *Invalid category*");
-        return;
-      }
-      var newCategory = catList[categoryIndex];
-
-      // Pick up the typed name from the Edit-Merchant flow (if any); else keep existing.
-      var propsMap = PropertiesService.getScriptProperties();
-      var pendingNewName = propsMap.getProperty("editmerch_newname_" + emailMessageId);
-      var resolvedName = pendingNewName ? pendingNewName : rawMerchant;
-      if (pendingNewName) propsMap.deleteProperty("editmerch_newname_" + emailMessageId);
-
-      if (!rawMerchant) {
-        sendTelegramMessage(chatId, "❌ *No merchant on this row*");
-        return;
-      }
-
-      // Save mapping in MerchantResolution (raw pattern → resolved name)
-      var mapResult = setMerchantResolution(rawMerchant, resolvedName);
-      if (!mapResult.success) {
-        sendTelegramMessage(chatId, "❌ " + mapResult.message);
-        return;
-      }
-      // Save merchant → category in CategoryOverrides
-      setCategoryOverride(resolvedName, newCategory);
-
-      // Update this transaction's row to reflect the resolved name + chosen category
-      if (resolvedName !== rawMerchant) {
-        updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, resolvedName, rawMerchant);
-      }
-      updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, newCategory, rowData[CATEGORY_COLUMN - 1]);
-
-      sendTelegramMessage(
-        chatId,
-        "✅ *Mapping saved:* " + escapeMarkdown(resolvedName) + " → " + escapeMarkdown(newCategory),
-        { parse_mode: "Markdown" }
-      );
       return;
     }
 
@@ -537,12 +464,23 @@ function handleCallbackQuery(update) {
     var toggleAction = nextActionMap[action];
     var toggleText = nextLabelMap[toggleAction];
 
+    // Refresh the Tag / Category pills with the current row values so this
+    // post-split card has the same affordances as the original notification.
+    var rowForPills = getSpreadsheet().getSheets()[0].getRange(rowNumber, 1, 1, 10).getValues()[0];
+    var pillMerchant = (rowForPills[MERCHANT_COLUMN - 1] || "").toString().trim();
+    var pillCategory = (rowForPills[CATEGORY_COLUMN - 1] || "").toString().trim();
+    var tagPill = "🏷 " + pillLabel(pillMerchant, "Untagged") + " ▾";
+    var catPill = "📂 " + pillLabel(shortCategoryName(pillCategory), "Uncategorized") + " ▾";
+
     var options = {
       parse_mode: "Markdown",
       reply_markup: buildReplyMarkup([
         [
+          { text: tagPill, callback_data: "tag_" + emailMessageId },
+          { text: catPill, callback_data: "editcat_" + emailMessageId }
+        ],
+        [
           { text: toggleText, callback_data: toggleAction + "_" + emailMessageId },
-          { text: "✏️ Category", callback_data: "editcat_" + emailMessageId },
           { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
         ]
       ]),
