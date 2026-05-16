@@ -413,22 +413,24 @@ function sendTransactionMessage(transaction_details, messageId, user) {
 
     // Legacy ✂️ Split (personal→split→50/50→partner-100) only applies when
     // the user is in zero groups; the 👥 Split with <Group> ▾ parent button
-    // supersedes it once any group exists.
+    // supersedes it once any group exists. When there's no Split button to
+    // sit beside, the ❓ overflow rides on the pills row instead of
+    // claiming its own row — keeps the keyboard compact and matches the
+    // "❓ always shares a line" rule used across DM/group surfaces.
     var inAnyGroup = buildGroupParentButtonRows(getTenantChatId(), messageId).length > 0;
-    var actionRow = inAnyGroup
-      ? [{ text: "❓", callback_data: "help_" + messageId }]
-      : [
-          { text: "✂️ Split", callback_data: "split_" + messageId },
-          { text: "❓", callback_data: "help_" + messageId }
-        ];
-
-    var rows = [
-      [
-        { text: tagPill, callback_data: "tag_" + messageId },
-        { text: catPill, callback_data: "editcat_" + messageId }
-      ],
-      actionRow
+    var pillsRow = [
+      { text: tagPill, callback_data: "tag_" + messageId },
+      { text: catPill, callback_data: "editcat_" + messageId }
     ];
+    var rows = [pillsRow];
+    if (inAnyGroup) {
+      pillsRow.push({ text: "❓", callback_data: "help_" + messageId });
+    } else {
+      rows.push([
+        { text: "✂️ Split", callback_data: "split_" + messageId },
+        { text: "❓", callback_data: "help_" + messageId }
+      ]);
+    }
 
     // Group-split parent buttons (one row per group). Stacked above the
     // action row so the per-group action is the most prominent option.

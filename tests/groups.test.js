@@ -1073,10 +1073,10 @@ describe("buildTransactionLevel0Keyboard", () => {
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
     var kb = buildTransactionLevel0Keyboard("111", "msg-X", "Amazon", "Shopping");
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
-    var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
-    var actionRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(statusRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾"]);
-    expect(actionRow.map((b) => b.text)).toEqual(["❓"]);
+    // No standalone action row — ❓ rides on the pills row to stay inline
+    // with other buttons. Layout: [group parents…][🏷, 📂, ❓].
+    var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(pillsRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "❓"]);
   });
 
   it("renders Untagged / Uncategorized fallbacks when row pills are missing", () => {
@@ -1401,13 +1401,12 @@ describe("handleGroupCallback dispatch", () => {
 
     var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(edit.payload.reply_markup);
-    // First row should be the group parent button; status + action rows
-    // follow. Legacy ✂️ Split is dropped when the user has at least one group.
+    // First row should be the group parent button; pills row follows with
+    // ❓ inline. Legacy ✂️ Split is dropped when the user has at least one
+    // group.
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
-    var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
-    var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(statusRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
-    expect(lastRow.map((b) => b.text)).toEqual(["❓"]);
+    var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(pillsRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "❓"]);
   });
 
   it("gbk:1 → returns from Level 2 to Level 1", () => {
@@ -1783,14 +1782,14 @@ describe("handleGroupCallback gsp execution", () => {
     expect(groupSend.payload.text).toContain("*Alice* paid");
     expect(groupSend.payload.text).toContain("Bob");
 
-    // DM keyboard was swapped via editMessageText. After gsp: undo row,
-    // status pill row (🏷 Tag / 📂 Category), then a ❓ overflow row.
+    // DM keyboard was swapped via editMessageText. After gsp: undo + ❓
+    // overflow share the top row; pills row (🏷 / 📂) sits below.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Make personal again");
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
+    expect(kb.inline_keyboard[0][1].text).toBe("❓");
     expect(kb.inline_keyboard[1].map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
-    expect(kb.inline_keyboard[2].map((b) => b.text)).toEqual(["❓"]);
   });
 
   it("rejects re-split when GROUP_REF is already set, makes no writes", () => {
@@ -2028,16 +2027,14 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
 
-    // DM keyboard restored to Level 0 (parent + status + action rows).
+    // DM keyboard restored to Level 0 (parent rows + pills row with ❓ inline).
     // Legacy ✂️ Split is dropped because the user is in at least one group.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
     expect(dmEdit).toBeTruthy();
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
-    var statusRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
-    var lastRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(statusRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
-    expect(lastRow.map((b) => b.text)).toEqual(["❓"]);
+    var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(pillsRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "❓"]);
   });
 
   it("rejects when GROUP_REF is empty (row was never split)", () => {

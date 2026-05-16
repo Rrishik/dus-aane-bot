@@ -911,34 +911,40 @@ function buildTransactionLevel0Keyboard(callerChatId, emailMessageId, merchant, 
     { text: tagPill, callback_data: "tag_" + emailMessageId },
     { text: catPill, callback_data: "editcat_" + emailMessageId }
   ];
-  var actionRow =
-    rows.length > 0
-      ? [{ text: "❓", callback_data: "help_" + emailMessageId }]
-      : [
-          { text: "✂️ Split", callback_data: "split_" + emailMessageId },
-          { text: "❓", callback_data: "help_" + emailMessageId }
-        ];
-  rows.push(statusRow);
-  rows.push(actionRow);
+  // ❓ rides on the pills row when there's no Split CTA to sit beside
+  // (i.e. the user has groups, so 👥 parent buttons supersede ✂️ Split).
+  // Keeps the overflow inline with other buttons everywhere.
+  if (rows.length > 0) {
+    statusRow.push({ text: "❓", callback_data: "help_" + emailMessageId });
+    rows.push(statusRow);
+  } else {
+    rows.push(statusRow);
+    rows.push([
+      { text: "✂️ Split", callback_data: "split_" + emailMessageId },
+      { text: "❓", callback_data: "help_" + emailMessageId }
+    ]);
+  }
   return { inline_keyboard: rows };
 }
 
 // Keyboard shown on the DM card after a personal txn has been split or
-// settled. Top row offers undo via gun:; pills row sits beneath; the ❓
-// overflow holds Delete + Report. Same shape for both gsp and gst leaves
-// (undo is symmetric, "make personal again" reverses either).
+// settled. Top row offers undo + ❓ overflow; pills row sits beneath.
+// Same shape for both gsp and gst leaves (undo is symmetric, "make
+// personal again" reverses either).
 function buildPostSplitDMKeyboard(emailMessageId, merchant, category) {
   return {
     inline_keyboard: [
-      [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
+      [
+        { text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) },
+        { text: "❓", callback_data: "help_" + emailMessageId }
+      ],
       [
         { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
         {
           text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
           callback_data: "editcat_" + emailMessageId
         }
-      ],
-      [{ text: "❓", callback_data: "help_" + emailMessageId }]
+      ]
     ]
   };
 }

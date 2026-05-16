@@ -395,7 +395,7 @@ describe("handleCallbackQuery → in-place txn-card flow", () => {
     expect(pillRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾"]);
   });
 
-  it("back → personal row when user has ≥1 group: drops ✂️ Split, keeps group parent + ❓", () => {
+  it("back → personal row when user has ≥1 group: drops ✂️ Split, ❓ rides on pills row", () => {
     var sent = [];
     var fix = setupFlowFixture({ messageId: "msg-X", merchant: "Amazon", category: "Shopping" }, [
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
@@ -410,12 +410,11 @@ describe("handleCallbackQuery → in-place txn-card flow", () => {
     var kb = JSON.parse(edit.payload.reply_markup);
     // First row is the group parent button.
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
-    // Action row is just [❓] — legacy ✂️ Split is dropped once the user is in any group.
-    var actionRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(actionRow.map((b) => b.text)).toEqual(["❓"]);
-    // Pills row reflects the row.
-    var pillRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
-    expect(pillRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾"]);
+    // No standalone action row — ❓ sits inline on the pills row to keep
+    // the keyboard compact. Legacy ✂️ Split is dropped once the user is in
+    // any group.
+    var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
+    expect(pillsRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "❓"]);
   });
 
   it("back → rebuilds post-split keyboard when the row has a GROUP_REF", () => {
