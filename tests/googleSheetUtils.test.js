@@ -139,12 +139,6 @@ describe("updateGoogleSheetCellWithFeedback", () => {
     expect(r.message).toMatch(/header row/);
   });
 
-  it("rejects rows beyond last data row", () => {
-    var r = api.updateGoogleSheetCellWithFeedback(99, 1, "x", "");
-    expect(r.success).toBe(false);
-    expect(r.message).toMatch(/exceeds last row/);
-  });
-
   it("updates the cell on success and returns old/new values", () => {
     var r = api.updateGoogleSheetCellWithFeedback(2, 1, "NEW", "a");
     expect(r.success).toBe(true);

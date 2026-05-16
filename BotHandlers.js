@@ -522,12 +522,9 @@ function handleCallbackQuery(update) {
     else if (action === "split") valueToSet = SPLIT_STATUS.SPLIT;
     else valueToSet = SPLIT_STATUS.PARTNER;
 
-    // Read current value
-    var sheet = getSpreadsheet().getSheets()[0];
-    var currentValue = sheet.getRange(rowNumber, SPLIT_COLUMN).getValue();
-
-    // Update the cell
-    var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, SPLIT_COLUMN, valueToSet, currentValue);
+    // Skip reading the current value — the only consumer was the unused
+    // oldValue in the feedback object. Saves one sheet round-trip per tap.
+    var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, SPLIT_COLUMN, valueToSet, null);
 
     if (!updateResult.success) {
       sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\n" + updateResult.message);
