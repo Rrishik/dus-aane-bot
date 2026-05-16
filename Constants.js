@@ -202,6 +202,7 @@ const TRANSACTION_SENDERS = [
   "alerts@yes.bank.in",
   "esfb-alerts@equitas.bank.in",
   "donotreply@bobcard.in",
+  "aucreditcard.alerts@aubank.in",
   "aucreditcards.alerts@aubank.in"
 ];
 
