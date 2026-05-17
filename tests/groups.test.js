@@ -1782,14 +1782,14 @@ describe("handleGroupCallback gsp execution", () => {
     expect(groupSend.payload.text).toContain("*Alice* paid");
     expect(groupSend.payload.text).toContain("Bob");
 
-    // DM keyboard was swapped via editMessageText. After gsp: undo + ❓
-    // overflow share the top row; pills row (🏷 / 📂) sits below.
+    // DM keyboard was swapped via editMessageText. After gsp: undo on the
+    // top row (wide), pills + ❓ inline on the bottom row.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Make personal again");
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
-    expect(kb.inline_keyboard[0][1].text).toBe("❓");
-    expect(kb.inline_keyboard[1].map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂"]);
+    expect(kb.inline_keyboard[0].length).toBe(1);
+    expect(kb.inline_keyboard[1].map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "❓"]);
   });
 
   it("rejects re-split when GROUP_REF is already set, makes no writes", () => {
