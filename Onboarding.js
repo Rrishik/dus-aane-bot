@@ -213,11 +213,6 @@ function buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl)
   );
 }
 
-// Source-compat alias for the previous function name.
-function buildFilterEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl) {
-  return buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl);
-}
-
 /**
  * Email setup instructions to the tenant's address(es) and ack on Telegram.
  *
