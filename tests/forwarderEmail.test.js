@@ -1,25 +1,21 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { loadAppsScript } from "./_loader.js";
 
-let extractForwardedFrom, extractForwarderEmail;
+let extractForwardedFrom, extractForwarderFromHeaders;
 
 beforeAll(() => {
   // TransactionProcessor.js's top level only declares EXTRACTION_TOOLS (a plain
   // array literal). All Apps Script globals are referenced inside functions,
   // so loading is safe with no stubs.
-  ({ extractForwardedFrom, extractForwarderEmail } = loadAppsScript(
+  ({ extractForwardedFrom, extractForwarderFromHeaders } = loadAppsScript(
     ["TransactionProcessor.js"],
-    ["extractForwardedFrom", "extractForwarderEmail"]
+    ["extractForwardedFrom", "extractForwarderFromHeaders"]
   ));
 });
 
-// Mock GmailMessage with the methods these helpers actually call.
-function mockMsg({ rawContent = "", plainBody = "", from = "" } = {}) {
-  return {
-    getRawContent: () => rawContent,
-    getPlainBody: () => plainBody,
-    getFrom: () => from
-  };
+// Mock GmailMessage with the methods extractForwardedFrom needs.
+function mockMsg({ plainBody = "" } = {}) {
+  return { getPlainBody: () => plainBody };
 }
 
 describe("extractForwardedFrom", () => {
@@ -54,48 +50,46 @@ describe("extractForwardedFrom", () => {
   });
 });
 
-describe("extractForwarderEmail", () => {
+describe("extractForwarderFromHeaders", () => {
   it("prefers X-Forwarded-For first address (auto-forward case)", () => {
-    var raw = [
-      "Received: from somewhere",
-      "X-Forwarded-For: alice@gmail.com dusaanebot.inbox@gmail.com",
-      "From: alerts@hdfcbank.net",
-      "Subject: Txn",
-      "",
-      "body"
-    ].join("\r\n");
-    expect(extractForwarderEmail(mockMsg({ rawContent: raw, from: "alerts@hdfcbank.net" }))).toBe("alice@gmail.com");
-  });
-
-  it("handles comma-separated X-Forwarded-For", () => {
-    var raw = "X-Forwarded-For: alice@gmail.com, dest@gmail.com\r\nFrom: x@y.com\r\n\r\n";
-    expect(extractForwarderEmail(mockMsg({ rawContent: raw, from: "x@y.com" }))).toBe("alice@gmail.com");
-  });
-
-  it("unfolds RFC 5322 continuation lines in headers", () => {
-    var raw = "X-Forwarded-For:\r\n alice@gmail.com dest@gmail.com\r\nFrom: x@y.com\r\n\r\nbody";
-    expect(extractForwarderEmail(mockMsg({ rawContent: raw, from: "x@y.com" }))).toBe("alice@gmail.com");
-  });
-
-  it("falls back to From: header when no X-Forwarded-For (manual forward)", () => {
     expect(
-      extractForwarderEmail(mockMsg({ rawContent: "From: alice@gmail.com\r\n\r\n", from: "Alice <alice@gmail.com>" }))
+      extractForwarderFromHeaders({
+        xForwardedFor: "alice@gmail.com dusaanebot.inbox@gmail.com",
+        from: "alerts@hdfcbank.net"
+      })
     ).toBe("alice@gmail.com");
   });
 
-  it("falls back to From: when raw content is empty", () => {
-    expect(extractForwarderEmail(mockMsg({ rawContent: "", from: "Bob <bob@example.com>" }))).toBe("bob@example.com");
+  it("handles comma-separated X-Forwarded-For", () => {
+    expect(extractForwarderFromHeaders({ xForwardedFor: "alice@gmail.com, dest@gmail.com", from: "x@y.com" })).toBe(
+      "alice@gmail.com"
+    );
   });
 
-  it("returns null when nothing usable is present", () => {
-    expect(extractForwarderEmail(mockMsg({ rawContent: "", from: "" }))).toBe(null);
+  it("falls back to From: header when X-Forwarded-For is missing (manual forward)", () => {
+    expect(extractForwarderFromHeaders({ xForwardedFor: "", from: "Alice <alice@gmail.com>" })).toBe("alice@gmail.com");
   });
 
-  it("does not match X-Forwarded-For appearing in the body (header-only scan)", () => {
-    var raw = "From: alerts@hdfcbank.net\r\n\r\nX-Forwarded-For: spoofed@evil.com other@good.com";
-    // Should fall back to From: since the X-Forwarded-For is in the body region.
-    expect(extractForwarderEmail(mockMsg({ rawContent: raw, from: "alerts@hdfcbank.net" }))).toBe(
-      "alerts@hdfcbank.net"
+  it("strips angle brackets and lowercases From: addresses", () => {
+    expect(extractForwarderFromHeaders({ xForwardedFor: "", from: "Bob <BOB@Example.COM>" })).toBe("bob@example.com");
+  });
+
+  it("accepts a bare From: address", () => {
+    expect(extractForwarderFromHeaders({ xForwardedFor: "", from: "bob@example.com" })).toBe("bob@example.com");
+  });
+
+  it("returns null when both headers are empty", () => {
+    expect(extractForwarderFromHeaders({ xForwardedFor: "", from: "" })).toBe(null);
+  });
+
+  it("returns null when given a null/undefined headers object", () => {
+    expect(extractForwarderFromHeaders(null)).toBe(null);
+    expect(extractForwarderFromHeaders(undefined)).toBe(null);
+  });
+
+  it("ignores X-Forwarded-For entries that aren't emails (defensive)", () => {
+    expect(extractForwarderFromHeaders({ xForwardedFor: "not-an-email", from: "alice@gmail.com" })).toBe(
+      "alice@gmail.com"
     );
   });
 });

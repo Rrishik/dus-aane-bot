@@ -201,21 +201,26 @@ function extractTransactions() {
       console.log("[extractTransactions] History cursor invalid; bootstrap-window recovery");
       messagesToProcess = fetchAndFilterMessages(getBootstrapCutoffDate());
     } else {
-      // Hydrate ids → GmailMessage. Apply the same allow-list / ignore filters
-      // that fetchAndFilterMessages applies on the time-window path.
+      // Two-phase hydration: metadata fetch first (cheap), then drop on the
+      // ignore-list; only the survivors get a full body fetch via GmailApp.
+      // Most of the "bank-curated" inbox passes both gates, but this avoids
+      // the multi-MB raw fetch on promo/OTP slip-throughs.
       messagesToProcess = [];
       for (var i = 0; i < result.messageIds.length; i++) {
+        var id = result.messageIds[i];
+        var headers = getMessageHeaders(id);
+        if (!headers) continue;
+        if (shouldIgnoreByHeaders(headers)) continue;
         var m;
         try {
-          m = GmailApp.getMessageById(result.messageIds[i]);
+          m = GmailApp.getMessageById(id);
         } catch (e) {
-          // Message was deleted between history event and hydrate — skip.
+          // Deleted between history event and hydrate — skip.
           continue;
         }
         if (!m) continue;
         if (!isFromAllowedBank(m)) continue;
-        if (shouldIgnoreMessage(m)) continue;
-        messagesToProcess.push(m);
+        messagesToProcess.push({ msg: m, headers: headers });
       }
       newHistoryIdToSave = result.newHistoryId;
     }
@@ -224,8 +229,9 @@ function extractTransactions() {
   var resolutions = getMerchantResolutions();
   var skipped = 0;
 
-  messagesToProcess.forEach((message) => {
-    var userEmail = extractForwarderEmail(message);
+  messagesToProcess.forEach((entry) => {
+    var message = entry.msg;
+    var userEmail = extractForwarderFromHeaders(entry.headers);
     if (!userEmail) {
       skipped++;
       console.log("[extractTransactions] No forwarder on " + message.getId() + "; skipping");
@@ -290,18 +296,48 @@ function getBootstrapCutoffDate() {
 }
 
 /**
- * Checks whether a Gmail message should be skipped based on IGNORE_SENDERS /
- * IGNORE_SUBJECTS from Constants.js. Works on both direct bank emails (where
- * `from` is the bank) and on manually-forwarded emails (where `from` is the
- * forwarder but the subject typically still contains the original subject
- * prefixed with "Fwd:").
+ * Fetches just the headers we filter on (no body, no MIME walk) via the
+ * Advanced Gmail Service. ~500-byte response regardless of message size,
+ * vs. the multi-MB RFC822 blob that GmailApp.getMessageById hydrates.
  *
- * Ignore tokens with spaces must be surrounded by double-quotes in Constants;
- * this function strips those quotes and does a case-insensitive substring match.
+ * Returns { id, from, subject, xForwardedFor, internalDate } or null on
+ * any Gmail error (message deleted between history event and fetch is
+ * the common case).
  */
-function shouldIgnoreMessage(msg) {
-  var fromHeader = (msg.getFrom() || "").toLowerCase();
-  var subject = (msg.getSubject() || "").toLowerCase();
+function getMessageHeaders(messageId) {
+  try {
+    var resp = Gmail.Users.Messages.get("me", messageId, {
+      format: "metadata",
+      metadataHeaders: ["From", "Subject", "X-Forwarded-For"]
+    });
+    var map = {};
+    var arr = (resp && resp.payload && resp.payload.headers) || [];
+    for (var i = 0; i < arr.length; i++) {
+      map[String(arr[i].name).toLowerCase()] = arr[i].value || "";
+    }
+    return {
+      id: resp.id,
+      internalDate: resp.internalDate ? Number(resp.internalDate) : null,
+      from: map.from || "",
+      subject: map.subject || "",
+      xForwardedFor: map["x-forwarded-for"] || ""
+    };
+  } catch (e) {
+    console.warn("[getMessageHeaders] " + messageId + ": " + e.message);
+    return null;
+  }
+}
+
+/**
+ * Headers-only ignore filter. Used pre-hydration in the trigger and search
+ * paths so promo/OTP/marketing mail is dropped without a body fetch.
+ *
+ * Ignore tokens with spaces are double-quoted in Constants.js; strip and do
+ * a case-insensitive substring match.
+ */
+function shouldIgnoreByHeaders(headers) {
+  var fromHeader = (headers.from || "").toLowerCase();
+  var subject = (headers.subject || "").toLowerCase();
 
   function norm(token) {
     return token.replace(/^"|"$/g, "").toLowerCase();
@@ -317,9 +353,22 @@ function shouldIgnoreMessage(msg) {
 }
 
 /**
+ * Bank-domain check on a single From: header value. Pulled out so it can be
+ * reused by both the header-only fast path and the body-preamble slow path.
+ */
+function isBankFromHeader(fromHeader) {
+  var f = (fromHeader || "").toLowerCase();
+  for (var i = 0; i < BANK_FROM_DOMAINS.length; i++) {
+    if (f.indexOf(BANK_FROM_DOMAINS[i].toLowerCase()) !== -1) return true;
+  }
+  return false;
+}
+
+/**
  * Extracts the original sender's email from a forwarded message's body.
  * Gmail's forward preamble format: "---------- Forwarded message ---------\nFrom: Name <addr@x>\n..."
- * Returns the extracted address (lowercase) or null if no preamble is found.
+ * Slow-path only: used when the From: header doesn't match a bank, to catch
+ * manual forwards (Gmail UI "Forward" button) where From is the human.
  */
 function extractForwardedFrom(msg) {
   try {
@@ -335,104 +384,101 @@ function extractForwardedFrom(msg) {
 }
 
 /**
- * Extracts the forwarder's (tenant's) email address from a message.
+ * Extracts the forwarder's (tenant's) email address from a metadata-headers
+ * object. Priority:
+ *  1. X-Forwarded-For (Gmail auto-forward adds "<forwarder> <destination>";
+ *     we take the first address).
+ *  2. From: header — fallback for manual forwards, where Gmail rewrites
+ *     From to the human user.
  *
- * Priority:
- *  1. Gmail filter auto-forward adds `X-Forwarded-For: <forwarder> <destination>`.
- *     We grab the first address. This is how auto-forwarded bank mail is routed
- *     to the correct tenant (the bank's From: header stays as the bank, so we
- *     can't use that).
- *  2. Manual forwards use Gmail's "---------- Forwarded message ----------" body
- *     preamble; those keep bank as the `extractForwardedFrom` fallback? No —
- *     for manual forwards, From: is the human forwarder directly, so we fall
- *     back to From: next.
- *  3. From: header as the final fallback (for historical/manually forwarded
- *     mail where From was rewritten to the human user).
- *
- * Returns lowercase email or null if nothing matches.
+ * Returns lowercase email or null.
  */
-function extractForwarderEmail(msg) {
-  // 1. X-Forwarded-For header (auto-forward)
-  try {
-    var raw = msg.getRawContent() || "";
-    // Only scan the header portion (stop at first blank line between headers and body).
-    var headerEnd = raw.indexOf("\r\n\r\n");
-    if (headerEnd === -1) headerEnd = raw.indexOf("\n\n");
-    var headers = headerEnd !== -1 ? raw.substring(0, headerEnd) : raw;
-    // Unfold continuation lines (RFC 5322 folded headers start with whitespace).
-    headers = headers.replace(/\r?\n[ \t]+/g, " ");
-    var m = headers.match(/^X-Forwarded-For:\s*([^\r\n]+)/im);
-    if (m) {
-      // Value looks like: "alice@gmail.com dusaanebot.inbox@gmail.com" (space-separated)
-      var first = m[1].trim().split(/[\s,]+/)[0];
-      if (first && first.indexOf("@") !== -1) return first.toLowerCase();
-    }
-  } catch (e) {
-    console.error("[extractForwarderEmail] header parse failed:", e.message);
+function extractForwarderFromHeaders(headers) {
+  var xff = headers && headers.xForwardedFor;
+  if (xff) {
+    var first = String(xff)
+      .trim()
+      .split(/[\s,]+/)[0];
+    if (first && first.indexOf("@") !== -1) return first.toLowerCase();
   }
-
-  // 2. From: header (manual forwards rewrite this to the human user)
-  var fromHeader = msg.getFrom() || "";
+  var fromHeader = (headers && headers.from) || "";
   var fromMatch = fromHeader.match(/<([^>]+)>/);
   var fromEmail = (fromMatch ? fromMatch[1] : fromHeader.trim()).toLowerCase();
   if (fromEmail && fromEmail.indexOf("@") !== -1) return fromEmail;
-
   return null;
 }
 
 /**
- * Checks whether the message's effective sender is from an allowed bank domain.
- * For direct emails, checks `getFrom()`. For forwarded emails (subject starts
- * with "Fwd:" or similar), falls back to the original sender parsed from the
- * forward preamble in the body.
+ * Full bank-domain check including the body-preamble slow path. Used after
+ * a message has been hydrated (the survivor set). Most calls return on the
+ * cheap header check; only manual-forwards reach the body parse.
  */
 function isFromAllowedBank(msg) {
-  var fromHeader = (msg.getFrom() || "").toLowerCase();
-  for (var i = 0; i < BANK_FROM_DOMAINS.length; i++) {
-    if (fromHeader.indexOf(BANK_FROM_DOMAINS[i].toLowerCase()) !== -1) return true;
-  }
-  // Not directly from a bank — check the forwarded preamble.
+  if (isBankFromHeader(msg.getFrom())) return true;
   var origFrom = extractForwardedFrom(msg);
-  if (origFrom) {
-    for (var j = 0; j < BANK_FROM_DOMAINS.length; j++) {
-      if (origFrom.indexOf(BANK_FROM_DOMAINS[j].toLowerCase()) !== -1) return true;
-    }
-  }
-  return false;
+  return origFrom ? isBankFromHeader(origFrom) : false;
 }
 
 /**
- * Fetches threads and filters individual messages by date + sender/subject
- * ignore lists. Called only by:
+ * Lists messages in [startDate, endDate] via Gmail.Users.Messages.list (with
+ * the `q=` time-window predicate), then filters and hydrates the survivors.
+ * Returns `{ msg, headers }[]`, oldest-first.
+ *
+ * Called only by:
  *   - extractTransactions' bootstrap / history-expiry fallback path.
  *   - backfillTransactions (user-initiated date-range scan).
  * The steady-state trigger flow uses Gmail.Users.History.list instead.
+ *
+ * Server-side `-label:processed-by-bot` means messages already handled in a
+ * prior run never come back over the wire — cheaper than the client-side
+ * dedup (which still runs as belt-and-braces).
  */
 function fetchAndFilterMessages(startDate, endDate) {
   // `after:`/`before:` with Unix seconds give us minute-level precision,
   // unlike `newer_than:` which only supports hour/day/week/month units.
   var afterSec = Math.floor(startDate.getTime() / 1000);
-  var query = `${GMAIL_SEARCH_QUERY} after:${afterSec}`;
+  var query = `${GMAIL_SEARCH_QUERY} -label:${PROCESSED_LABEL_NAME} after:${afterSec}`;
   if (endDate) {
     query += ` before:${Math.floor(endDate.getTime() / 1000)}`;
   }
-  var threads = GmailApp.search(query).reverse();
 
-  var filteredMessages = [];
-  threads.forEach((thread) => {
-    var messages = thread.getMessages();
-    var validMessages = messages.filter((msg) => {
-      var msgDate = msg.getDate();
-      if (msgDate < startDate) return false;
-      if (endDate && msgDate > endDate) return false;
-      if (!isFromAllowedBank(msg)) return false;
-      if (shouldIgnoreMessage(msg)) return false;
-      return true;
-    });
-    filteredMessages = filteredMessages.concat(validMessages);
-  });
+  var ids = [];
+  var pageToken = null;
+  try {
+    do {
+      var params = { q: query, maxResults: 500 };
+      if (pageToken) params.pageToken = pageToken;
+      var resp = Gmail.Users.Messages.list("me", params);
+      var msgs = (resp && resp.messages) || [];
+      for (var i = 0; i < msgs.length; i++) ids.push(msgs[i].id);
+      pageToken = resp && resp.nextPageToken;
+    } while (pageToken);
+  } catch (e) {
+    console.error("[fetchAndFilterMessages] messages.list failed: " + e.message);
+    return [];
+  }
 
-  return filteredMessages;
+  // Gmail returns newest-first; flip so downstream processing is chronological
+  // (matches the original `GmailApp.search(...).reverse()` behaviour).
+  ids.reverse();
+
+  var out = [];
+  for (var j = 0; j < ids.length; j++) {
+    var id = ids[j];
+    var headers = getMessageHeaders(id);
+    if (!headers) continue;
+    if (shouldIgnoreByHeaders(headers)) continue;
+    var msg;
+    try {
+      msg = GmailApp.getMessageById(id);
+    } catch (e) {
+      continue;
+    }
+    if (!msg) continue;
+    if (!isFromAllowedBank(msg)) continue;
+    out.push({ msg: msg, headers: headers });
+  }
+  return out;
 }
 
 /**
@@ -452,25 +498,59 @@ function isAlreadyProcessed(messageId) {
 
 /**
  * Marks a Gmail message as handled: writes to script cache and applies the
- * `processed-by-bot` label per-message via the Advanced Gmail Service.
+ * `processed-by-bot` label via the Advanced Gmail Service.
  *
  * Per-message (not thread-level) is required because some banks reuse
  * subjects across alerts so Gmail bundles them into one thread — labelling
  * the thread would silently mask siblings from any future search filter.
  *
+ * If a batch is active (see beginProcessedBatch), the Gmail label modify
+ * is deferred and flushed in a single `messages.batchModify` on end. The
+ * cache write still happens inline so `isAlreadyProcessed` sees it.
+ *
  * All failures are non-fatal: the messageId already lives in the sheet
  * (truth of "processed"), so the label is purely a visual breadcrumb in the
  * user's Gmail.
  */
-function markProcessed(message) {
+var _processedIdBatch = null;
+
+function beginProcessedBatch() {
+  _processedIdBatch = [];
+}
+
+function endProcessedBatch() {
+  var ids = _processedIdBatch;
+  _processedIdBatch = null;
+  if (!ids || !ids.length) return;
   try {
-    CacheService.getScriptCache().put("processed:" + message.getId(), "1", 21600);
+    var labelId = getProcessedLabelId();
+    // batchModify accepts up to 1000 ids per call; chunk defensively.
+    for (var i = 0; i < ids.length; i += 1000) {
+      var chunk = ids.slice(i, i + 1000);
+      Gmail.Users.Messages.batchModify({ ids: chunk, addLabelIds: [labelId] }, "me");
+    }
+  } catch (e) {
+    console.warn("[endProcessedBatch] batchModify failed: " + e.message);
+    if (/label/i.test(e.message || "")) {
+      PropertiesService.getScriptProperties().deleteProperty("gmail.processedLabelId");
+    }
+  }
+}
+
+function markProcessed(message) {
+  var id = message.getId();
+  try {
+    CacheService.getScriptCache().put("processed:" + id, "1", 21600);
   } catch (e) {
     console.warn("[markProcessed] cache put failed: " + e.message);
   }
+  if (_processedIdBatch !== null) {
+    _processedIdBatch.push(id);
+    return;
+  }
   try {
     var labelId = getProcessedLabelId();
-    Gmail.Users.Messages.modify({ addLabelIds: [labelId] }, "me", message.getId());
+    Gmail.Users.Messages.modify({ addLabelIds: [labelId] }, "me", id);
   } catch (e) {
     console.warn("[markProcessed] modify failed: " + e.message);
     // If the label was deleted by the user, the cached id is stale. Clear it
@@ -639,10 +719,19 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
 }
 
 /**
+/**
  * Backfill transactions for a date range with time-based execution limit.
  * Returns { savedCount, duplicateCount, failedCount, totalEmails, timedOut }
+ *
+ * Wraps the loop in beginProcessedBatch/endProcessedBatch so all of the
+ * per-message label additions collapse into one `messages.batchModify`
+ * call at the end (the Advanced Service caps batches at 1000 ids).
+ *
+ * Cross-chunk dedup comes for free: fetchAndFilterMessages already excludes
+ * label:processed-by-bot server-side, so each chunk's fetch only returns
+ * messages from previous timeouts that haven't been labeled yet.
  */
-function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
+function backfillTransactions(startDate, endDate, timeLimitMs) {
   // Scope backfill to the current tenant only. If no tenant is in context,
   // fall back to whatever getSpreadsheet() resolves to (tenant 0 defaults).
   var tenant = getCurrentTenant();
@@ -653,8 +742,8 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
   // If we have a tenant in context, restrict to messages forwarded by that
   // tenant's registered emails. Prevents cross-tenant contamination.
   if (tenant) {
-    messagesToProcess = messagesToProcess.filter(function (m) {
-      var userEmail = extractForwarderEmail(m);
+    messagesToProcess = messagesToProcess.filter(function (entry) {
+      var userEmail = extractForwarderFromHeaders(entry.headers);
       return userEmail && tenant.emails.indexOf(userEmail) !== -1;
     });
   }
@@ -665,36 +754,33 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
   var failedCount = 0;
   var timedOut = false;
   var startTime = new Date().getTime();
-  var startIndex = skipCount || 0;
-  var processed = 0;
 
-  for (var i = startIndex; i < messagesToProcess.length; i++) {
-    // Check time limit before processing a non-trivial email
-    if (timeLimitMs) {
-      var elapsed = new Date().getTime() - startTime;
-      if (elapsed > timeLimitMs) {
+  beginProcessedBatch();
+  try {
+    for (var i = 0; i < messagesToProcess.length; i++) {
+      if (timeLimitMs && new Date().getTime() - startTime > timeLimitMs) {
         timedOut = true;
         break;
       }
+
+      var entry = messagesToProcess[i];
+      var userEmail = extractForwarderFromHeaders(entry.headers) || "unknown";
+      var result = processSingleEmail(entry.msg, userEmail, true, resolutions);
+
+      if (result.duplicate) {
+        duplicateCount++;
+      } else if (result.saved && result.data) {
+        savedCount++;
+      } else {
+        failedCount++;
+      }
+
+      if (!result.duplicate) {
+        Utilities.sleep(500);
+      }
     }
-
-    // Forwarder's email, extracted per-message (auto-forward headers first).
-    var userEmail = extractForwarderEmail(messagesToProcess[i]) || "unknown";
-
-    var result = processSingleEmail(messagesToProcess[i], userEmail, true, resolutions);
-    processed++;
-
-    if (result.duplicate) {
-      duplicateCount++;
-    } else if (result.saved && result.data) {
-      savedCount++;
-    } else {
-      failedCount++;
-    }
-
-    if (!result.duplicate) {
-      Utilities.sleep(500);
-    }
+  } finally {
+    endProcessedBatch();
   }
 
   return {
@@ -702,7 +788,6 @@ function backfillTransactions(startDate, endDate, timeLimitMs, skipCount) {
     duplicateCount: duplicateCount,
     failedCount: failedCount,
     totalEmails: messagesToProcess.length,
-    processedCount: processed,
     timedOut: timedOut
   };
 }

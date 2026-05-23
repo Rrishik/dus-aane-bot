@@ -131,7 +131,6 @@ function startChunkedBackfill(startDate, endDate) {
   props.setProperty("backfill_total_saved", "0");
   props.setProperty("backfill_total_dupes", "0");
   props.setProperty("backfill_total_failed", "0");
-  props.setProperty("backfill_total_processed", "0");
   props.setProperty("backfill_chunk", "1");
   // Persist tenant chat_id so the async continueBackfill can restore context.
   props.setProperty("backfill_tenant_chat_id", String(getTenantChatId()));
@@ -187,7 +186,6 @@ function continueBackfill() {
       props.deleteProperty("backfill_total_saved");
       props.deleteProperty("backfill_total_dupes");
       props.deleteProperty("backfill_total_failed");
-      props.deleteProperty("backfill_total_processed");
       props.deleteProperty("backfill_chunk");
       props.deleteProperty("backfill_tenant_chat_id");
       return;
@@ -201,31 +199,22 @@ function continueBackfill() {
 
   var start = new Date(startStr);
   var end = new Date(endStr);
-  // Only extend to end-of-day if the stored end is at midnight (multi-day backfill).
-  // For sub-day backfills (e.g. /backfill 10m) the exact time was preserved and must be respected.
-  var isMidnight =
-    end.getHours() === 0 && end.getMinutes() === 0 && end.getSeconds() === 0 && end.getMilliseconds() === 0;
-  if (isMidnight) {
-    end.setHours(23, 59, 59, 999);
-  }
 
   var chunk = parseInt(props.getProperty("backfill_chunk") || "1", 10);
-  var skipCount = parseInt(props.getProperty("backfill_total_processed") || "0", 10);
 
-  // Run backfill with time limit, skipping already-processed emails
-  var result = backfillTransactions(start, end, BACKFILL_TIME_LIMIT_MS, skipCount);
+  // No skipCount needed: fetchAndFilterMessages excludes label:processed-by-bot
+  // server-side, so each chunk's fetch already omits everything we processed
+  // in prior chunks (the batchModify at the end of each chunk applies the label).
+  var result = backfillTransactions(start, end, BACKFILL_TIME_LIMIT_MS);
 
   // Accumulate totals
   var totalSaved = parseInt(props.getProperty("backfill_total_saved") || "0", 10) + result.savedCount;
   var totalDupes = parseInt(props.getProperty("backfill_total_dupes") || "0", 10) + result.duplicateCount;
   var totalFailed = parseInt(props.getProperty("backfill_total_failed") || "0", 10) + result.failedCount;
 
-  var totalProcessed = parseInt(props.getProperty("backfill_total_processed") || "0", 10) + result.processedCount;
-
   props.setProperty("backfill_total_saved", totalSaved.toString());
   props.setProperty("backfill_total_dupes", totalDupes.toString());
   props.setProperty("backfill_total_failed", totalFailed.toString());
-  props.setProperty("backfill_total_processed", totalProcessed.toString());
 
   if (result.timedOut) {
     // Send progress update
@@ -265,7 +254,6 @@ function continueBackfill() {
     props.deleteProperty("backfill_total_saved");
     props.deleteProperty("backfill_total_dupes");
     props.deleteProperty("backfill_total_failed");
-    props.deleteProperty("backfill_total_processed");
     props.deleteProperty("backfill_chunk");
     props.deleteProperty("backfill_tenant_chat_id");
   }

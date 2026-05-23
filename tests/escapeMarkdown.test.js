@@ -29,14 +29,10 @@ describe("escapeMarkdown", () => {
     expect(escapeMarkdown("a[b `c`")).toBe("a\\[b \\`c\\`");
   });
 
-  it("does NOT escape ] ( ) ~ > # + = | { } ! . — these are literal in legacy Markdown", () => {
+  it("does NOT escape ] ( ) ~ > # + = | { } ! . - — these are literal in legacy Markdown", () => {
     // Telegram legacy Markdown (parse_mode: "Markdown") treats only _ * [ ` as
     // special. Escaping the MarkdownV2 set leaks visible backslashes into the
     // rendered output (e.g. "\(May 01 to May 05\)" in /ask answers).
-    expect(escapeMarkdown("a]b(c)d~e>f#g+h=i|j{k}l!m.n")).toBe("a]b(c)d~e>f#g+h=i|j{k}l!m.n");
-  });
-
-  it("does NOT escape periods or dashes", () => {
-    expect(escapeMarkdown("3.14 - hi")).toBe("3.14 - hi");
+    expect(escapeMarkdown("a]b(c)d~e>f#g+h=i|j{k}l!m.n-o")).toBe("a]b(c)d~e>f#g+h=i|j{k}l!m.n-o");
   });
 });

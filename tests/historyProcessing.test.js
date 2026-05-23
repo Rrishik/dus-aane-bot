@@ -362,3 +362,109 @@ describe("markProcessed", () => {
     expect(propsStore.getProperty("gmail.processedLabelId")).toBe("Label_fresh");
   });
 });
+
+describe("markProcessed batch buffer", () => {
+  let propsStore;
+  let cacheStore;
+  let gmail;
+  let api;
+
+  function makeMessage(id) {
+    return { getId: () => id };
+  }
+
+  function load() {
+    return loadAppsScript(["TransactionProcessor.js"], ["markProcessed", "beginProcessedBatch", "endProcessedBatch"], {
+      PROCESSED_LABEL_NAME,
+      PropertiesService: { getScriptProperties: () => propsStore },
+      CacheService: { getScriptCache: () => cacheStore },
+      Gmail: gmail
+    });
+  }
+
+  beforeEach(() => {
+    propsStore = makePropsStore({ "gmail.processedLabelId": "Label_cached" });
+    cacheStore = makeCacheStore();
+    gmail = {
+      Users: {
+        Labels: { list: () => ({ labels: [] }), create: () => ({ id: "X" }) },
+        Messages: { modify: () => ({}), batchModify: () => ({}) }
+      }
+    };
+    api = load();
+  });
+
+  it("defers per-message modify when a batch is active and flushes via batchModify", () => {
+    var modifyCalls = 0;
+    var batchCalls = [];
+    gmail.Users.Messages.modify = () => {
+      modifyCalls++;
+    };
+    gmail.Users.Messages.batchModify = (resource, userId) => {
+      batchCalls.push({ resource, userId });
+    };
+
+    api.beginProcessedBatch();
+    api.markProcessed(makeMessage("m1"));
+    api.markProcessed(makeMessage("m2"));
+    api.markProcessed(makeMessage("m3"));
+
+    expect(modifyCalls).toBe(0);
+    expect(batchCalls).toHaveLength(0);
+    // Cache writes still happen inline so isAlreadyProcessed sees them mid-loop.
+    expect(cacheStore.get("processed:m1")).toBe("1");
+    expect(cacheStore.get("processed:m3")).toBe("1");
+
+    api.endProcessedBatch();
+
+    expect(batchCalls).toEqual([
+      { resource: { ids: ["m1", "m2", "m3"], addLabelIds: ["Label_cached"] }, userId: "me" }
+    ]);
+  });
+
+  it("endProcessedBatch is a no-op when no ids accumulated", () => {
+    var batchCalls = 0;
+    gmail.Users.Messages.batchModify = () => batchCalls++;
+
+    api.beginProcessedBatch();
+    api.endProcessedBatch();
+
+    expect(batchCalls).toBe(0);
+  });
+
+  it("falls back to per-message modify after endProcessedBatch", () => {
+    var modifyCalls = 0;
+    gmail.Users.Messages.modify = () => modifyCalls++;
+
+    api.beginProcessedBatch();
+    api.endProcessedBatch();
+    api.markProcessed(makeMessage("m_after"));
+
+    expect(modifyCalls).toBe(1);
+  });
+
+  it("chunks batchModify into groups of 1000 ids", () => {
+    var batchSizes = [];
+    gmail.Users.Messages.batchModify = (resource) => {
+      batchSizes.push(resource.ids.length);
+    };
+
+    api.beginProcessedBatch();
+    for (var i = 0; i < 2300; i++) api.markProcessed(makeMessage("m" + i));
+    api.endProcessedBatch();
+
+    expect(batchSizes).toEqual([1000, 1000, 300]);
+  });
+
+  it("clears the cached label id when batchModify fails with a label error", () => {
+    gmail.Users.Messages.batchModify = () => {
+      throw new Error("Invalid label id in addLabelIds");
+    };
+
+    api.beginProcessedBatch();
+    api.markProcessed(makeMessage("m1"));
+    api.endProcessedBatch();
+
+    expect(propsStore.getProperty("gmail.processedLabelId")).toBeNull();
+  });
+});
