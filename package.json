@@ -4,9 +4,11 @@
   "scripts": {
     "format": "prettier --write \"**/*.js\"",
     "format:check": "prettier --check \"**/*.js\"",
-    "test": "vitest run"
+    "test": "vitest run",
+    "coverage": "node scripts/coverage.js"
   },
   "devDependencies": {
+    "@vitest/coverage-istanbul": "^1.6.1",
     "prettier": "^3.2.0",
     "vitest": "^1.6.0"
   }
