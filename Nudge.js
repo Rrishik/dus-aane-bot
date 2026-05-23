@@ -34,6 +34,14 @@ var NUDGE_CONFIG = {
 //   config: { inactiveDays, pendingDays, cooldownDays, maxNudges }
 function shouldNudge(tenant, now, config) {
   if (!tenant) return null;
+  // Groups can't go dormant: they never forward emails (extractTransactions
+  // only routes to chat_type=personal tenants), so last_forward_at stays
+  // empty forever and they'd otherwise hit the "pending: never forwarded"
+  // branch every cron run, get nudged in the group chat, and flip dormant —
+  // at which point findGroupsForMember drops them and the personal DM falls
+  // back to the legacy split UI. Activity for groups is membership-driven,
+  // not forwarding-driven; no nudge concept applies.
+  if (tenant.chat_type === TENANT_CHAT_TYPE.GROUP) return null;
   // PENDING and ACTIVE qualify; DORMANT/DISABLED are out.
   if (tenant.status !== "active" && tenant.status !== "pending") return null;
   if ((tenant.nag_count || 0) >= config.maxNudges) return null;

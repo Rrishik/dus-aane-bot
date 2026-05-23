@@ -411,29 +411,17 @@ function sendTransactionMessage(transaction_details, messageId, user) {
     var tagPill = "🏷 " + pillLabel(transaction_details.merchant, "Untagged") + " ▾";
     var catPill = "📂 " + pillLabel(shortCategoryName(transaction_details.category), "Uncategorized") + " ▾";
 
-    // Legacy ✂️ Split (personal→split→50/50→partner-100) only applies when
-    // the user is in zero groups; the 👥 Split with <Group> ▾ parent button
-    // supersedes it once any group exists. When there's no Split button to
-    // sit beside, the ❓ overflow rides on the pills row instead of
-    // claiming its own row — keeps the keyboard compact and matches the
-    // "❓ always shares a line" rule used across DM/group surfaces.
-    var inAnyGroup = buildGroupParentButtonRows(getTenantChatId(), messageId).length > 0;
-    var pillsRow = [
-      { text: tagPill, callback_data: "tag_" + messageId },
-      { text: catPill, callback_data: "editcat_" + messageId }
-    ];
-    var rows = [pillsRow];
-    if (inAnyGroup) {
-      pillsRow.push({ text: "❓", callback_data: "help_" + messageId });
-    } else {
-      rows.push([
-        { text: "✂️ Split", callback_data: "split_" + messageId },
+    // Pills row carries the ❓ overflow. Group-split parent buttons (one row
+    // per group the user belongs to) stack above the pills so the per-group
+    // action is the most prominent option. Users in zero groups see only
+    // pills + overflow — no split UI applies until they join a group.
+    var rows = [
+      [
+        { text: tagPill, callback_data: "tag_" + messageId },
+        { text: catPill, callback_data: "editcat_" + messageId },
         { text: "❓", callback_data: "help_" + messageId }
-      ]);
-    }
-
-    // Group-split parent buttons (one row per group). Stacked above the
-    // action row so the per-group action is the most prominent option.
+      ]
+    ];
     var groupRows = buildGroupParentButtonRows(getTenantChatId(), messageId);
     for (var gi = 0; gi < groupRows.length; gi++) {
       rows.unshift(groupRows[groupRows.length - 1 - gi]);

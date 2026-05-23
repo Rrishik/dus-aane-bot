@@ -1054,18 +1054,17 @@ describe("buildTransactionLevel0Keyboard", () => {
     );
   }
 
-  it("zero-group user keeps the legacy ✂️ Split button (their only split path)", () => {
+  it("zero-group user gets just the pills + ❓ row (no group parents, no legacy Split)", () => {
     var { SpreadsheetApp } = setupRegistry([
       ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"]
     ]);
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
     var kb = buildTransactionLevel0Keyboard("111", "msg-X", "Swiggy", "Food & Dining");
-    expect(kb.inline_keyboard.length).toBe(2); // status row + action row, no group rows
-    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Swiggy ▾", "📂 Food ▾"]);
-    expect(kb.inline_keyboard[1].map((b) => b.text)).toEqual(["✂️ Split", "❓"]);
+    expect(kb.inline_keyboard.length).toBe(1);
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Swiggy ▾", "📂 Food ▾", "❓"]);
   });
 
-  it("user in ≥1 group drops the legacy Split — group parent button is canonical", () => {
+  it("user in ≥1 group: group parent row prepended, ❓ rides on pills row", () => {
     var { SpreadsheetApp } = setupRegistry([
       ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
@@ -1085,7 +1084,7 @@ describe("buildTransactionLevel0Keyboard", () => {
     ]);
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
     var kb = buildTransactionLevel0Keyboard("111", "msg-X");
-    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Untagged ▾", "📂 Uncategorized ▾"]);
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Untagged ▾", "📂 Uncategorized ▾", "❓"]);
   });
 });
 

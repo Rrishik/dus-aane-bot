@@ -387,15 +387,12 @@ describe("handleCallbackQuery → in-place txn-card flow", () => {
     var edit = sent.find((s) => s.url.indexOf("/editMessageReplyMarkup") !== -1);
     expect(edit).toBeTruthy();
     var kb = JSON.parse(edit.payload.reply_markup);
-    // Last row is the action row. Personal (no group) → ✂️ Split + ❓.
-    var actionRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(actionRow.map((b) => b.text)).toEqual(["✂️ Split", "❓"]);
-    // Pills row above should reflect the row values.
-    var pillRow = kb.inline_keyboard[kb.inline_keyboard.length - 2];
-    expect(pillRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾"]);
+    // Personal user not in any group: just one pills+❓ row, no parent rows.
+    expect(kb.inline_keyboard).toHaveLength(1);
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "❓"]);
   });
 
-  it("back → personal row when user has ≥1 group: drops ✂️ Split, ❓ rides on pills row", () => {
+  it("back → personal row when user has ≥1 group: prepends group parent row, ❓ rides on pills", () => {
     var sent = [];
     var fix = setupFlowFixture({ messageId: "msg-X", merchant: "Amazon", category: "Shopping" }, [
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
@@ -411,8 +408,7 @@ describe("handleCallbackQuery → in-place txn-card flow", () => {
     // First row is the group parent button.
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
     // No standalone action row — ❓ sits inline on the pills row to keep
-    // the keyboard compact. Legacy ✂️ Split is dropped once the user is in
-    // any group.
+    // the keyboard compact.
     var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
     expect(pillsRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "❓"]);
   });

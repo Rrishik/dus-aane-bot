@@ -67,22 +67,6 @@ var ASK_TOOLS = [
   {
     type: "function",
     function: {
-      name: "get_split_summary",
-      description:
-        "Get shared-expense summary for a date range. Covers Split (50/50), Partner (payer paid 100% on behalf of the other user), and Personal totals, plus per-user paid amounts and who owes whom.",
-      parameters: {
-        type: "object",
-        properties: {
-          start_date: { type: "string", description: "Start date in YYYY-MM-DD format" },
-          end_date: { type: "string", description: "End date in YYYY-MM-DD format" }
-        },
-        required: ["start_date", "end_date"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
       name: "search_transactions",
       description:
         "Search for specific transactions. Use when the user asks about a specific merchant, category, or amount range. All parameters are optional filters.",
@@ -156,19 +140,6 @@ function executeAskTool(toolName, args, allTransactions) {
 
     case "get_user_spend":
       return { users: aggregateByUser(debits) };
-
-    case "get_split_summary":
-      var settlement = calcSplitSettlement(debits);
-      return {
-        split_count: settlement.splitCount,
-        partner_count: settlement.partnerCount,
-        personal_count: settlement.personalCount,
-        split_total_by_currency: settlement.splitTotal,
-        partner_total_by_currency: settlement.partnerTotal,
-        personal_total_by_currency: settlement.personalTotal,
-        user_paid: settlement.userPaid,
-        settlements: settlement.settlements
-      };
 
     case "search_transactions":
       return execSearchTransactions(filtered, args);

@@ -399,14 +399,9 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    // Handle stats callbacks: stats_recent, stats_trends, stats_whoowes
+    // Handle stats callbacks: stats_recent, stats_trends
     if (action === "stats") {
       return handleStatsCallback(chatId, telegramMessageId, callbackQueryId, callbackPayload);
-    }
-
-    // Handle month navigation: monthprev / monthnext
-    if (action === "monthprev" || action === "monthnext") {
-      return handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, callbackPayload);
     }
 
     // Handle "📂 Category" pill — swap the card's keyboard to the category
@@ -602,63 +597,11 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    var emailMessageId = callbackPayload; // Gmail message ID
-
-    // Only handle split-toggle actions here; other actions handled above
-    if (action !== "personal" && action !== "split" && action !== "partner") {
-      sendTelegramMessage(chatId, "❌ *Unknown action*");
-      return;
-    }
-
-    // Look up the row by message ID
-    var rowNumber = requireRowForCallback(chatId, emailMessageId);
-    if (rowNumber < 0) return;
-
-    var valueToSet;
-    if (action === "personal") valueToSet = SPLIT_STATUS.PERSONAL;
-    else if (action === "split") valueToSet = SPLIT_STATUS.SPLIT;
-    else valueToSet = SPLIT_STATUS.PARTNER;
-
-    // Skip reading the current value — the only consumer was the unused
-    // oldValue in the feedback object. Saves one sheet round-trip per tap.
-    var updateResult = updateGoogleSheetCellWithFeedback(rowNumber, SPLIT_COLUMN, valueToSet, null);
-
-    if (!updateResult.success) {
-      sendTelegramMessage(chatId, "❌ *Error updating transaction*\n\n" + updateResult.message);
-      return;
-    }
-
-    // Build cycle button: personal → split → partner → personal
-    var nextActionMap = { personal: "split", split: "partner", partner: "personal" };
-    var nextLabelMap = { personal: "🔄 Personal", split: "✂️ Split", partner: "👤 Partner" };
-    var toggleAction = nextActionMap[action];
-    var toggleText = nextLabelMap[toggleAction];
-
-    // Refresh the Tag / Category pills with the current row values so this
-    // post-split card has the same affordances as the original notification.
-    var rowForPills = getSpreadsheet().getSheets()[0].getRange(rowNumber, 1, 1, 10).getValues()[0];
-    var pillMerchant = (rowForPills[MERCHANT_COLUMN - 1] || "").toString().trim();
-    var pillCategory = (rowForPills[CATEGORY_COLUMN - 1] || "").toString().trim();
-    var tagPill = "🏷 " + pillLabel(pillMerchant, "Untagged") + " ▾";
-    var catPill = "📂 " + pillLabel(shortCategoryName(pillCategory), "Uncategorized") + " ▾";
-
-    var options = {
-      parse_mode: "Markdown",
-      reply_markup: buildReplyMarkup([
-        [
-          { text: tagPill, callback_data: "tag_" + emailMessageId },
-          { text: catPill, callback_data: "editcat_" + emailMessageId }
-        ],
-        [
-          { text: toggleText, callback_data: toggleAction + "_" + emailMessageId },
-          { text: "❓", callback_data: "help_" + emailMessageId }
-        ]
-      ]),
-      message_id: telegramMessageId
-    };
-
-    var message = `✅ *Marked as ${valueToSet}*\n\n${messageText}`;
-    sendTelegramMessage(chatId, message, options);
+    // Anything that reaches here is unhandled. All split actions are
+    // dispatched through the group-callback path (gnav/gsp/gset/gst/...)
+    // earlier in this function; the legacy personal/split/partner toggle
+    // was removed once the group-split flow took over.
+    sendTelegramMessage(chatId, "❌ *Unknown action*");
   } catch (error) {
     console.error("[handleCallbackQuery] Error:", error.message, error.stack);
     if (update.callback_query && update.callback_query.message && update.callback_query.message.chat) {
@@ -849,21 +792,13 @@ function handleStatsCommand(chatId) {
 // a bar chart and gives MoM deltas + biggest category movers, which covered
 // the same intent more compactly. Top-5-txns-by-amount and per-user breakdown
 // (Monthly's other features) are recoverable via /ask.
-//
-// Who Owes is conditional on chat_type. In a personal chat the sheet only
-// has one user (the owner), so calcSplitSettlement has no counterparty and
-// the report is always "All settled!" — splits with friends happen via the
-// 'Split with <group>' inline button and land in the group sheet, where Who
-// Owes lives. Hiding the button in personal chats removes the dead-end.
 function buildStatsMenuKeyboard(tenant) {
-  var row = [
-    { text: "🕒 Recent", callback_data: "stats_recent" },
-    { text: "📉 Trends", callback_data: "stats_trends" }
+  return [
+    [
+      { text: "🕒 Recent", callback_data: "stats_recent" },
+      { text: "📉 Trends", callback_data: "stats_trends" }
+    ]
   ];
-  if (tenant && tenant.chat_type === TENANT_CHAT_TYPE.GROUP) {
-    row.push({ text: "💰 Who Owes", callback_data: "stats_whoowes" });
-  }
-  return [row];
 }
 
 // ─── Ask Command (AI tool-calling) ───────────────────────────────────
@@ -969,10 +904,6 @@ function runAskFlow(chatId, question) {
 }
 
 function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subAction) {
-  var now = new Date();
-  var year = now.getFullYear();
-  var month = now.getMonth();
-
   try {
     // Back button — restore the dashboard menu in place.
     if (subAction === "back") {
@@ -1023,22 +954,6 @@ function handleStatsCallback(chatId, telegramMessageId, callbackQueryId, subActi
         message_id: telegramMessageId,
         reply_markup: { inline_keyboard: [buildTrendsToggleRow(mode), buildStatsBackRow()] }
       });
-    } else if (subAction === "whoowes") {
-      var data = getWhoOwesAnalytics(year, month);
-      if (!data) {
-        sendTelegramMessage(chatId, "💰 *No split transactions this month.*", {
-          parse_mode: "Markdown",
-          message_id: telegramMessageId,
-          reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
-        });
-        return;
-      }
-      var msg = formatWhoOwesMessage(year, month, data);
-      sendTelegramMessage(chatId, msg, {
-        parse_mode: "Markdown",
-        message_id: telegramMessageId,
-        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
-      });
     }
   } catch (error) {
     console.error("Error in handleStatsCallback:", error.message, error.stack);
@@ -1059,64 +974,4 @@ function buildTrendsToggleRow(currentMode) {
     return [{ text: "📅 Weekly", callback_data: "stats_trendsweekly" }];
   }
   return [{ text: "📊 Monthly", callback_data: "stats_trendsmonthly" }];
-}
-
-function handleMonthNavigation(chatId, telegramMessageId, callbackQueryId, action, payload) {
-  try {
-    // payload: "YYYY_M_whoowes". Month-nav now exists only inside Who Owes —
-    // Monthly was retired (Trends covers the same intent across 6 months).
-    // We still parse a `mode` for forward-compat, but only "whoowes" is
-    // currently produced by buildMonthNavButtons.
-    var parts = payload.split("_");
-    var year = parseInt(parts[0], 10);
-    var month = parseInt(parts[1], 10);
-
-    if (action === "monthprev") {
-      month--;
-      if (month < 0) {
-        month = 11;
-        year--;
-      }
-    } else {
-      month++;
-      if (month > 11) {
-        month = 0;
-        year++;
-      }
-    }
-
-    var data = getWhoOwesAnalytics(year, month);
-    if (!data) {
-      var tz = Session.getScriptTimeZone();
-      var label = Utilities.formatDate(new Date(year, month, 1), tz, "MMMM yyyy");
-      sendTelegramMessage(chatId, "💰 *No split transactions in " + label + "*", {
-        parse_mode: "Markdown",
-        message_id: telegramMessageId,
-        reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
-      });
-      return;
-    }
-    var msg = formatWhoOwesMessage(year, month, data);
-    sendTelegramMessage(chatId, msg, {
-      parse_mode: "Markdown",
-      message_id: telegramMessageId,
-      reply_markup: { inline_keyboard: [buildMonthNavButtons(year, month, "whoowes"), buildStatsBackRow()] }
-    });
-  } catch (error) {
-    console.error("Error in handleMonthNavigation:", error.message, error.stack);
-    sendTelegramMessage(chatId, "❌ *Error:* " + escapeMarkdown(error.message));
-  }
-}
-
-// Builds the [◀️ Prev] [▶️ Next] row. Hides Next when at the current month
-// (no future data exists). `mode` adds a trailing _whoowes suffix when set.
-function buildMonthNavButtons(year, month, mode) {
-  var suffix = mode ? "_" + mode : "";
-  var now = new Date();
-  var atCurrent = year === now.getFullYear() && month === now.getMonth();
-  var row = [{ text: "◀️ Prev", callback_data: "monthprev_" + year + "_" + month + suffix }];
-  if (!atCurrent) {
-    row.push({ text: "▶️ Next", callback_data: "monthnext_" + year + "_" + month + suffix });
-  }
-  return row;
 }

@@ -907,23 +907,11 @@ function buildTransactionLevel0Keyboard(callerChatId, emailMessageId, merchant, 
   var rows = buildGroupParentButtonRows(callerChatId, emailMessageId);
   var tagPill = "🏷 " + pillLabel(merchant, "Untagged") + " ▾";
   var catPill = "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾";
-  var statusRow = [
+  rows.push([
     { text: tagPill, callback_data: "tag_" + emailMessageId },
-    { text: catPill, callback_data: "editcat_" + emailMessageId }
-  ];
-  // ❓ rides on the pills row when there's no Split CTA to sit beside
-  // (i.e. the user has groups, so 👥 parent buttons supersede ✂️ Split).
-  // Keeps the overflow inline with other buttons everywhere.
-  if (rows.length > 0) {
-    statusRow.push({ text: "❓", callback_data: "help_" + emailMessageId });
-    rows.push(statusRow);
-  } else {
-    rows.push(statusRow);
-    rows.push([
-      { text: "✂️ Split", callback_data: "split_" + emailMessageId },
-      { text: "❓", callback_data: "help_" + emailMessageId }
-    ]);
-  }
+    { text: catPill, callback_data: "editcat_" + emailMessageId },
+    { text: "❓", callback_data: "help_" + emailMessageId }
+  ]);
   return { inline_keyboard: rows };
 }
 

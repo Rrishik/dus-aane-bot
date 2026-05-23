@@ -7,7 +7,7 @@ beforeAll(() => {
   ({ shouldNudge, formatNudgeMessage, NUDGE_CONFIG } = loadAppsScript(
     ["Nudge.js"],
     ["shouldNudge", "formatNudgeMessage", "NUDGE_CONFIG"],
-    {}
+    { TENANT_CHAT_TYPE: { PERSONAL: "personal", GROUP: "group" } }
   ));
 });
 
@@ -118,6 +118,11 @@ describe("shouldNudge — caps and status gates", () => {
 
   it("does not nudge tenants already in dormant status", () => {
     var t = tenant({ status: "dormant", last_forward_at: new Date(NOW.getTime() - 30 * DAY_MS).toISOString() });
+    expect(shouldNudge(t, NOW, NUDGE_CONFIG)).toBeNull();
+  });
+
+  it("never nudges group tenants (no forwarding activity → would always look stale)", () => {
+    var t = tenant({ chat_type: "group", status: "active", last_forward_at: "" });
     expect(shouldNudge(t, NOW, NUDGE_CONFIG)).toBeNull();
   });
 
