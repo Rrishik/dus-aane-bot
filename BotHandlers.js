@@ -508,6 +508,36 @@ function handleCallbackQuery(update) {
       return;
     }
 
+    // Handle "💬 Follow up" — user wants to continue the /ask conversation
+    // attached to this message. We swap the original message's keyboard
+    // off (single-use) and send a fresh force_reply prompt; the convo is
+    // re-stashed against the prompt's message id so the user's reply
+    // resumes the loop via tryResumeAsk.
+    if (action === "askfu") {
+      var convo = null;
+      try {
+        convo = loadAskConvo(chatId, telegramMessageId);
+      } catch (_) {}
+      // Always clear the button so a stale tap can't loop us. If the stash
+      // already expired/cleared, we tell the user and bail.
+      editTelegramReplyMarkup(chatId, telegramMessageId, { inline_keyboard: [] });
+      if (!convo) {
+        sendTelegramMessage(chatId, "_That follow-up window has expired. Start a fresh /ask whenever you're ready._");
+        return;
+      }
+      try {
+        clearAskConvo(chatId, telegramMessageId);
+      } catch (_) {}
+      var promptRaw = sendTelegramMessage(chatId, "_What's your follow-up?_", {
+        reply_markup: { force_reply: true, selective: true }
+      });
+      var promptMsgId = _parseSentMessageId(promptRaw);
+      if (promptMsgId) {
+        saveAskConvo(chatId, promptMsgId, convo.messages, convo.askCallId || null, convo.turn || 1);
+      }
+      return;
+    }
+
     // Anything that reaches here is unhandled. All split actions are
     // dispatched through the group-callback path (gnav/gsp/gset/gst/...)
     // earlier in this function; the legacy personal/split/partner toggle
@@ -786,15 +816,21 @@ function runAskFlow(chatId, question) {
   });
 }
 
-// Resume a /ask conversation that was suspended by an ask_user tool call.
+// Resume a /ask conversation that was suspended by an ask_user tool call,
+// by the question-detection safety net, or by a "Follow up" button tap.
 // `convo` is the cache entry loaded by tryResumeAsk; `userText` is the
-// user's free-text reply. The reply is appended as the `tool` response
-// answering the suspended ask_user call, then the loop continues.
+// user's free-text reply.
+//
+// When `convo.askCallId` is set the suspension came from a real `ask_user`
+// tool_call and the reply must satisfy that pending tool_call as a `tool`
+// message. When it's null the suspension was synthetic (question-detection
+// or follow-up button) and the reply is just the next user turn.
 function resumeAsk(chatId, convo, userText) {
   var nextTurn = (convo.turn || 1) + 1;
-  var resumedMessages = (convo.messages || []).concat([
-    { role: "tool", tool_call_id: convo.askCallId, content: String(userText == null ? "" : userText) }
-  ]);
+  var replyMessage = convo.askCallId
+    ? { role: "tool", tool_call_id: convo.askCallId, content: String(userText == null ? "" : userText) }
+    : { role: "user", content: String(userText == null ? "" : userText) };
+  var resumedMessages = (convo.messages || []).concat([replyMessage]);
   _runAskInternal(chatId, function () {
     return runAskLoop(
       null,
@@ -876,7 +912,28 @@ function _runAskInternal(chatId, runLoop) {
       return;
     }
 
-    // final or error — both go out as plain markdown-escaped text
+    // final — attach a "Follow up" button so the user has an explicit way
+    // to continue the conversation without remembering to retype /ask. We
+    // skip the button (and the convo stash) once the turn count would
+    // overflow ASK_MAX_TURNS on the next resume, since the loop would
+    // refuse anyway.
+    if (result.kind === "final") {
+      var currentTurn = result.turn || 1;
+      var hasFollowupSlot = result.messages && currentTurn < ASK_MAX_TURNS;
+      var opts = hasFollowupSlot
+        ? { reply_markup: { inline_keyboard: [[{ text: "💬 Follow up", callback_data: "askfu_" + currentTurn }]] } }
+        : {};
+      var finalRaw = sendTelegramMessage(chatId, escapeMarkdown(result.text), opts);
+      if (hasFollowupSlot) {
+        var finalMsgId = _parseSentMessageId(finalRaw);
+        if (finalMsgId) {
+          saveAskConvo(chatId, finalMsgId, result.messages, null, currentTurn);
+        }
+      }
+      return;
+    }
+
+    // error — plain markdown-escaped text, no follow-up affordance
     sendTelegramMessage(chatId, escapeMarkdown(result.text));
   } catch (error) {
     if (quotaConsumed) {

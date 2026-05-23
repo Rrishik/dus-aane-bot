@@ -98,7 +98,16 @@ describe("runAskLoop — final answer", () => {
     });
     var api = load(env.stubs);
     var result = api.runAskLoop("food spend?");
-    expect(result).toEqual({ kind: "final", text: "you spent ₹500 on food" });
+    // Final result now carries the appended assistant turn + turn counter
+    // so BotHandlers can attach the Follow-up button + stash the convo.
+    expect(result.kind).toBe("final");
+    expect(result.text).toBe("you spent ₹500 on food");
+    expect(result.turn).toBe(1);
+    expect(result.messages).toEqual([
+      { role: "system", content: expect.any(String) },
+      { role: "user", content: "food spend?" },
+      { role: "assistant", content: "you spent ₹500 on food" }
+    ]);
   });
 
   it("returns { kind: 'error', ... } when callAIWithTools returns null", () => {

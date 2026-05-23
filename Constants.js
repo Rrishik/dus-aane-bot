@@ -77,7 +77,8 @@ const CATEGORIES = [
   "Education",
   "Investment",
   "Subscriptions",
-  "CC Bill Payment"
+  "CC Bill Payment",
+  "Transfer Out"
 ];
 
 const CREDIT_CATEGORIES = ["Salary", "Refund", "Cashback", "Transfer In", "Reimbursement", "Interest/Dividend"];
@@ -95,6 +96,7 @@ const CATEGORY_EMOJIS = {
   Investment: "📈",
   Subscriptions: "📱",
   "CC Bill Payment": "💳",
+  "Transfer Out": "📤",
   Salary: "💼",
   Refund: "🔄",
   Cashback: "🎁",

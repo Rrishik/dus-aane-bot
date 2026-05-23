@@ -516,6 +516,7 @@ function getAskSystemPrompt() {
     "- Correct likely typos in merchant names before searching (e.g., flipart → flipkart, swiggi → swiggy, amzn → amazon)\n" +
     "- Use short/common merchant name for search — the data may have suffixes like _mws_merch\n" +
     "- Prefer answering with the data you already have. For read-only answers, call ask_user only when a required parameter is genuinely missing and cannot be inferred — never for confirmation or stylistic choices. For mutation tools, see below.\n" +
+    "- CRITICAL: A final text answer MUST be a complete statement, never a question to the user. If your final answer would ask the user anything (e.g. 'Which one?', 'Want a breakdown?', 'Should I update X?'), STOP — call the ask_user tool with that question instead. A final text containing '?' that expects a user response is a bug: the user's reply gets orphaned because there is no resume hook attached to plain text. Rhetorical questions that don't expect a reply are also forbidden — rephrase as a statement.\n" +
     "\nMutation tools (update_transaction, split_transaction):\n" +
     "- Run them ONLY when the user explicitly asks to change or split a transaction. Never speculate.\n" +
     "- Always identify the row via transaction_id from a prior search_transactions call. If you don't have one, run search_transactions first.\n" +
@@ -580,10 +581,16 @@ function runAskLoop(question, onProgress, opts) {
     };
   }
 
-  var messages = opts.messages || [
-    { role: "system", content: getAskSystemPrompt() },
-    { role: "user", content: question }
-  ];
+  // Clone opts.messages so we don't surprise-mutate the caller's array as
+  // we append assistant / tool turns through the loop. The result still
+  // surfaces the appended history via `result.messages` for follow-up
+  // stashing.
+  var messages = opts.messages
+    ? opts.messages.slice()
+    : [
+        { role: "system", content: getAskSystemPrompt() },
+        { role: "user", content: question }
+      ];
 
   var _txns = null;
   function getTxns() {
@@ -601,9 +608,15 @@ function runAskLoop(question, onProgress, opts) {
 
     var choice = response.choices[0];
 
-    // If the model returned a text answer, we're done
+    // Final assistant text. We append the turn to `messages` so the result's
+    // history is complete for follow-up stashing in BotHandlers (the
+    // Follow-up button uses this to resume the convo). The system-prompt
+    // rule forbids the LLM from asking a question here; if it slips through,
+    // the Follow-up button on the final response still lets the user reply.
     if (choice.finish_reason === "stop" && choice.message.content) {
-      return { kind: "final", text: choice.message.content };
+      var text = choice.message.content;
+      messages.push({ role: "assistant", content: text });
+      return { kind: "final", text: text, messages: messages, turn: turn };
     }
 
     // If the model wants to call tools
@@ -655,7 +668,9 @@ function runAskLoop(question, onProgress, opts) {
       // No tool calls and no content — unexpected
       return {
         kind: "final",
-        text: choice.message.content || "I couldn't find an answer to that. Try being more specific."
+        text: choice.message.content || "I couldn't find an answer to that. Try being more specific.",
+        messages: messages,
+        turn: turn
       };
     }
   }

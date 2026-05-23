@@ -412,7 +412,8 @@ var CATEGORY_SHORT_NAMES = {
   "CC Bill Payment": "CC Bill",
   "Interest/Dividend": "Interest",
   Reimbursement: "Reimburse",
-  "Transfer In": "Transfer"
+  "Transfer In": "Transfer",
+  "Transfer Out": "Transfer"
 };
 
 function shortCategoryName(cat) {
