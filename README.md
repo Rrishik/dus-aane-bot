@@ -141,7 +141,6 @@ Admin = the person deploying and operating the bot. Users don't need any of this
 8. **Cloudflare Worker** — set `APPS_SCRIPT_URL` secret, `wrangler deploy` (or use the GitHub Actions workflow).
 9. **Bot wiring** — from the script editor, run `setTelegramWebhook()` (points Telegram at the worker) and `setTelegramCommands()` (registers the slash-menu).
 10. **Trigger** — add an hourly trigger for `triggerEmailProcessing` (Triggers panel in the script editor).
-11. **Seed tenant 0** — run `adminSeedTenantZero()` once; optionally `adminAddEmailToTenantZero("you@gmail.com")` for each forwarder.
 
 That's it — the bot is live. Share it with others by just giving them the Telegram handle; they self-onboard with `/start`.
 
@@ -157,7 +156,7 @@ Each personal tenant's spreadsheet has **one** tab — their transactions:
 | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
 | Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link, Group Ref, Group Message ID | One row per transaction |
 
-`Group Ref = "<group_chat_id>:<Tx ID>"` and `Group Message ID = telegram message_id of the group notification` are populated when a transaction is split into a group; both are blank for personal-only rows. The migration script `adminMigrateTenantSchema()` adds these two columns to existing tenant sheets.
+`Group Ref = "<group_chat_id>:<Tx ID>"` and `Group Message ID = telegram message_id of the group notification` are populated when a transaction is split into a group; both are blank for personal-only rows.
 
 Group tenants get their own spreadsheet with the **per-share β schema** — one row per share, so a 4-way split is 4 rows linked by the same Tx ID:
 
