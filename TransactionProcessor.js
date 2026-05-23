@@ -70,16 +70,156 @@ function executeExtractionTool(toolName, args, resolutions) {
 }
 
 /**
+ * Returns the Gmail label resource ID for PROCESSED_LABEL_NAME, creating the
+ * label if it doesn't exist. The ID is cached in ScriptProperties because
+ * Gmail.Users.Messages.modify needs the ID (not the name) and looking it up
+ * via labels.list on every trigger run would be wasteful.
+ *
+ * If the user manually deletes the label, the cached ID becomes stale. The
+ * next markProcessed call will throw "invalid label" and the catch there
+ * clears the cache so the subsequent run re-creates the label cleanly.
+ */
+function getProcessedLabelId() {
+  var props = PropertiesService.getScriptProperties();
+  var cached = props.getProperty("gmail.processedLabelId");
+  if (cached) return cached;
+
+  var resp = Gmail.Users.Labels.list("me");
+  var labels = (resp && resp.labels) || [];
+  for (var i = 0; i < labels.length; i++) {
+    if (labels[i].name === PROCESSED_LABEL_NAME) {
+      props.setProperty("gmail.processedLabelId", labels[i].id);
+      return labels[i].id;
+    }
+  }
+
+  var created = Gmail.Users.Labels.create(
+    {
+      name: PROCESSED_LABEL_NAME,
+      labelListVisibility: "labelShow",
+      messageListVisibility: "show"
+    },
+    "me"
+  );
+  props.setProperty("gmail.processedLabelId", created.id);
+  return created.id;
+}
+
+/**
+ * Reads the messages added to the mailbox since `startHistoryId`. Returns
+ * `{ messageIds: string[], newHistoryId: string }` on success, or `null` if
+ * Gmail rejected the cursor as expired/invalid (typical after ~7 days of
+ * inactivity) so the caller can bootstrap.
+ *
+ * Pagination is followed in case a single run sees a large backlog (e.g. the
+ * trigger fired after an hours-long Apps Script outage).
+ */
+function listNewMessageIdsViaHistory(startHistoryId) {
+  var messageIds = [];
+  var seen = {};
+  var pageToken = null;
+  var newHistoryId = startHistoryId;
+  try {
+    do {
+      var params = {
+        startHistoryId: startHistoryId,
+        historyTypes: ["messageAdded"]
+      };
+      if (pageToken) params.pageToken = pageToken;
+      var resp = Gmail.Users.History.list("me", params);
+      if (resp.historyId) newHistoryId = resp.historyId;
+      var records = resp.history || [];
+      for (var i = 0; i < records.length; i++) {
+        var added = records[i].messagesAdded || [];
+        for (var j = 0; j < added.length; j++) {
+          var id = added[j].message && added[j].message.id;
+          if (id && !seen[id]) {
+            seen[id] = true;
+            messageIds.push(id);
+          }
+        }
+      }
+      pageToken = resp.nextPageToken;
+    } while (pageToken);
+  } catch (e) {
+    // Gmail returns 404 with "Invalid startHistoryId" once the cursor expires.
+    // Treat any failure as "needs bootstrap" — the caller will time-window
+    // recover. Network/500s also land here; the bootstrap fallback for those
+    // means a tiny re-scan, which is fine.
+    console.warn("[listNewMessageIdsViaHistory] " + e.message + " — will bootstrap");
+    return null;
+  }
+  return { messageIds: messageIds, newHistoryId: newHistoryId };
+}
+
+/**
+ * Captures the mailbox's current historyId and stores it as the cursor for
+ * future incremental runs. Used on first deploy and when the cursor expires.
+ *
+ * Important ordering: we save the historyId BEFORE the bootstrap-window scan
+ * runs so that any mail arriving during the scan will still be captured by
+ * the next history.list (overlap is handled by Sheets dedup).
+ */
+function bootstrapHistoryState() {
+  var profile = Gmail.Users.getProfile("me");
+  PropertiesService.getScriptProperties().setProperty("gmail.lastHistoryId", profile.historyId);
+  return profile.historyId;
+}
+
+/**
  * Main function to orchestrate the email processing flow.
  *
- * Multi-tenant: each message is routed to the tenant whose registered forwarder
- * email matches the message's From: address. Unmatched messages are skipped
- * (logged but not processed).
+ * Steady state: history.list returns only deltas since the last successful
+ * run, so per-run work is proportional to actual new mail (not lookback
+ * width). The cursor is advanced only after the loop finishes; a mid-run
+ * crash means the next run replays the same range and Sheets dedup absorbs
+ * the overlap.
+ *
+ * Multi-tenant: each message is routed to the tenant whose registered
+ * forwarder email matches the message's From: address. Unmatched messages
+ * are skipped (logged but not processed).
  */
 function extractTransactions() {
-  var cutoffDate = getCutoffDate();
+  var props = PropertiesService.getScriptProperties();
+  var lastHistoryId = props.getProperty("gmail.lastHistoryId");
+  var messagesToProcess;
+  var newHistoryIdToSave = null;
 
-  var messagesToProcess = fetchAndFilterMessages(cutoffDate);
+  if (!lastHistoryId) {
+    // First deploy: seed the cursor and sweep the bootstrap window for
+    // anything currently in flight.
+    bootstrapHistoryState();
+    console.log("[extractTransactions] Bootstrapping; sweeping last " + BOOTSTRAP_WINDOW_MINUTES + " min");
+    messagesToProcess = fetchAndFilterMessages(getBootstrapCutoffDate());
+  } else {
+    var result = listNewMessageIdsViaHistory(lastHistoryId);
+    if (!result) {
+      // Cursor expired/invalid → reset and sweep the bootstrap window. Per the
+      // configured recovery policy we accept any gap older than that window;
+      // the user can manually backfill if needed.
+      bootstrapHistoryState();
+      console.log("[extractTransactions] History cursor invalid; bootstrap-window recovery");
+      messagesToProcess = fetchAndFilterMessages(getBootstrapCutoffDate());
+    } else {
+      // Hydrate ids → GmailMessage. Apply the same allow-list / ignore filters
+      // that fetchAndFilterMessages applies on the time-window path.
+      messagesToProcess = [];
+      for (var i = 0; i < result.messageIds.length; i++) {
+        var m;
+        try {
+          m = GmailApp.getMessageById(result.messageIds[i]);
+        } catch (e) {
+          // Message was deleted between history event and hydrate — skip.
+          continue;
+        }
+        if (!m) continue;
+        if (!isFromAllowedBank(m)) continue;
+        if (shouldIgnoreMessage(m)) continue;
+        messagesToProcess.push(m);
+      }
+      newHistoryIdToSave = result.newHistoryId;
+    }
+  }
 
   var resolutions = getMerchantResolutions();
   var skipped = 0;
@@ -127,20 +267,25 @@ function extractTransactions() {
   if (skipped > 0) {
     console.log("[extractTransactions] Skipped " + skipped + " messages with no matching tenant.");
   }
+
+  // Advance the cursor only after the loop finishes without throwing. If we
+  // bail mid-run, the next run replays the same history range — Sheets dedup
+  // catches the duplicates. (The bootstrap branches already wrote a fresh
+  // cursor inside bootstrapHistoryState, so they leave newHistoryIdToSave
+  // null here intentionally.)
+  if (newHistoryIdToSave) {
+    props.setProperty("gmail.lastHistoryId", newHistoryIdToSave);
+  }
 }
 
 /**
- * Calculates the cutoff date based on configuration.
+ * Computes the bootstrap window cutoff used when no historyId is available
+ * (first deploy, or after history-cursor invalidation). The steady-state
+ * trigger flow does NOT use this — see extractTransactions.
  */
-function getCutoffDate() {
+function getBootstrapCutoffDate() {
   var cutoffDate = new Date();
-  var value = parseInt(MAILS_LOOKBACK_PERIOD.slice(0, -1));
-  var unit = MAILS_LOOKBACK_PERIOD.slice(-1);
-
-  if (unit === "d") cutoffDate.setDate(cutoffDate.getDate() - value);
-  else if (unit === "h") cutoffDate.setHours(cutoffDate.getHours() - value);
-  else if (unit === "m") cutoffDate.setMinutes(cutoffDate.getMinutes() - value);
-
+  cutoffDate.setMinutes(cutoffDate.getMinutes() - BOOTSTRAP_WINDOW_MINUTES);
   return cutoffDate;
 }
 
@@ -257,20 +402,19 @@ function isFromAllowedBank(msg) {
 }
 
 /**
- * Fetches threads and filters individual messages by date + sender/subject ignore lists.
- * Accepts a start date, and an optional end date for range queries.
+ * Fetches threads and filters individual messages by date + sender/subject
+ * ignore lists. Called only by:
+ *   - extractTransactions' bootstrap / history-expiry fallback path.
+ *   - backfillTransactions (user-initiated date-range scan).
+ * The steady-state trigger flow uses Gmail.Users.History.list instead.
  */
 function fetchAndFilterMessages(startDate, endDate) {
-  var query;
+  // `after:`/`before:` with Unix seconds give us minute-level precision,
+  // unlike `newer_than:` which only supports hour/day/week/month units.
+  var afterSec = Math.floor(startDate.getTime() / 1000);
+  var query = `${GMAIL_SEARCH_QUERY} after:${afterSec}`;
   if (endDate) {
-    // Use Unix timestamps (seconds) for exact precision. Gmail's date-form `before:`
-    // is exclusive of the given day's midnight, which drops messages on the end date.
-    var afterSec = Math.floor(startDate.getTime() / 1000);
-    var beforeSec = Math.floor(endDate.getTime() / 1000);
-    query = `${GMAIL_SEARCH_QUERY} after:${afterSec} before:${beforeSec}`;
-  } else {
-    // Regular trigger flow: simple lookback window
-    query = `${GMAIL_SEARCH_QUERY} newer_than:${MAILS_LOOKBACK_PERIOD}`;
+    query += ` before:${Math.floor(endDate.getTime() / 1000)}`;
   }
   var threads = GmailApp.search(query).reverse();
 
@@ -292,18 +436,69 @@ function fetchAndFilterMessages(startDate, endDate) {
 }
 
 /**
+ * Cache layer in front of the Sheets dedup. The Gmail label filter inside
+ * fetchAndFilterMessages catches the common case at search time; this exists
+ * for the (rare) gap where a prior run saved a row but its label-add failed.
+ */
+function isAlreadyProcessed(messageId) {
+  var cache = CacheService.getScriptCache();
+  if (cache.get("processed:" + messageId)) return true;
+  if (findRowByColumnValue(MESSAGE_ID_COLUMN, messageId) > 0) {
+    cache.put("processed:" + messageId, "1", 21600);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Marks a Gmail message as handled: writes to script cache and applies the
+ * `processed-by-bot` label per-message via the Advanced Gmail Service.
+ *
+ * Per-message (not thread-level) is required because some banks reuse
+ * subjects across alerts so Gmail bundles them into one thread — labelling
+ * the thread would silently mask siblings from any future search filter.
+ *
+ * All failures are non-fatal: the messageId already lives in the sheet
+ * (truth of "processed"), so the label is purely a visual breadcrumb in the
+ * user's Gmail.
+ */
+function markProcessed(message) {
+  try {
+    CacheService.getScriptCache().put("processed:" + message.getId(), "1", 21600);
+  } catch (e) {
+    console.warn("[markProcessed] cache put failed: " + e.message);
+  }
+  try {
+    var labelId = getProcessedLabelId();
+    Gmail.Users.Messages.modify({ addLabelIds: [labelId] }, "me", message.getId());
+  } catch (e) {
+    console.warn("[markProcessed] modify failed: " + e.message);
+    // If the label was deleted by the user, the cached id is stale. Clear it
+    // so the next run re-discovers/recreates the label on first call.
+    if (/label/i.test(e.message || "")) {
+      PropertiesService.getScriptProperties().deleteProperty("gmail.processedLabelId");
+    }
+  }
+}
+
+/**
  * Processes a single email message: calls the AI provider with tool calling, parses response, saves to sheet.
  * Returns { saved: true/false, duplicate: true/false, data: parsed transaction or null }.
  */
 function processSingleEmail(message, userEmail, silent, resolutions) {
-  var emailText = message.getPlainBody();
-  var emailDate = message.getDate();
   var messageId = message.getId();
 
-  // Dedup: skip if this message was already processed
-  if (findRowByColumnValue(MESSAGE_ID_COLUMN, messageId) > 0) {
+  // Dedup first — before the body/raw fetches — so already-saved messages
+  // (whose `processed-by-bot` label add failed in a prior run and slipped past
+  // the search-level filter) cost only a cache+sheet lookup, not a Gmail body
+  // round-trip.
+  if (isAlreadyProcessed(messageId)) {
+    markProcessed(message); // re-apply the label so we filter at source next time
     return { saved: false, duplicate: true, data: null };
   }
+
+  var emailText = message.getPlainBody();
+  var emailDate = message.getDate();
 
   try {
     var messages = [
@@ -332,10 +527,10 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
         continue;
       }
 
-      // No tool call — we have the final response
+      // No tool call \u2014 we have the final response
       if (msg.content) {
         var emailLink = "https://mail.google.com/mail/u/0/#all/" + messageId;
-        return handleAIResponse(msg.content, emailDate, userEmail, messageId, emailLink, silent, resolutions);
+        return handleAIResponse(msg.content, emailDate, userEmail, message, emailLink, silent, resolutions);
       }
     }
   } catch (e) {
@@ -347,7 +542,8 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
 /**
  * Handles the raw text response from the AI provider, attempts JSON parsing, and saves data.
  */
-function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, silent, resolutions) {
+function handleAIResponse(rawText, emailDate, userEmail, message, emailLink, silent, resolutions) {
+  var messageId = message.getId();
   var cleanText = rawText;
 
   // Clean markdown code blocks
@@ -376,6 +572,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
             ")";
           sendTelegramMessage(getTenantChatId(), skipMsg, { parse_mode: "Markdown" });
         }
+        markProcessed(message);
         return { saved: false, duplicate: false, data: null };
       }
       // Resolve merchant name before saving
@@ -392,6 +589,7 @@ function handleAIResponse(rawText, emailDate, userEmail, messageId, emailLink, s
       // can later 🏷️ Tag it without having to type the pattern themselves.
       if (rawMerchant) addNewMerchantIfNeeded(rawMerchant);
       saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
+      markProcessed(message);
       return { saved: true, duplicate: false, data: data };
     } else {
       // AI response was not valid JSON
@@ -413,7 +611,6 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
   var type = data.transaction_type || "Unknown";
   var currency = data.currency || "INR";
   var user = userEmail.split("@")[0];
-  var splitStatus = SPLIT_STATUS.PERSONAL; // Default to Personal
 
   appendRowToGoogleSheet([
     emailDate,
@@ -423,7 +620,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
     category,
     type,
     user,
-    splitStatus,
+    "",
     messageId,
     currency,
     emailLink

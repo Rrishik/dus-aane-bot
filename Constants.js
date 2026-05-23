@@ -64,13 +64,6 @@ const G_COL_COUNT = 13;
 // quadratically with members and the small-flat-share use case rarely exceeds 4.
 const MAX_GROUP_MEMBERS = 4;
 
-// Split Status Values (enum-like constants)
-const SPLIT_STATUS = {
-  PERSONAL: "Personal", // 100% mine
-  SPLIT: "Split", // 50/50 between users
-  PARTNER: "Partner" // I paid, 100% belongs to the other user
-};
-
 // Category options for the picker
 const CATEGORIES = [
   "Shopping",
@@ -111,7 +104,19 @@ const CATEGORY_EMOJIS = {
 };
 
 // Gmail
-const MAILS_LOOKBACK_PERIOD = "1h";
+// Trigger flow is history-driven (Gmail.Users.History.list) — incremental,
+// no time-window scan in the steady state. This constant is used only when
+// the script has no `gmail.lastHistoryId` yet (first deploy) or when Gmail
+// has invalidated the cursor (~7 days of inactivity), in which case we fall
+// back to a one-shot time-window scan to catch in-flight mail.
+const BOOTSTRAP_WINDOW_MINUTES = 70;
+
+// Gmail label applied to messages once the bot has finished handling them
+// (saved as a transaction, or notified-and-discarded as non-transaction).
+// Applied per-message via the Advanced Gmail Service so multi-message threads
+// (some banks reuse subjects → Gmail bundles alerts into one thread) get
+// labelled correctly without hiding newer siblings from search.
+const PROCESSED_LABEL_NAME = "processed-by-bot";
 
 // Display symbols for the currencies we expect to see in bank emails. Any
 // code not in this map is rendered as-is (the original 3-letter code is a
