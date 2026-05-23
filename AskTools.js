@@ -96,7 +96,7 @@ var ASK_TOOLS = [
     function: {
       name: "ask_user",
       description:
-        "Ask the user a short clarifying question and wait for a free-text reply. Use ONLY when a required parameter is genuinely missing and cannot be inferred from prior context. Never use for confirmations, stylistic choices, or pick-one disambiguation — for those, present the options inline in your normal reply instead.",
+        "Ask the user a short clarifying question and wait for a free-text reply. Use when a required parameter is genuinely missing and cannot be inferred from prior context, OR when you need the user to pick one row before calling a mutation tool (update_transaction, split_transaction). For pure read-only answers, do NOT use ask_user for disambiguation — just present the options inline in your normal reply instead. Never use for confirmations or stylistic choices.",
       parameters: {
         type: "object",
         properties: {
@@ -515,11 +515,11 @@ function getAskSystemPrompt() {
     "\n" +
     "- Correct likely typos in merchant names before searching (e.g., flipart → flipkart, swiggi → swiggy, amzn → amazon)\n" +
     "- Use short/common merchant name for search — the data may have suffixes like _mws_merch\n" +
-    "- Prefer answering with the data you already have. Only call ask_user when a required parameter is genuinely missing and cannot be inferred — never for confirmation, never for stylistic choices\n" +
+    "- Prefer answering with the data you already have. For read-only answers, call ask_user only when a required parameter is genuinely missing and cannot be inferred — never for confirmation or stylistic choices. For mutation tools, see below.\n" +
     "\nMutation tools (update_transaction, split_transaction):\n" +
     "- Run them ONLY when the user explicitly asks to change or split a transaction. Never speculate.\n" +
     "- Always identify the row via transaction_id from a prior search_transactions call. If you don't have one, run search_transactions first.\n" +
-    "- If the search returns multiple plausible matches, call ask_user to disambiguate before mutating. Do NOT guess.\n" +
+    "- If the search returns more than one plausible match, you MUST call the ask_user tool to disambiguate before mutating. Do NOT answer with a text question listing the options — that orphans the user's reply. Use the ask_user tool so the conversation resumes properly.\n" +
     "- After a successful mutation, briefly confirm what changed in plain text (e.g. 'Updated: category Food → Transfer'). Do not re-run search.\n" +
     "- For split_transaction: if the user has multiple groups and the user didn't specify one, call get_groups first; if still ambiguous, call ask_user.\n"
   );
