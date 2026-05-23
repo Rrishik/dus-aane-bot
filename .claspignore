@@ -3,6 +3,9 @@ node_modules/**
 .git/**
 .github/**
 tests/**
+scripts/**
+.coverage/**
 vitest.config.*
+vitest.coverage.config.*
 package.json
 package-lock.json
