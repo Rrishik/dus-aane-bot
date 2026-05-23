@@ -365,7 +365,7 @@ describe("saveTransaction", () => {
     );
   }
 
-  it("writes all 11 cells with sensible defaults when data is sparse", () => {
+  it("writes all 10 cells with sensible defaults when data is sparse", () => {
     var env = baseStubs();
     var api = load(env.stubs);
 
@@ -378,7 +378,9 @@ describe("saveTransaction", () => {
     expect(row[4]).toBe("Uncategorized"); // category default
     expect(row[5]).toBe("Unknown"); // type default
     expect(row[6]).toBe("alice"); // userEmail local-part
-    expect(row[9]).toBe("INR"); // currency default
+    expect(row[7]).toBe("msg-A"); // messageId
+    expect(row[8]).toBe("INR"); // currency default
+    expect(row[9]).toBe("https://mail/link"); // email link
   });
 
   it("does NOT pass a displayUser to the notification when tenant has a single forwarder", () => {

@@ -31,16 +31,18 @@ const COLS = {
   CATEGORY_COLUMN: 5,
   TRANSACTION_TYPE_COLUMN: 6,
   USER_COLUMN: 7,
-  SPLIT_COLUMN: 8,
-  MESSAGE_ID_COLUMN: 9,
-  CURRENCY_COLUMN: 10
+  MESSAGE_ID_COLUMN: 8,
+  CURRENCY_COLUMN: 9,
+  EMAIL_LINK_COLUMN: 10,
+  GROUP_REF_COLUMN: 11,
+  GROUP_MESSAGE_ID_COLUMN: 12
 };
 
 // Build a minimal Sheet-shaped object that getAllTransactions can read.
 function fakeSheetWithRows(txns) {
-  var header = new Array(10).fill("h");
+  var header = new Array(12).fill("h");
   var rows = txns.map((t) => {
-    var r = new Array(10).fill("");
+    var r = new Array(12).fill("");
     r[COLS.EMAIL_DATE_COLUMN - 1] = t.date;
     r[COLS.TRANSACTION_DATE_COLUMN - 1] = t.date;
     r[COLS.MERCHANT_COLUMN - 1] = t.merchant;
@@ -48,7 +50,6 @@ function fakeSheetWithRows(txns) {
     r[COLS.CATEGORY_COLUMN - 1] = t.category;
     r[COLS.TRANSACTION_TYPE_COLUMN - 1] = t.type;
     r[COLS.USER_COLUMN - 1] = t.user;
-    r[COLS.SPLIT_COLUMN - 1] = "Personal";
     r[COLS.CURRENCY_COLUMN - 1] = t.currency;
     return r;
   });

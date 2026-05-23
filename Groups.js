@@ -691,7 +691,7 @@ function handleGroupCallback(update) {
       var pillMerchant = "";
       var pillCategory = "";
       if (pillRow > 0) {
-        var pillData = getSpreadsheet().getSheets()[0].getRange(pillRow, 1, 1, 10).getValues()[0];
+        var pillData = getSpreadsheet().getSheets()[0].getRange(pillRow, 1, 1, CATEGORY_COLUMN).getValues()[0];
         pillMerchant = (pillData[MERCHANT_COLUMN - 1] || "").toString().trim();
         pillCategory = (pillData[CATEGORY_COLUMN - 1] || "").toString().trim();
       }
@@ -1349,7 +1349,7 @@ function _executeGroupUndoLocked(cb, decoded, callerChatId, dmChatId, telegramMe
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue("");
 
   // Restore the original transaction keyboard (group parents + status / action rows).
-  var personalRow = personalSheet.getRange(rowNumber, 1, 1, 10).getValues()[0];
+  var personalRow = personalSheet.getRange(rowNumber, 1, 1, CATEGORY_COLUMN).getValues()[0];
   var newKb = buildTransactionLevel0Keyboard(
     callerChatId,
     emailMessageId,

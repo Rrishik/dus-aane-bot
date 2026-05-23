@@ -1,18 +1,33 @@
 // Read all transactions as structured objects.
+//
+// For rows that were split into a group, the personal sheet keeps the full
+// charged amount (col D). Analytics should reflect what the user actually
+// owed — their share of the split — so we join GROUP_REF against the
+// matching group sheet and replace `amount` with the payer's share. When
+// the payer paid for someone else and owes nothing (e.g. mode 'p100'), no
+// share row exists for them and the amount drops to 0. Non-split rows
+// pass through unchanged.
 function getAllTransactions() {
   var sheet = getSpreadsheet().getSheets()[0];
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
   data.shift();
 
+  var shareByRef = _buildPayerShareMap(data);
+
   return data.map(function (row) {
     // Transaction Date preferred, fall back to Email Date.
     var rawDate = row[TRANSACTION_DATE_COLUMN - 1] || row[EMAIL_DATE_COLUMN - 1];
     var dateObj = rawDate instanceof Date ? rawDate : new Date(rawDate);
+    var amount = parseFloat(row[AMOUNT_COLUMN - 1]) || 0;
+    var groupRef = (row[GROUP_REF_COLUMN - 1] || "").toString();
+    if (groupRef && Object.prototype.hasOwnProperty.call(shareByRef, groupRef)) {
+      amount = shareByRef[groupRef];
+    }
     return {
       date: dateObj,
       merchant: (row[MERCHANT_COLUMN - 1] || "").toString(),
-      amount: parseFloat(row[AMOUNT_COLUMN - 1]) || 0,
+      amount: amount,
       category: (row[CATEGORY_COLUMN - 1] || "Uncategorized").toString(),
       type: (row[TRANSACTION_TYPE_COLUMN - 1] || "").toString(),
       user: (row[USER_COLUMN - 1] || "").toString(),
@@ -24,6 +39,67 @@ function getAllTransactions() {
       messageId: (row[MESSAGE_ID_COLUMN - 1] || "").toString()
     };
   });
+}
+
+// Build a `{ "<gcid>:<txid>" → payerShareAmount }` lookup for every split
+// row in the personal sheet. We batch one read per group sheet so analytics
+// pay O(num_groups) sheet opens, not O(num_split_rows).
+//
+// Resolution rules:
+//   - Group sheet missing or unreadable → ref absent from map; caller falls
+//     back to the full charged amount (conservative — we'd rather over-count
+//     than silently zero out).
+//   - Group sheet readable but no row for this payer + tx_id → 0 (covers
+//     'p100' where the payer owes nothing and writes no holder row).
+//   - Holder row found → its share amount.
+function _buildPayerShareMap(personalRows) {
+  var refsByGroup = {};
+  var hasAny = false;
+  for (var i = 0; i < personalRows.length; i++) {
+    var ref = (personalRows[i][GROUP_REF_COLUMN - 1] || "").toString();
+    if (!ref) continue;
+    var idx = ref.indexOf(":");
+    if (idx < 0) continue;
+    var gcid = ref.substring(0, idx);
+    var txId = ref.substring(idx + 1);
+    if (!refsByGroup[gcid]) refsByGroup[gcid] = {};
+    refsByGroup[gcid][txId] = ref;
+    hasAny = true;
+  }
+  if (!hasAny) return {};
+
+  var payerChatId = String(getTenantChatId());
+  var out = {};
+  for (var gcid in refsByGroup) {
+    var group = null;
+    try {
+      group = findGroupTenantByChatId(gcid);
+    } catch (_) {}
+    if (!group || !group.sheet_id) continue;
+    var gData = null;
+    try {
+      gData = openGroupSheet(group.sheet_id).getDataRange().getValues();
+    } catch (_) {
+      continue;
+    }
+    if (!gData || gData.length <= 1) continue;
+    // Default each wanted ref to 0 only once we know the group sheet is
+    // readable — that distinguishes "missing share row" (0 owed) from
+    // "couldn't look up" (fall back to full amount).
+    for (var txKey in refsByGroup[gcid]) {
+      out[refsByGroup[gcid][txKey]] = 0;
+    }
+    for (var j = 1; j < gData.length; j++) {
+      var r = gData[j];
+      var holderId = String(r[G_SHARE_HOLDER_COLUMN - 1] || "").trim();
+      if (holderId !== payerChatId) continue;
+      var rTxId = String(r[G_TX_ID_COLUMN - 1] || "").trim();
+      var ref = refsByGroup[gcid][rTxId];
+      if (!ref) continue;
+      out[ref] = parseFloat(r[G_SHARE_AMOUNT_COLUMN - 1]) || 0;
+    }
+  }
+  return out;
 }
 
 function filterByMonth(transactions, year, month) {

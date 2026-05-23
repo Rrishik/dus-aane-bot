@@ -33,12 +33,11 @@ const AMOUNT_COLUMN = 4; // Column D
 const CATEGORY_COLUMN = 5; // Column E
 const TRANSACTION_TYPE_COLUMN = 6; // Column F
 const USER_COLUMN = 7; // Column G
-const SPLIT_COLUMN = 8; // Column H
-const MESSAGE_ID_COLUMN = 9; // Column I
-const CURRENCY_COLUMN = 10; // Column J
-const EMAIL_LINK_COLUMN = 11; // Column K
-const GROUP_REF_COLUMN = 12; // Column L — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
-const GROUP_MESSAGE_ID_COLUMN = 13; // Column M — Telegram message id of the group's split notification, else empty
+const MESSAGE_ID_COLUMN = 8; // Column H
+const CURRENCY_COLUMN = 9; // Column I
+const EMAIL_LINK_COLUMN = 10; // Column J
+const GROUP_REF_COLUMN = 11; // Column K — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
+const GROUP_MESSAGE_ID_COLUMN = 12; // Column L — Telegram message id of the group's split notification, else empty
 
 // --- Group-sheet schema (β: one row per share) ---
 // Group sheets have a different column layout than personal sheets — they

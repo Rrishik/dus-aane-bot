@@ -145,10 +145,11 @@ function ensureSheetHeaders() {
       "Category",
       "Transaction Type",
       "User",
-      "Split",
       "Message ID",
       "Currency",
-      "Email Link"
+      "Email Link",
+      "Group Ref",
+      "Group Message ID"
     ]);
   }
 }

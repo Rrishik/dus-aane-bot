@@ -1272,7 +1272,7 @@ describe("handleGroupCallback dispatch", () => {
       ["handleGroupCallback"],
       Object.assign(
         {
-          MESSAGE_ID_COLUMN: 9,
+          MESSAGE_ID_COLUMN: 8,
           MERCHANT_COLUMN: 3,
           CATEGORY_COLUMN: 5
         },
@@ -1637,12 +1637,11 @@ var PERSONAL_COL_STUBS = {
   CATEGORY_COLUMN: 5,
   TRANSACTION_TYPE_COLUMN: 6,
   USER_COLUMN: 7,
-  SPLIT_COLUMN: 8,
-  MESSAGE_ID_COLUMN: 9,
-  CURRENCY_COLUMN: 10,
-  EMAIL_LINK_COLUMN: 11,
-  GROUP_REF_COLUMN: 12,
-  GROUP_MESSAGE_ID_COLUMN: 13,
+  MESSAGE_ID_COLUMN: 8,
+  CURRENCY_COLUMN: 9,
+  EMAIL_LINK_COLUMN: 10,
+  GROUP_REF_COLUMN: 11,
+  GROUP_MESSAGE_ID_COLUMN: 12,
   G_TX_ID_COLUMN: 9
 };
 
@@ -1683,7 +1682,6 @@ function setupSplitFixture(tenantRows, txn) {
     "Category",
     "Transaction Type",
     "User",
-    "Split",
     "Message ID",
     "Currency",
     "Email Link",
@@ -1698,7 +1696,6 @@ function setupSplitFixture(tenantRows, txn) {
     txn.category || "Food",
     txn.txType || "Debit",
     txn.user || "Alice",
-    txn.split || "Personal",
     txn.messageId,
     txn.currency || "INR",
     txn.emailLink || "https://mail.google.com/x",

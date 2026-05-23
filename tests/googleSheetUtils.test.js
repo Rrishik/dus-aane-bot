@@ -178,7 +178,7 @@ describe("updateGoogleSheetCellWithFeedback", () => {
 describe("ensureSheetHeaders", () => {
   it("appends headers when sheet is empty", () => {
     api.ensureSheetHeaders();
-    var headers = mainSheet().getRange(1, 1, 1, 11).getValues()[0];
+    var headers = mainSheet().getRange(1, 1, 1, 12).getValues()[0];
     expect(headers).toEqual([
       "Email Date",
       "Transaction Date",
@@ -187,10 +187,11 @@ describe("ensureSheetHeaders", () => {
       "Category",
       "Transaction Type",
       "User",
-      "Split",
       "Message ID",
       "Currency",
-      "Email Link"
+      "Email Link",
+      "Group Ref",
+      "Group Message ID"
     ]);
   });
 

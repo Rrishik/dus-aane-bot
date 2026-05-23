@@ -164,7 +164,6 @@ const PERSONAL_HEADER = [
   "Category",
   "Transaction Type",
   "User",
-  "Split",
   "Message ID",
   "Currency",
   "Email Link",
@@ -186,7 +185,6 @@ function setupFlowFixture(txn, extraTenants) {
     txn.category || "Food & Dining",
     txn.txType || "Debit",
     txn.user || "Alice",
-    txn.split || "Personal",
     txn.messageId,
     txn.currency || "INR",
     txn.emailLink || "https://mail.google.com/x",
@@ -229,15 +227,14 @@ function flowLoad(SpreadsheetApp, sent, extraStubs) {
           };
         })(),
         // Personal sheet column constants used by BotHandlers callback paths.
-        MESSAGE_ID_COLUMN: 9,
+        MESSAGE_ID_COLUMN: 8,
         MERCHANT_COLUMN: 3,
         AMOUNT_COLUMN: 4,
         CATEGORY_COLUMN: 5,
         TRANSACTION_TYPE_COLUMN: 6,
-        SPLIT_COLUMN: 8,
-        EMAIL_LINK_COLUMN: 11,
-        GROUP_REF_COLUMN: 12,
-        GROUP_MESSAGE_ID_COLUMN: 13,
+        EMAIL_LINK_COLUMN: 10,
+        GROUP_REF_COLUMN: 11,
+        GROUP_MESSAGE_ID_COLUMN: 12,
         Logger: { log: () => {} }
       },
       extraStubs || {}

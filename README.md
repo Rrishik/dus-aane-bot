@@ -152,9 +152,9 @@ Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank. Th
 
 Each personal tenant's spreadsheet has **one** tab — their transactions:
 
-| Columns                                                                                                                            | Purpose                 |
-| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| Email Date, Txn Date, Merchant, Amount, Category, Type, User, Split, Message ID, Currency, Email Link, Group Ref, Group Message ID | One row per transaction |
+| Columns                                                                                                                     | Purpose                 |
+| --------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Email Date, Txn Date, Merchant, Amount, Category, Type, User, Message ID, Currency, Email Link, Group Ref, Group Message ID | One row per transaction |
 
 `Group Ref = "<group_chat_id>:<Tx ID>"` and `Group Message ID = telegram message_id of the group notification` are populated when a transaction is split into a group; both are blank for personal-only rows.
 

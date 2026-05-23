@@ -203,7 +203,7 @@ function applyMerchantTag(chatId, emailMessageId, newTag, telegramMessageId) {
   // We can't editMessageText without the card body, and we don't have it
   // here, so use editMessageReplyMarkup instead (keyboard-only edit).
   if (telegramMessageId) {
-    var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
+    var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
     var newKb = buildKeyboardForRow(
       chatId,
       emailMessageId,
@@ -346,7 +346,7 @@ function handleCallbackQuery(update) {
       if (rowNumber < 0) return;
 
       var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
       var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
 
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
@@ -427,7 +427,7 @@ function handleCallbackQuery(update) {
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
       var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
       var newKb = buildKeyboardForRow(
         chatId,
         emailMessageId,
@@ -471,7 +471,7 @@ function handleCallbackQuery(update) {
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
       var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, 13).getValues()[0];
+      var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
       var reportMerchant = rowData[MERCHANT_COLUMN - 1] || "(unknown)";
       var reportAmount = rowData[AMOUNT_COLUMN - 1];
       var reportCurrency = "INR"; // personal sheet has no currency column today

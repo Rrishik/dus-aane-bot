@@ -700,7 +700,6 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
     category,
     type,
     user,
-    "",
     messageId,
     currency,
     emailLink
