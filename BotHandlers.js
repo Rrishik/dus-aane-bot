@@ -76,6 +76,15 @@ function handleMessage(update) {
     else if (messageText === " Recent Transactions") {
       showRecentTransactions(chatId, "/recent");
     } else {
+      // Reply-to-bot for /ask follow-up: if this message is replying to a
+      // question the bot posted via the ask_user tool, resume that convo
+      // directly. Active convos are TTL'd (~10min) and single-use, so a
+      // stray reply just falls through harmlessly.
+      var replyTo = update.message.reply_to_message;
+      if (replyTo && replyTo.message_id && tryResumeAsk(chatId, replyTo.message_id, messageText)) {
+        return;
+      }
+
       // Pending-input flows (bare /ask or bare /register stashed a flag and
       // is now waiting for the user's next plain message). Check these first
       // — they're the highest-intent interactions, and merchant edits are
@@ -766,6 +775,62 @@ function handleAskQuestionReply(chatId, messageText) {
 // surfaced to the user as a chat message — silent failure here means the
 // user sees nothing and assumes /ask is broken.
 function runAskFlow(chatId, question) {
+  _runAskInternal(chatId, function () {
+    return runAskLoop(
+      question,
+      function () {
+        sendChatAction(chatId, "typing");
+      },
+      { chatId: chatId }
+    );
+  });
+}
+
+// Resume a /ask conversation that was suspended by an ask_user tool call.
+// `convo` is the cache entry loaded by tryResumeAsk; `userText` is the
+// user's free-text reply. The reply is appended as the `tool` response
+// answering the suspended ask_user call, then the loop continues.
+function resumeAsk(chatId, convo, userText) {
+  var nextTurn = (convo.turn || 1) + 1;
+  var resumedMessages = (convo.messages || []).concat([
+    { role: "tool", tool_call_id: convo.askCallId, content: String(userText == null ? "" : userText) }
+  ]);
+  _runAskInternal(chatId, function () {
+    return runAskLoop(
+      null,
+      function () {
+        sendChatAction(chatId, "typing");
+      },
+      { messages: resumedMessages, turn: nextTurn, chatId: chatId }
+    );
+  });
+}
+
+// Look up an active suspended /ask convo for the message the user replied
+// to and continue it. Returns true if the reply was consumed (caller should
+// stop dispatch). Single-use semantics — the cache entry is cleared up-front
+// so a double-reply can't double-charge quota.
+function tryResumeAsk(chatId, replyToMessageId, userText) {
+  if (!replyToMessageId) return false;
+  var convo = null;
+  try {
+    convo = loadAskConvo(chatId, replyToMessageId);
+  } catch (_) {
+    return false;
+  }
+  if (!convo) return false;
+  try {
+    clearAskConvo(chatId, replyToMessageId);
+  } catch (_) {}
+  resumeAsk(chatId, convo, userText);
+  return true;
+}
+
+// Common quota + typing + dispatch wrapper shared by /ask and resume paths.
+// `runLoop` is a thunk returning the runAskLoop result, so the caller can
+// build messages either fresh-from-question or resumed-from-cache without
+// duplicating quota / typing / send / refund logic.
+function _runAskInternal(chatId, runLoop) {
   var quotaConsumed = false;
   try {
     // Daily /ask cap. consumeAskQuota is atomic (LockService) and tracks both
@@ -788,10 +853,31 @@ function runAskFlow(chatId, question) {
     // via the onProgress callback (most /ask runs take 5-15s).
     sendChatAction(chatId, "typing");
 
-    var answer = runAskLoop(question, function () {
-      sendChatAction(chatId, "typing");
-    });
-    sendTelegramMessage(chatId, escapeMarkdown(answer));
+    var result = runLoop();
+
+    // Defensive: older callers/stubs may still return a bare string. Treat
+    // those as a final answer.
+    if (typeof result === "string" || result == null) {
+      sendTelegramMessage(chatId, escapeMarkdown(String(result == null ? "" : result)));
+      return;
+    }
+
+    if (result.kind === "suspend") {
+      // Force-reply prompt so Telegram pre-fills the reply UI. We need the
+      // returned message_id to key the cached convo, so parse the raw API
+      // response.
+      var raw = sendTelegramMessage(chatId, escapeMarkdown(result.text), {
+        reply_markup: { force_reply: true, selective: true }
+      });
+      var botMsgId = _parseSentMessageId(raw);
+      if (botMsgId) {
+        saveAskConvo(chatId, botMsgId, result.messages, result.askCallId, result.turn || 1);
+      }
+      return;
+    }
+
+    // final or error — both go out as plain markdown-escaped text
+    sendTelegramMessage(chatId, escapeMarkdown(result.text));
   } catch (error) {
     if (quotaConsumed) {
       try {
@@ -802,6 +888,20 @@ function runAskFlow(chatId, question) {
     try {
       sendTelegramMessage(chatId, "❌ Something went wrong. Try /stats for preset analytics.");
     } catch (_) {}
+  }
+}
+
+// Parse the message_id out of a Telegram sendMessage response. The raw
+// string is what sendTelegramMessage returns from response.getContentText().
+// Tolerates already-parsed objects (some tests stub it that way) and any
+// malformed payload — returns null on miss.
+function _parseSentMessageId(raw) {
+  if (!raw) return null;
+  try {
+    var parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return parsed && parsed.ok && parsed.result ? parsed.result.message_id : null;
+  } catch (_) {
+    return null;
   }
 }
 

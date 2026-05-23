@@ -3200,3 +3200,137 @@ describe("handleGroupSettleCommand", () => {
     expect(row[4]).toBe("USD");
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────
+// recordGroupSplit — public callback-less entry used by /ask's
+// split_transaction tool. Wraps _recordGroupSplitLocked with a lock and a
+// structured-result contract instead of Telegram sends.
+
+describe("recordGroupSplit (callback-less /ask entry)", () => {
+  function load(stubs) {
+    return loadAppsScript(
+      ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "GroupSheet.js", "Analytics.js", "Groups.js"],
+      ["recordGroupSplit", "setCurrentTenant"],
+      stubs
+    );
+  }
+  function makeStubs(SpreadsheetApp, sent, lockAcquired) {
+    return {
+      ...urlStubs(),
+      ...PERSONAL_COL_STUBS,
+      CURRENCY_SYMBOLS: { INR: "₹", USD: "$", EUR: "€" },
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID,
+      UrlFetchApp: makeFetch(sent),
+      Utilities: { sleep: () => {}, getUuid: () => "tx-uuid-1" },
+      PropertiesService: { getScriptProperties: () => makeProps() },
+      LockService: {
+        getScriptLock: () => ({
+          tryLock: () => lockAcquired !== false,
+          releaseLock: () => {}
+        })
+      },
+      Session: { getScriptTimeZone: () => "UTC" },
+      Logger: { log: () => {} }
+    };
+  }
+
+  it("returns ok:true with merchant/amount/holders/shares on success", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600, merchant: "Swiggy", category: "Food" }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent, true));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    var res = mod.recordGroupSplit({
+      emailMessageId: "msg-X",
+      groupChatId: "-100",
+      mode: "50",
+      payerChatId: "111"
+    });
+    expect(res.ok).toBe(true);
+    expect(res.merchant).toBe("Swiggy");
+    expect(res.amount).toBe(600);
+    expect(res.currency).toBe("INR");
+    expect(res.category).toBe("Food");
+    expect(res.holders.sort()).toEqual(["111", "222"]);
+    expect(res.shares).toEqual([300, 300]);
+    // Sheet writes really happened.
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(2);
+    // Group chat notification was sent (it's the structured-return entry, but it still posts).
+    expect(sent.some((s) => s.url.indexOf("/sendMessage") !== -1 && s.payload.chat_id === "-100")).toBe(true);
+  });
+
+  it("returns ok:false when the lock is busy and skips all work", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "", "", "", 0, "group", "111", "INR"]
+      ],
+      { messageId: "msg-X", amount: 100 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent, false));
+    var res = mod.recordGroupSplit({
+      emailMessageId: "msg-X",
+      groupChatId: "-100",
+      mode: "all",
+      payerChatId: "111"
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/Busy/);
+    // No sheet rows, no Telegram sends.
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+    expect(sent.length).toBe(0);
+  });
+
+  it("returns ok:false structured error when caller is not a group member", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["999", "Eve", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 100 }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent, true));
+    mod.setCurrentTenant({ chat_id: "999", sheet_id: "s1", name: "Eve", status: "active" });
+    var res = mod.recordGroupSplit({
+      emailMessageId: "msg-X",
+      groupChatId: "-100",
+      mode: "50",
+      payerChatId: "999"
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBeTruthy();
+  });
+
+  it("returns ok:false on re-split attempt (GROUP_REF already set)", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600, groupRef: "-100:old-tx", groupMessageId: "99" }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent, true));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+    var res = mod.recordGroupSplit({
+      emailMessageId: "msg-X",
+      groupChatId: "-100",
+      mode: "50",
+      payerChatId: "111"
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/Already split/);
+    expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
+  });
+});

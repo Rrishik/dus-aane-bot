@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { vi } from "vitest";
 import { loadAppsScript } from "./_loader.js";
 import { makeSpreadsheetApp } from "./_sheetMock.js";
 
@@ -18,7 +19,18 @@ const SYMBOLS = [
   "getCategoryOverrides",
   "getMerchantResolutions",
   "shortenMerchantPattern",
-  "deleteSheetRow"
+  "deleteSheetRow",
+  "setCurrentTenant",
+  "getCurrentTenant",
+  "getTenantSheetId",
+  "getTenantChatId",
+  "sheetUrl",
+  "getSpreadsheet",
+  "appendRowToGoogleSheet",
+  "populateResolutionSheet",
+  "reapplyMerchantResolutions",
+  "populateCategoryOverridesForReview",
+  "applyCategoryOverridesToMainSheet"
 ];
 
 let app, api;
@@ -146,6 +158,20 @@ describe("updateGoogleSheetCellWithFeedback", () => {
     expect(r.oldValue).toBe("a");
     expect(r.newValue).toBe("NEW");
     expect(mainSheet().getRange(2, 1).getValue()).toBe("NEW");
+  });
+
+  it("returns { success:false, message:'Error: ...' } when setValue throws", () => {
+    var sheet = mainSheet();
+    var origGetRange = sheet.getRange;
+    sheet.getRange = () => ({
+      setValue: () => {
+        throw new Error("write failed");
+      }
+    });
+    var r = api.updateGoogleSheetCellWithFeedback(2, 1, "NEW", "a");
+    expect(r.success).toBe(false);
+    expect(r.message).toMatch(/Error: write failed/);
+    sheet.getRange = origGetRange;
   });
 });
 
@@ -325,5 +351,215 @@ describe("deleteSheetRow", () => {
         .getValues()
         .map((r) => r[0])
     ).toEqual(["h", "a", "c"]);
+  });
+});
+
+describe("tenant context helpers", () => {
+  it("falls back to ADMIN_SHEET_ID / ADMIN_CHAT_ID when no tenant is set", () => {
+    expect(api.getCurrentTenant()).toBe(null);
+    expect(api.getTenantSheetId()).toBe(ADMIN_SHEET_ID);
+    expect(api.getTenantChatId()).toBe("CHAT");
+  });
+
+  it("returns the tenant sheet_id / chat_id once set", () => {
+    api.setCurrentTenant({ sheet_id: "TENANT1", chat_id: "111" });
+    expect(api.getCurrentTenant()).toEqual({ sheet_id: "TENANT1", chat_id: "111" });
+    expect(api.getTenantSheetId()).toBe("TENANT1");
+    expect(api.getTenantChatId()).toBe("111");
+  });
+
+  it("invalidates the cached spreadsheet when sheet_id changes between tenants", () => {
+    api.setCurrentTenant({ sheet_id: "TENANT1", chat_id: "111" });
+    var ss1 = api.getSpreadsheet();
+    expect(ss1.getId()).toBe("TENANT1");
+    // Same tenant — cached handle is reused.
+    expect(api.getSpreadsheet()).toBe(ss1);
+
+    api.setCurrentTenant({ sheet_id: "TENANT2", chat_id: "222" });
+    var ss2 = api.getSpreadsheet();
+    expect(ss2).not.toBe(ss1);
+    expect(ss2.getId()).toBe("TENANT2");
+  });
+
+  it("invalidates the cached spreadsheet when clearing tenant context", () => {
+    api.setCurrentTenant({ sheet_id: "TENANT1", chat_id: "111" });
+    var ss1 = api.getSpreadsheet();
+    api.setCurrentTenant(null);
+    var ss2 = api.getSpreadsheet();
+    expect(ss2).not.toBe(ss1);
+    expect(ss2.getId()).toBe(ADMIN_SHEET_ID);
+  });
+});
+
+describe("sheetUrl", () => {
+  it("returns the canonical Google Sheets URL prefix for an id", () => {
+    expect(api.sheetUrl("abc123")).toBe("https://docs.google.com/spreadsheets/d/abc123");
+  });
+});
+
+describe("findRowByColumnValue head-scan fallback", () => {
+  it("finds a match older than the 500-row tail window", () => {
+    // Header + 502 data rows: target sits at row 2 (sheet row 2), only the
+    // head scan can see it. The tail window covers the trailing 500 rows.
+    var rows = [["h"], ["TARGET"]];
+    for (var i = 0; i < 501; i++) rows.push(["filler-" + i]);
+    seed(mainSheet(), rows);
+    expect(api.findRowByColumnValue(1, "TARGET")).toBe(2);
+  });
+
+  it("still returns -1 when the value is in neither window", () => {
+    var rows = [["h"]];
+    for (var i = 0; i < 600; i++) rows.push(["filler-" + i]);
+    seed(mainSheet(), rows);
+    expect(api.findRowByColumnValue(1, "ghost")).toBe(-1);
+  });
+});
+
+describe("appendRowToGoogleSheet", () => {
+  it("appends to the first sheet", () => {
+    seed(mainSheet(), [["h"]]);
+    api.appendRowToGoogleSheet(["x"]);
+    expect(mainSheet().getRange(2, 1).getValue()).toBe("x");
+  });
+
+  it("swallows errors and logs (does not throw)", () => {
+    // Force getSheets to throw on the next access.
+    var ss = app.openById(ADMIN_SHEET_ID);
+    var origGetSheets = ss.getSheets;
+    ss.getSheets = () => {
+      throw new Error("boom");
+    };
+    var errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => api.appendRowToGoogleSheet(["x"])).not.toThrow();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+    ss.getSheets = origGetSheets;
+  });
+});
+
+describe("populateResolutionSheet", () => {
+  it("is a no-op on an empty main sheet", () => {
+    api.populateResolutionSheet();
+    expect(tab("MerchantResolution")).toBeNull();
+  });
+
+  it("adds unique merchants from main sheet col C", () => {
+    // Header + 4 data rows; col C = merchant.
+    seed(mainSheet(), [
+      ["EmailDate", "TxnDate", "Merchant"],
+      ["d", "d", "Flipkart"],
+      ["d", "d", "flipkart"], // dup case-insensitive
+      ["d", "d", "Amazon"],
+      ["d", "d", ""] // blank skipped
+    ]);
+    api.populateResolutionSheet();
+    var t = tab("MerchantResolution");
+    var rows = t
+      .getRange(2, 1, t.getLastRow() - 1, 2)
+      .getValues()
+      .map((r) => r[0])
+      .sort();
+    expect(rows).toEqual(["Amazon", "Flipkart"]);
+  });
+});
+
+describe("reapplyMerchantResolutions", () => {
+  it("is a no-op when the main sheet has no data rows", () => {
+    expect(() => api.reapplyMerchantResolutions()).not.toThrow();
+  });
+
+  it("is a no-op when MerchantResolution is empty", () => {
+    seed(mainSheet(), [
+      ["h", "h", "h"],
+      ["d", "d", "Flipkart Pay 123"]
+    ]);
+    api.reapplyMerchantResolutions();
+    // Col C (sheet col 3) is the merchant column. Unchanged.
+    expect(mainSheet().getRange(2, 3).getValue()).toBe("Flipkart Pay 123");
+  });
+
+  it("rewrites raw merchant names to resolved names from MerchantResolution", () => {
+    seed(mainSheet(), [
+      ["h", "h", "h"],
+      ["d", "d", "FLIPKART_MWS_MERCH 12345"],
+      ["d", "d", "AMAZON_INDIA"],
+      ["d", "d", "untouched"]
+    ]);
+    api.addNewMerchantIfNeeded("flipkart_mws");
+    api.setMerchantResolution("flipkart_mws", "Flipkart");
+    api.addNewMerchantIfNeeded("amazon_india");
+    api.setMerchantResolution("amazon_india", "Amazon");
+
+    api.reapplyMerchantResolutions();
+    var merchants = mainSheet()
+      .getRange(2, 3, 3, 1)
+      .getValues()
+      .map((r) => r[0]);
+    expect(merchants).toEqual(["Flipkart", "Amazon", "untouched"]);
+  });
+});
+
+describe("populateCategoryOverridesForReview", () => {
+  it("is a no-op on an empty main sheet", () => {
+    api.populateCategoryOverridesForReview();
+    expect(tab("CategoryOverrides")).toBeNull();
+  });
+
+  it("appends most-frequent category per merchant, skipping existing overrides", () => {
+    // Cols C..E = merchant, amount, category. Flipkart has 2 Shopping + 1
+    // Groceries → Shopping wins. Amazon already in overrides → skipped.
+    // Zomato has only "uncategorized" entries → ignored.
+    seed(mainSheet(), [
+      ["h", "h", "h", "h", "h"],
+      ["d", "d", "Flipkart", 100, "Shopping"],
+      ["d", "d", "Flipkart", 100, "Shopping"],
+      ["d", "d", "Flipkart", 50, "Groceries"],
+      ["d", "d", "Amazon", 200, "Shopping"],
+      ["d", "d", "Zomato", 80, "Uncategorized"]
+    ]);
+    api.setCategoryOverride("Amazon", "Shopping"); // pre-existing
+
+    api.populateCategoryOverridesForReview();
+    var t = tab("CategoryOverrides");
+    var rows = t
+      .getRange(2, 1, t.getLastRow() - 1, 2)
+      .getValues()
+      .map((r) => [r[0], r[1]]);
+    // Flipkart appended once with Shopping; Amazon stays single; Zomato skipped.
+    expect(rows.filter((r) => r[0] === "Flipkart")).toEqual([["Flipkart", "Shopping"]]);
+    expect(rows.filter((r) => r[0] === "Amazon").length).toBe(1);
+    expect(rows.find((r) => r[0] === "Zomato")).toBeUndefined();
+  });
+});
+
+describe("applyCategoryOverridesToMainSheet", () => {
+  it("is a no-op when overrides table is empty", () => {
+    seed(mainSheet(), [
+      ["h", "h", "h", "h", "h"],
+      ["d", "d", "Flipkart", 100, "Old"]
+    ]);
+    api.applyCategoryOverridesToMainSheet();
+    expect(mainSheet().getRange(2, 5).getValue()).toBe("Old");
+  });
+
+  it("is a no-op when main sheet has no data rows", () => {
+    api.setCategoryOverride("Flipkart", "Shopping");
+    expect(() => api.applyCategoryOverridesToMainSheet()).not.toThrow();
+  });
+
+  it("rewrites col E for rows whose merchant matches an override (case-insensitive)", () => {
+    seed(mainSheet(), [
+      ["h", "h", "h", "h", "h"],
+      ["d", "d", "Flipkart", 100, "Old"],
+      ["d", "d", "FLIPKART", 200, "Old"],
+      ["d", "d", "Unknown", 50, "Misc"]
+    ]);
+    api.setCategoryOverride("Flipkart", "Shopping");
+    api.applyCategoryOverridesToMainSheet();
+    var cats = mainSheet()
+      .getRange(2, 5, 3, 1)
+      .getValues()
+      .map((r) => r[0]);
+    expect(cats).toEqual(["Shopping", "Shopping", "Misc"]);
   });
 });

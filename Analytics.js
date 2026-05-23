@@ -16,7 +16,12 @@ function getAllTransactions() {
       category: (row[CATEGORY_COLUMN - 1] || "Uncategorized").toString(),
       type: (row[TRANSACTION_TYPE_COLUMN - 1] || "").toString(),
       user: (row[USER_COLUMN - 1] || "").toString(),
-      currency: (row[CURRENCY_COLUMN - 1] || "INR").toString()
+      currency: (row[CURRENCY_COLUMN - 1] || "INR").toString(),
+      // Email-message id of the originating Gmail thread. Stable per-row
+      // identifier — used by /ask mutation tools (update_transaction,
+      // split_transaction) to target a specific row, and matches the
+      // existing callback payload key in MESSAGE_ID_COLUMN.
+      messageId: (row[MESSAGE_ID_COLUMN - 1] || "").toString()
     };
   });
 }
@@ -58,12 +63,11 @@ function getWeeklyAnalytics(startDate, endDate) {
     categorySpend[key] = (categorySpend[key] || 0) + t.amount;
   });
 
-  var prevEnd = new Date(startDate);
-  prevEnd.setMilliseconds(prevEnd.getMilliseconds() - 1);
-  var prevStart = new Date(prevEnd);
-  prevStart.setDate(prevStart.getDate() - 6);
-  prevStart.setHours(0, 0, 0, 0);
-  var prevTxns = filterByDateRange(all, prevStart, prevEnd);
+  // Prior 7-day window for the WoW delta. weekRangeFor(startDate) reads as
+  // "the week whose 'today' is startDate" — i.e. the week ending the day
+  // before startDate, which is exactly the previous rolling window.
+  var prev = weekRangeFor(startDate);
+  var prevTxns = filterByDateRange(all, prev.start, prev.end);
   var prevDebits = prevTxns.filter(function (t) {
     return t.type === "Debit";
   });
@@ -138,8 +142,8 @@ function formatWeeklyMessage(range, data) {
     var parts = catKey.split("|||");
     var cat = parts[0];
     var emoji = CATEGORY_EMOJIS[cat] || "•";
-    var padded = cat + " ".repeat(Math.max(0, maxCatNameLen - cat.length));
-    var amt = topAmounts[idx] + " ".repeat(Math.max(0, maxAmtLen - topAmounts[idx].length));
+    var padded = cat.padEnd(maxCatNameLen, " ");
+    var amt = topAmounts[idx].padEnd(maxAmtLen, " ");
     msg += emoji + " `" + padded + "  ₹" + amt + "`\n";
   });
   if (sortedCats.length > 5) {
@@ -150,10 +154,8 @@ function formatWeeklyMessage(range, data) {
     // No backslash before "+" — inside a code span Markdown escapes are
     // literal, so "\+" used to render as a visible backslash.
     var moreLabel = "+" + (sortedCats.length - 5) + " more";
-    var labelPad = " ".repeat(Math.max(0, maxCatNameLen - moreLabel.length));
-    var restAmt = formatAmount(restAmount);
-    var restPad = " ".repeat(Math.max(0, maxAmtLen - restAmt.length));
-    msg += "   `" + moreLabel + labelPad + "  ₹" + restAmt + restPad + "`\n";
+    msg +=
+      "   `" + moreLabel.padEnd(maxCatNameLen, " ") + "  ₹" + formatAmount(restAmount).padEnd(maxAmtLen, " ") + "`\n";
   }
 
   if (data.topTransactions && data.topTransactions.length > 0) {
@@ -196,20 +198,15 @@ function getWeeklyTrendsAnalytics(numWeeks) {
   var all = getAllTransactions();
   var tz = Session.getScriptTimeZone();
 
-  var anchor = weekRangeFor(new Date());
-
   var buckets = [];
   for (var i = numWeeks - 1; i >= 0; i--) {
-    var end = new Date(anchor.end);
-    end.setDate(end.getDate() - 7 * i);
-    var start = new Date(end);
-    start.setDate(end.getDate() - 6);
-    start.setHours(0, 0, 0, 0);
-
-    var txns = filterByDateRange(all, start, end);
+    var today = new Date();
+    today.setDate(today.getDate() - 7 * i);
+    var r = weekRangeFor(today);
+    var txns = filterByDateRange(all, r.start, r.end);
     // Week-start date is enough; years collide only across Dec-Jan but
     // ordering is unambiguous since buckets render oldest-to-newest.
-    var label = Utilities.formatDate(start, tz, "MMM dd");
+    var label = Utilities.formatDate(r.start, tz, "MMM dd");
     buckets.push(buildTrendBucket(txns, label));
   }
   return buckets;
@@ -440,10 +437,7 @@ function makeBar(value, buckets, type) {
   if (max === 0) return "░░░░░░░░";
   var len = Math.round((value / max) * 8);
   if (value > 0 && len === 0) len = 1;
-  var bar = "";
-  for (var i = 0; i < len; i++) bar += "█";
-  for (var j = len; j < 8; j++) bar += "░";
-  return bar;
+  return "█".repeat(len) + "░".repeat(8 - len);
 }
 
 // ─── Shared Aggregation Helpers ──────────────────────────────────────

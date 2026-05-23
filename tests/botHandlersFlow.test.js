@@ -115,7 +115,10 @@ function baseStubs(overrides) {
       formatTrendsMessage: vi.fn((data, opts) => "TRENDS:" + opts.title + "|" + opts.comparisonLabel),
       consumeAskQuota: vi.fn(() => ({ allowed: true })),
       refundAskQuota: vi.fn(),
-      runAskLoop: vi.fn(() => "an answer"),
+      runAskLoop: vi.fn(() => ({ kind: "final", text: "an answer" })),
+      saveAskConvo: vi.fn(),
+      loadAskConvo: vi.fn(() => null),
+      clearAskConvo: vi.fn(),
       formatAskCapHitMessage: vi.fn(() => "CAP HIT"),
       buildAskCapHitKeyboard: vi.fn(() => ({
         inline_keyboard: [[{ text: "💎 Premium", callback_data: "premium_info" }]]
@@ -142,6 +145,8 @@ const SYMBOLS = [
   "handleAskCommand",
   "handleAskQuestionReply",
   "runAskFlow",
+  "resumeAsk",
+  "tryResumeAsk",
   "handleHelpCommand",
   "buildKeyboardForRow",
   "handleBackfillCommand"
@@ -563,6 +568,123 @@ describe("runAskFlow", () => {
     api.runAskFlow("1", "q");
 
     expect(env.stubs.refundAskQuota).not.toHaveBeenCalled();
+  });
+
+  it("suspend path: sends force_reply prompt and saves the convo keyed by bot message_id", () => {
+    var env = baseStubs({
+      // sendTelegramMessage returns the parsed Telegram response body so
+      // runAskFlow can pluck out the new message_id to key the cache.
+      sendTelegramMessage: vi.fn((chat, text, opts) => {
+        return JSON.stringify({ ok: true, result: { message_id: 7777 } });
+      }),
+      runAskLoop: vi.fn(() => ({
+        kind: "suspend",
+        text: "which month?",
+        messages: [{ role: "user", content: "spend?" }],
+        askCallId: "call_xyz",
+        turn: 1
+      }))
+    });
+    var api = load(env.stubs);
+    api.runAskFlow("42", "spend?");
+
+    expect(env.stubs.sendTelegramMessage).toHaveBeenCalledOnce();
+    var [, text, opts] = env.stubs.sendTelegramMessage.mock.calls[0];
+    expect(text).toMatch(/which month/);
+    expect(opts.reply_markup.force_reply).toBe(true);
+    expect(env.stubs.saveAskConvo).toHaveBeenCalledWith(
+      "42",
+      7777,
+      [{ role: "user", content: "spend?" }],
+      "call_xyz",
+      1
+    );
+  });
+
+  it("suspend path: skips convo save if the Telegram response can't be parsed", () => {
+    var env = baseStubs({
+      sendTelegramMessage: vi.fn(() => "not-json"),
+      runAskLoop: vi.fn(() => ({
+        kind: "suspend",
+        text: "q?",
+        messages: [],
+        askCallId: "c",
+        turn: 1
+      }))
+    });
+    var api = load(env.stubs);
+    api.runAskFlow("42", "q");
+
+    expect(env.stubs.saveAskConvo).not.toHaveBeenCalled();
+  });
+
+  it("error path from runAskLoop: sends text but does NOT save a convo", () => {
+    var env = baseStubs({
+      runAskLoop: vi.fn(() => ({ kind: "error", text: "took too many steps" }))
+    });
+    var api = load(env.stubs);
+    api.runAskFlow("1", "q");
+
+    expect(env.sent[0].text).toMatch(/took too many steps/);
+    expect(env.stubs.saveAskConvo).not.toHaveBeenCalled();
+  });
+});
+
+describe("tryResumeAsk", () => {
+  it("returns false (no-op) when no convo is cached for the replied-to message", () => {
+    var env = baseStubs(); // loadAskConvo returns null by default
+    var api = load(env.stubs);
+    expect(api.tryResumeAsk("1", 99, "any text")).toBe(false);
+    expect(env.stubs.runAskLoop).not.toHaveBeenCalled();
+    expect(env.stubs.clearAskConvo).not.toHaveBeenCalled();
+  });
+
+  it("returns false when replyToMessageId is missing", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    expect(api.tryResumeAsk("1", null, "x")).toBe(false);
+    expect(env.stubs.loadAskConvo).not.toHaveBeenCalled();
+  });
+
+  it("clears the convo BEFORE resuming (single-use semantics)", () => {
+    var calls = [];
+    var env = baseStubs({
+      loadAskConvo: vi.fn(() => ({
+        messages: [{ role: "user", content: "q" }],
+        askCallId: "call_1",
+        turn: 1
+      })),
+      clearAskConvo: vi.fn(() => calls.push("clear")),
+      runAskLoop: vi.fn(() => {
+        calls.push("loop");
+        return { kind: "final", text: "ok" };
+      })
+    });
+    var api = load(env.stubs);
+    expect(api.tryResumeAsk("42", 100, "May")).toBe(true);
+    expect(calls).toEqual(["clear", "loop"]);
+  });
+
+  it("appends the user reply as a tool message answering the suspended ask_user call", () => {
+    var env = baseStubs({
+      loadAskConvo: vi.fn(() => ({
+        messages: [
+          { role: "user", content: "spend?" },
+          { role: "assistant", tool_calls: [{ id: "call_x", function: { name: "ask_user", arguments: "{}" } }] }
+        ],
+        askCallId: "call_x",
+        turn: 1
+      })),
+      runAskLoop: vi.fn(() => ({ kind: "final", text: "got it" }))
+    });
+    var api = load(env.stubs);
+    api.tryResumeAsk("42", 100, "May 2026");
+
+    var [question, , opts] = env.stubs.runAskLoop.mock.calls[0];
+    expect(question).toBeNull(); // resume mode — no fresh question
+    expect(opts.turn).toBe(2);
+    var lastMsg = opts.messages[opts.messages.length - 1];
+    expect(lastMsg).toEqual({ role: "tool", tool_call_id: "call_x", content: "May 2026" });
   });
 });
 

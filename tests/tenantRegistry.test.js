@@ -34,6 +34,7 @@ function setup(rows) {
       "invalidateTenantCache",
       "findTenantByChatId",
       "findTenantByEmail",
+      "findPendingTenantByEmail",
       "findGroupTenantByChatId",
       "insertGroupTenant",
       "addGroupMember",
@@ -41,9 +42,14 @@ function setup(rows) {
       "setGroupMembers",
       "findGroupsForMember",
       "getGroupAdminChatId",
+      "upsertPendingTenant",
+      "activateTenant",
+      "sameChatId",
       "TENANT_STATUS",
       "TENANT_COLS",
-      "TENANT_CHAT_TYPE"
+      "TENANT_CHAT_TYPE",
+      "TENANT_HEADERS",
+      "TENANT_COL_COUNT"
     ],
     { SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }
   );
@@ -273,5 +279,145 @@ describe("findTenantByEmail", () => {
   it("returns null when only a group tenant carries the address", () => {
     var s = setup([["-100", "Pad", "alice@x.com", "grp", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]]);
     expect(s.findTenantByEmail("alice@x.com")).toBe(null);
+  });
+});
+
+describe("findPendingTenantByEmail", () => {
+  it("returns the pending tenant whose emails list contains the address", () => {
+    var s = setup([
+      ["111", "Alice", "alice@x.com", "", "pending", "", "", "", "", 0, "personal", "", "INR"],
+      ["222", "Bob", "bob@x.com", "sheet-b", "active", "", "", "", "", 0, "personal", "", "INR"]
+    ]);
+    expect(s.findPendingTenantByEmail("alice@x.com").chat_id).toBe("111");
+  });
+
+  it("ignores active tenants that share an address (only pending ones match)", () => {
+    var s = setup([["222", "Bob", "alice@x.com", "sheet-b", "active", "", "", "", "", 0, "personal", "", "INR"]]);
+    expect(s.findPendingTenantByEmail("alice@x.com")).toBe(null);
+  });
+
+  it("returns null for empty/missing input", () => {
+    var s = setup([["111", "Alice", "alice@x.com", "", "pending", "", "", "", "", 0]]);
+    expect(s.findPendingTenantByEmail("")).toBe(null);
+    expect(s.findPendingTenantByEmail(null)).toBe(null);
+  });
+});
+
+describe("upsertPendingTenant", () => {
+  function freshSetup() {
+    // Don't use setup() — it pre-creates the Tenants tab with a 10-col header.
+    // We want a clean sandbox so upsertPendingTenant has to provision rows itself.
+    var SpreadsheetApp = makeSpreadsheetApp();
+    return loadAppsScript(
+      ["TenantRegistry.js"],
+      [
+        "upsertPendingTenant",
+        "activateTenant",
+        "loadTenants",
+        "invalidateTenantCache",
+        "findTenantByChatId",
+        "TENANT_STATUS",
+        "TENANT_CHAT_TYPE",
+        "TENANT_HEADERS"
+      ],
+      { SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }
+    );
+  }
+
+  it("inserts a new pending row with chat_id, name, email, and INR default", () => {
+    var s = freshSetup();
+    s.upsertPendingTenant("111", "alice@x.com", "Alice");
+    s.invalidateTenantCache();
+    var t = s.loadTenants()[0];
+    expect(t.chat_id).toBe("111");
+    expect(t.name).toBe("Alice");
+    expect(t.emails).toEqual(["alice@x.com"]);
+    expect(t.status).toBe(s.TENANT_STATUS.PENDING);
+    expect(t.chat_type).toBe(s.TENANT_CHAT_TYPE.PERSONAL);
+    expect(t.primary_currency).toBe("INR");
+  });
+
+  it("merges a second email into an existing pending row (lowercased, deduped)", () => {
+    var s = freshSetup();
+    s.upsertPendingTenant("111", "alice@x.com", "Alice");
+    s.upsertPendingTenant("111", "Alice@X.com", "Alice"); // dup, different case
+    s.upsertPendingTenant("111", "alias@x.com", null); // new address, no name change
+    s.invalidateTenantCache();
+    var t = s.loadTenants()[0];
+    expect(t.emails).toEqual(["alice@x.com", "alias@x.com"]);
+    expect(t.name).toBe("Alice");
+  });
+
+  it("updates the name when the merge call supplies a non-empty name", () => {
+    var s = freshSetup();
+    s.upsertPendingTenant("111", "alice@x.com", "Alice");
+    s.upsertPendingTenant("111", "alice@x.com", "Alice Smith");
+    s.invalidateTenantCache();
+    expect(s.loadTenants()[0].name).toBe("Alice Smith");
+  });
+});
+
+describe("activateTenant", () => {
+  it("flips a pending tenant to active and stamps sheet_id", () => {
+    var s = setup([["111", "Alice", "alice@x.com", "", "pending", "", "", "", "", 0, "personal", "", "INR"]]);
+    expect(s.activateTenant("111", "sheet-a")).toBe(true);
+    s.invalidateTenantCache();
+    var t = s.findTenantByChatId("111");
+    expect(t.sheet_id).toBe("sheet-a");
+    expect(t.status).toBe(s.TENANT_STATUS.ACTIVE);
+  });
+
+  it("returns false when the chat_id has no row", () => {
+    var s = setup([]);
+    expect(s.activateTenant("999", "sheet-x")).toBe(false);
+  });
+});
+
+describe("_getOrCreateTenantsTab header migration", () => {
+  it("auto-extends a short header row up to the canonical TENANT_HEADERS schema", () => {
+    // Pre-seed Tenants tab with the legacy 10-col header (matches what
+    // existed before chat_type / group_members / primary_currency landed).
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var tab = ss.insertSheet("Tenants");
+    tab.appendRow([
+      "chat_id",
+      "name",
+      "emails",
+      "sheet_id",
+      "status",
+      "created_at",
+      "notes",
+      "last_forward_at",
+      "last_nag_at",
+      "nag_count"
+    ]);
+    // Existing data row in the old shape — must survive untouched.
+    tab.appendRow(["111", "Alice", "alice@x.com", "sheet-a", "active", "2026-04-01T00:00:00.000Z", "", "", "", 0]);
+
+    // Any read triggers _getOrCreateTenantsTab → header top-up.
+    var s = loadAppsScript(["TenantRegistry.js"], ["loadTenants", "TENANT_HEADERS"], {
+      SpreadsheetApp: SpreadsheetApp,
+      ADMIN_SHEET_ID: ADMIN_SHEET_ID
+    });
+    s.loadTenants();
+
+    var headers = tab.getRange(1, 1, 1, s.TENANT_HEADERS.length).getValues()[0];
+    expect(headers).toEqual(s.TENANT_HEADERS);
+
+    // Data row stays untouched on disk; defaults appear via _rowToTenant.
+    var t = s.loadTenants()[0];
+    expect(t.chat_id).toBe("111");
+    expect(t.chat_type).toBe("personal");
+    expect(t.primary_currency).toBe("INR");
+  });
+});
+
+describe("sameChatId", () => {
+  it("compares chat ids as strings (cross-type)", () => {
+    var s = setup([]);
+    expect(s.sameChatId(111, "111")).toBe(true);
+    expect(s.sameChatId("111", 222)).toBe(false);
+    expect(s.sameChatId(null, "null")).toBe(true); // documents existing String() coercion
   });
 });

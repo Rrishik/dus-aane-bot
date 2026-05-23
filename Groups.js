@@ -1096,20 +1096,69 @@ function _executeGroupSplitLocked(cb, decoded, callerChatId, dmChatId, telegramM
   var groupChatId = decoded.parts[1];
   var mode = decoded.parts[2];
 
-  var group = findGroupTenantByChatId(groupChatId);
-  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
-    sendTelegramMessage(dmChatId, "❌ *Group is no longer active.*");
+  var result = _recordGroupSplitLocked({
+    emailMessageId: emailMessageId,
+    groupChatId: groupChatId,
+    mode: mode,
+    payerChatId: callerChatId
+  });
+
+  if (!result.ok) {
+    sendTelegramMessage(dmChatId, result.message || "❌ *Split failed.*");
     return;
   }
+
+  // Replace the DM keyboard. Group parent buttons are gone (would re-split);
+  // 🏷 Tag, 📂 Category and ❓ overflow still apply to the personal row.
+  var newKb = buildPostSplitDMKeyboard(emailMessageId, result.merchant, result.category);
+  sendTelegramMessage(dmChatId, bodyText, {
+    parse_mode: "Markdown",
+    message_id: telegramMessageId,
+    reply_markup: newKb
+  });
+}
+
+// Callback-less split entry point. Same lock + body as executeGroupSplit but
+// returns a structured result instead of pushing chat messages or swapping
+// keyboards. Used by the /ask split_transaction tool, which has no DM card
+// to refresh and surfaces the outcome via the LLM's own answer.
+//
+// Return shape:
+//   { ok: true,  merchant, category, amount, currency, holders, shares, groupMsgId }
+//   { ok: false, error: "<plain text>", message: "<markdown for DM>" }
+function recordGroupSplit(args) {
+  var __lock = LockService.getScriptLock();
+  if (!__lock.tryLock(5000)) {
+    return { ok: false, error: "Busy — try again in a moment.", message: "⏳ *Busy — try again in a moment.*" };
+  }
+  try {
+    return _recordGroupSplitLocked(args);
+  } finally {
+    __lock.releaseLock();
+  }
+}
+
+function _recordGroupSplitLocked(args) {
+  var emailMessageId = args.emailMessageId;
+  var groupChatId = args.groupChatId;
+  var mode = args.mode;
+  var callerChatId = args.payerChatId;
+
+  var group = findGroupTenantByChatId(groupChatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    return { ok: false, error: "Group is no longer active.", message: "❌ *Group is no longer active.*" };
+  }
   if (group.group_members.indexOf(callerChatId) === -1) {
-    sendTelegramMessage(dmChatId, "❌ *You're not a member of this group.*");
-    return;
+    return {
+      ok: false,
+      error: "You're not a member of this group.",
+      message: "❌ *You're not a member of this group.*"
+    };
   }
 
   var rowNumber = findRowByColumnValue(MESSAGE_ID_COLUMN, emailMessageId);
   if (rowNumber < 0) {
-    sendTelegramMessage(dmChatId, "❌ *Transaction not found.*");
-    return;
+    return { ok: false, error: "Transaction not found.", message: "❌ *Transaction not found.*" };
   }
   // Read the row at the full 13-column width directly. getRowData() only
   // reaches EMAIL_LINK_COLUMN (col 11) so it can't see GROUP_REF / GROUP_MESSAGE_ID.
@@ -1117,15 +1166,13 @@ function _executeGroupSplitLocked(cb, decoded, callerChatId, dmChatId, telegramM
   var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
   // Re-split guard. Caller must undo before splitting again.
   if (rowData[GROUP_REF_COLUMN - 1]) {
-    sendTelegramMessage(dmChatId, "ℹ️ *Already split — undo first.*");
-    return;
+    return { ok: false, error: "Already split — undo first.", message: "ℹ️ *Already split — undo first.*" };
   }
 
   var amount = Number(rowData[AMOUNT_COLUMN - 1]);
   var shareSet = computeSplitShareSet(group, callerChatId, mode, amount);
   if (!shareSet) {
-    sendTelegramMessage(dmChatId, "❌ *Invalid split for this group.*");
-    return;
+    return { ok: false, error: "Invalid split for this group.", message: "❌ *Invalid split for this group.*" };
   }
 
   var emailDate = rowData[EMAIL_DATE_COLUMN - 1];
@@ -1171,8 +1218,7 @@ function _executeGroupSplitLocked(cb, decoded, callerChatId, dmChatId, telegramM
     }
   } catch (_) {}
   if (!groupMsgId) {
-    sendTelegramMessage(dmChatId, "❌ *Couldn't post in the group.*");
-    return;
+    return { ok: false, error: "Couldn't post in the group.", message: "❌ *Couldn't post in the group.*" };
   }
 
   var groupSheet = openGroupSheet(group.sheet_id);
@@ -1198,14 +1244,16 @@ function _executeGroupSplitLocked(cb, decoded, callerChatId, dmChatId, telegramM
   personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue(group.chat_id + ":" + txId);
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
 
-  // Replace the DM keyboard. Group parent buttons are gone (would re-split);
-  // 🏷 Tag, 📂 Category and ❓ overflow still apply to the personal row.
-  var newKb = buildPostSplitDMKeyboard(emailMessageId, merchant, category);
-  sendTelegramMessage(dmChatId, bodyText, {
-    parse_mode: "Markdown",
-    message_id: telegramMessageId,
-    reply_markup: newKb
-  });
+  return {
+    ok: true,
+    merchant: merchant,
+    category: category,
+    amount: amount,
+    currency: currency,
+    holders: shareSet.holders,
+    shares: shareSet.shares,
+    groupMsgId: groupMsgId
+  };
 }
 
 // gun executor — undo a previously-recorded split. Strikes through the group

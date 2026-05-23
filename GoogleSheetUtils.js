@@ -275,19 +275,27 @@ function lookupMerchantCategory(merchantName, resolutions) {
   return null;
 }
 
+// Scan a 2-row-header tab and return the sheet row number (1-indexed) whose
+// column-1 cell matches `lowerKey` case-insensitively, or -1 if not found.
+// Shared by the MerchantResolution / CategoryOverrides upsert helpers below.
+function _findRowByCol1Lower(tab, lowerKey) {
+  var lastRow = tab.getLastRow();
+  if (lastRow <= 1) return -1;
+  var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][0] && data[i][0].toString().toLowerCase() === lowerKey) {
+      return i + 2; // header is row 1, data starts at row 2
+    }
+  }
+  return -1;
+}
+
 // Check if a merchant is already in the MerchantResolution tab (column A, case-insensitive).
 // If not, add it with a blank Resolved Name. Returns true if a new row was added.
 function addNewMerchantIfNeeded(rawMerchant) {
   if (!rawMerchant) return false;
   var tab = getOrCreateResolutionSheet();
-  var lastRow = tab.getLastRow();
-  if (lastRow > 1) {
-    var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
-    var lower = rawMerchant.toLowerCase();
-    for (var i = 0; i < data.length; i++) {
-      if (data[i][0].toString().toLowerCase() === lower) return false;
-    }
-  }
+  if (_findRowByCol1Lower(tab, rawMerchant.toString().toLowerCase()) !== -1) return false;
   tab.appendRow([rawMerchant, ""]);
   return true;
 }
@@ -313,18 +321,11 @@ function shortenMerchantPattern(raw) {
 function setMerchantResolution(rawMerchant, resolvedName) {
   if (!rawMerchant) return { success: false, message: "Empty merchant" };
   var tab = getOrCreateResolutionSheet();
-  var lastRow = tab.getLastRow();
-  if (lastRow <= 1) return { success: false, message: "No merchants in sheet" };
-  var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
-  var lower = rawMerchant.toString().toLowerCase();
-  for (var i = 0; i < data.length; i++) {
-    if (data[i][0] && data[i][0].toString().toLowerCase() === lower) {
-      var rowNum = i + 2; // header is row 1, data starts at row 2
-      tab.getRange(rowNum, 2).setValue(resolvedName || "");
-      return { success: true, message: "Mapping saved" };
-    }
-  }
-  return { success: false, message: "Pattern not found in MerchantResolution" };
+  if (tab.getLastRow() <= 1) return { success: false, message: "No merchants in sheet" };
+  var rowNum = _findRowByCol1Lower(tab, rawMerchant.toString().toLowerCase());
+  if (rowNum === -1) return { success: false, message: "Pattern not found in MerchantResolution" };
+  tab.getRange(rowNum, 2).setValue(resolvedName || "");
+  return { success: true, message: "Mapping saved" };
 }
 
 // Upsert a (merchant → category) row in CategoryOverrides.
@@ -332,16 +333,10 @@ function setMerchantResolution(rawMerchant, resolvedName) {
 function setCategoryOverride(merchant, category) {
   if (!merchant || !category) return { success: false, message: "Empty merchant or category" };
   var tab = getOrCreateOverridesSheet();
-  var lastRow = tab.getLastRow();
-  var lower = merchant.toString().toLowerCase();
-  if (lastRow > 1) {
-    var data = tab.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < data.length; i++) {
-      if (data[i][0] && data[i][0].toString().toLowerCase() === lower) {
-        tab.getRange(i + 2, 2).setValue(category);
-        return { success: true, message: "Override updated" };
-      }
-    }
+  var rowNum = _findRowByCol1Lower(tab, merchant.toString().toLowerCase());
+  if (rowNum !== -1) {
+    tab.getRange(rowNum, 2).setValue(category);
+    return { success: true, message: "Override updated" };
   }
   tab.appendRow([merchant, category]);
   return { success: true, message: "Override added" };
