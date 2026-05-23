@@ -528,7 +528,12 @@ function getAskSystemPrompt() {
 
 // ─── Tool-calling Loop ───────────────────────────────────────────────
 
-var ASK_MAX_ITERATIONS = 3;
+// How many LLM iterations a single /ask invocation may run before we bail.
+// A read-only answer is usually 2 (one tool call + one final summary). The
+// mutation flows are longer: a typical split is search_transactions →
+// get_groups → split_transaction → final confirmation = 4. We allow 6 so
+// there's headroom for a chained search refinement before the mutation.
+var ASK_MAX_ITERATIONS = 6;
 // Hard cap on how deep an ask_user reply-thread can go before we force the
 // user to start a fresh /ask. Protects against runaway conversations and
 // keeps the cached message blob bounded.
