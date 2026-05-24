@@ -46,6 +46,9 @@ class MockSheet {
     if (numRows === undefined) return new MockRange(this, row, col, 1, 1);
     return new MockRange(this, row, col, numRows, numCols);
   }
+  // No-op in the mock — production callers use this to hide plumbing columns
+  // visually; the in-memory store has no concept of visibility.
+  hideColumns(_col, _num) {}
 }
 
 class MockRange {

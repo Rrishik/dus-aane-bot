@@ -27,6 +27,7 @@ function setTelegramCommands() {
     { command: "/ask", description: "Ask anything about your spending" },
     { command: "/stats", description: "Dashboard: recent, trends, who owes" },
     { command: "/account", description: "Account & settings" },
+    { command: "/sheet", description: "Open your spreadsheet" },
     { command: "/help", description: "Show available commands" }
   ];
   sendRequest(BOT_SET_COMMANDS_URL, "post", {
@@ -36,8 +37,9 @@ function setTelegramCommands() {
 
   var groupCommands = [
     { command: "/start", description: "Set up this group / re-sync members" },
-    { command: "/account", description: "Group status, members, sheet link" },
+    { command: "/account", description: "Group status & members" },
     { command: "/stats", description: "Who owes whom (per currency)" },
+    { command: "/sheet", description: "Open the group spreadsheet" },
     { command: "/help", description: "Group commands" }
   ];
   sendRequest(BOT_SET_COMMANDS_URL, "post", {

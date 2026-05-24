@@ -239,14 +239,9 @@ function continueBackfill() {
     if (totalDupes > 0) summary += "🔁 *Duplicates skipped:* " + totalDupes + "\n";
     if (totalFailed > 0) summary += "❌ *Failed:* " + totalFailed + "\n";
     if (chunk > 1) summary += "📦 *Chunks:* " + chunk + "\n";
+    summary += "\n_Run_ `/sheet` _to inspect the rows._";
 
-    var url = sheetUrl(getTenantSheetId());
-    sendTelegramMessage(getTenantChatId(), summary, {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [[{ text: "📋 Open Sheet", url: url }]]
-      }
-    });
+    sendTelegramMessage(getTenantChatId(), summary, { parse_mode: "Markdown" });
 
     // Clean up props
     props.deleteProperty("backfill_start");

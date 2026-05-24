@@ -166,7 +166,6 @@ const PERSONAL_HEADER = [
   "User",
   "Message ID",
   "Currency",
-  "Email Link",
   "Group Ref",
   "Group Message ID"
 ];
@@ -187,7 +186,6 @@ function setupFlowFixture(txn, extraTenants) {
     txn.user || "Alice",
     txn.messageId,
     txn.currency || "INR",
-    txn.emailLink || "https://mail.google.com/x",
     txn.groupRef || "",
     txn.groupMessageId || ""
   ]);
@@ -232,9 +230,8 @@ function flowLoad(SpreadsheetApp, sent, extraStubs) {
         AMOUNT_COLUMN: 4,
         CATEGORY_COLUMN: 5,
         TRANSACTION_TYPE_COLUMN: 6,
-        EMAIL_LINK_COLUMN: 10,
-        GROUP_REF_COLUMN: 11,
-        GROUP_MESSAGE_ID_COLUMN: 12,
+        GROUP_REF_COLUMN: 10,
+        GROUP_MESSAGE_ID_COLUMN: 11,
         Logger: { log: () => {} }
       },
       extraStubs || {}

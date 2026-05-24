@@ -1,4 +1,4 @@
-// Onboarding: /start, /register, /account, /ownsheet.
+// Onboarding: /start, /register, /account.
 //
 // Activation model: /register creates a pending tenant and emails setup
 // instructions. The first valid forwarded transaction (manual or filter-
@@ -279,8 +279,13 @@ function handleAccountCommand(chatId) {
   if (tenant.name) lines.push("Name: " + tenant.name);
   lines.push("Chat ID: `" + tenant.chat_id + "`");
   lines.push("Emails: " + (tenant.emails.length > 0 ? tenant.emails.map((e) => "`" + e + "`").join(", ") : "_none_"));
-  if (tenant.sheet_id) {
-    lines.push("Sheet: [open](" + sheetUrl(tenant.sheet_id) + ")");
+  if (tenant.sheet_id && tenant.emails.length > 0) {
+    // Sheet URL deliberately not shown here — the user has a Google share
+    // notification email with the link, and we keep finance data out of
+    // the Telegram chat history. /backfill and /recent still link to it.
+    lines.push("Sheet: shared with `" + tenant.emails[0] + "` — open from your Gmail");
+  } else if (tenant.sheet_id) {
+    lines.push("Sheet: provisioned");
   } else {
     lines.push("Sheet: _not provisioned yet_");
   }
@@ -300,47 +305,6 @@ function handleResendSetupCallback(chatId, callbackQueryId) {
     answerCallbackQuery(callbackQueryId, "📬 Sending...", false);
   } catch (_) {}
   sendSetupInstructions(chatId);
-}
-
-/**
- * /ownsheet — initiate Drive ownership transfer of the tenant's sheet to
- * their primary registered email. Drive notifies the user; until they
- * accept, admin remains owner (sheet still works because user is editor).
- */
-function handleOwnSheetCommand(chatId) {
-  var tenant = findTenantByChatId(chatId);
-  if (!tenant || tenant.status !== TENANT_STATUS.ACTIVE) {
-    sendTelegramMessage(
-      chatId,
-      "⏳ Your sheet hasn't been provisioned yet. Forward a bank email to finish setup first.",
-      { parse_mode: "Markdown" }
-    );
-    return;
-  }
-  if (!tenant.sheet_id || tenant.emails.length === 0) {
-    sendTelegramMessage(chatId, "⚠️ I don't have a sheet on file for you. Please contact the admin.", {
-      parse_mode: "Markdown"
-    });
-    return;
-  }
-  var primary = tenant.emails[0];
-  var ok = adminTransferSheetOwnership(tenant.sheet_id, primary);
-  if (!ok) {
-    sendTelegramMessage(
-      chatId,
-      "⚠️ Drive refused the ownership transfer. Try again in a minute, or contact the admin if it keeps failing.",
-      { parse_mode: "Markdown" }
-    );
-    return;
-  }
-  sendTelegramMessage(
-    chatId,
-    "📬 Drive has emailed `" +
-      primary +
-      "` an ownership-transfer request. Accept it from your inbox to fully own the sheet.\n\n" +
-      "_I'll stay on as editor afterwards so I can keep adding rows; you can revoke that anytime from Sheet → Share._",
-    { parse_mode: "Markdown" }
-  );
 }
 
 /**
@@ -370,19 +334,12 @@ function activatePendingTenantForEmail(email) {
   if (!activateTenant(pending.chat_id, sheetId)) return null;
 
   var activated = findTenantByChatId(pending.chat_id);
-  var url = sheetUrl(sheetId);
   try {
     sendTelegramMessage(
       pending.chat_id,
       "🎉 *Your first transaction is in!*\n\n" +
-        "I've created a Google Sheet and shared it with `" +
-        email +
-        "` as editor. *This sheet is yours* — open, edit or export anytime. It's the entire data I use.\n\n" +
-        "_Want to fully own the sheet?_ Run `/ownsheet` and I'll initiate a Drive ownership transfer.",
-      {
-        parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: [[{ text: "📋 Open your sheet", url: url }]] }
-      }
+        "*Google just emailed you a share notification* for your data — keep that mail if you ever want to inspect or export. Otherwise, just keep forwarding.",
+      { parse_mode: "Markdown" }
     );
   } catch (e) {
     console.error("[activatePendingTenantForEmail] welcome DM failed:", e.message);

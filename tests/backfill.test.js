@@ -349,7 +349,8 @@ describe("continueBackfill", () => {
     expect(env.sent[0].text).toMatch(/Backfill Complete/);
     expect(env.sent[0].text).toMatch(/Transactions saved.*17/s);
     expect(env.sent[0].text).toMatch(/Duplicates skipped.*3/s);
-    expect(env.sent[0].opts.reply_markup.inline_keyboard[0][0].url).toBe("https://sheets/sheet-xyz");
+    expect(env.sent[0].text).toMatch(/\/sheet/);
+    expect(env.sent[0].opts.reply_markup).toBeUndefined();
 
     // All cleaned up.
     expect(env.props.store.backfill_start).toBeUndefined();

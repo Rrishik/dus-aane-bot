@@ -257,7 +257,6 @@ describe("handleAIResponse", () => {
       new Date("2026-05-01T10:00:00Z"),
       "a@x.com",
       msg,
-      "https://mail/link",
       (extra && extra.silent) || false,
       (extra && extra.resolutions) || []
     );
@@ -360,12 +359,11 @@ describe("saveTransaction", () => {
       new Date("2026-05-01T10:00:00Z"),
       (extra && extra.userEmail) || "alice@x.com",
       "msg-A",
-      "https://mail/link",
       (extra && extra.silent) || false
     );
   }
 
-  it("writes all 10 cells with sensible defaults when data is sparse", () => {
+  it("writes all 9 cells with sensible defaults when data is sparse", () => {
     var env = baseStubs();
     var api = load(env.stubs);
 
@@ -380,7 +378,6 @@ describe("saveTransaction", () => {
     expect(row[6]).toBe("alice"); // userEmail local-part
     expect(row[7]).toBe("msg-A"); // messageId
     expect(row[8]).toBe("INR"); // currency default
-    expect(row[9]).toBe("https://mail/link"); // email link
   });
 
   it("does NOT pass a displayUser to the notification when tenant has a single forwarder", () => {

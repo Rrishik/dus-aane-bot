@@ -33,16 +33,15 @@ const COLS = {
   USER_COLUMN: 7,
   MESSAGE_ID_COLUMN: 8,
   CURRENCY_COLUMN: 9,
-  EMAIL_LINK_COLUMN: 10,
-  GROUP_REF_COLUMN: 11,
-  GROUP_MESSAGE_ID_COLUMN: 12
+  GROUP_REF_COLUMN: 10,
+  GROUP_MESSAGE_ID_COLUMN: 11
 };
 
 // Build a minimal Sheet-shaped object that getAllTransactions can read.
 function fakeSheetWithRows(txns) {
-  var header = new Array(12).fill("h");
+  var header = new Array(11).fill("h");
   var rows = txns.map((t) => {
-    var r = new Array(12).fill("");
+    var r = new Array(11).fill("");
     r[COLS.EMAIL_DATE_COLUMN - 1] = t.date;
     r[COLS.TRANSACTION_DATE_COLUMN - 1] = t.date;
     r[COLS.MERCHANT_COLUMN - 1] = t.merchant;

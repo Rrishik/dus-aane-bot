@@ -56,6 +56,9 @@ function handleMessage(update) {
         case "/help":
           handleHelpCommand(chatId, username);
           break;
+        case "/sheet":
+          handleSheetCommand(chatId);
+          break;
         case "/recent":
           showRecentTransactions(chatId, messageText);
           break;
@@ -152,6 +155,9 @@ function dispatchGroupCommand(command, update) {
     case "/settle":
       handleGroupSettleCommand(update);
       return true;
+    case "/sheet":
+      handleGroupSheetCommand(update);
+      return true;
     default:
       return false;
   }
@@ -241,19 +247,27 @@ function handleHelpCommand(chatId, username) {
     `   _e.g. /ask how much on food last month?_\n` +
     `• /stats — dashboard: recent, trends, who owes\n` +
     `• /register — add another Gmail to forward from\n` +
-    `• /account — status, sheet link, resend setup\n` +
+    `• /account — status & resend setup\n` +
+    `• /sheet — open your spreadsheet\n` +
     `• /help — this message`;
 
-  var url = sheetUrl(getTenantSheetId());
   sendTelegramMessage(chatId, message, {
     parse_mode: "Markdown",
     reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "📋 Open Sheet", url: url },
-          { text: "📖 README", url: "https://github.com/Rrishik/dus-aane-bot#readme" }
-        ]
-      ]
+      inline_keyboard: [[{ text: "📖 README", url: "https://github.com/Rrishik/dus-aane-bot#readme" }]]
+    }
+  });
+}
+
+// /sheet — on-demand link to the tenant's underlying spreadsheet. The sheet
+// is deliberately not advertised elsewhere (no button on /help, /account, or
+// post-backfill); users who want raw data run this command.
+function handleSheetCommand(chatId) {
+  var url = sheetUrl(getTenantSheetId());
+  sendTelegramMessage(chatId, "📋 *Your spreadsheet*", {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [[{ text: "📋 Open Sheet", url: url }]]
     }
   });
 }
@@ -475,7 +489,10 @@ function handleCallbackQuery(update) {
       var reportMerchant = rowData[MERCHANT_COLUMN - 1] || "(unknown)";
       var reportAmount = rowData[AMOUNT_COLUMN - 1];
       var reportCurrency = "INR"; // personal sheet has no currency column today
-      var reportEmailLink = rowData[EMAIL_LINK_COLUMN - 1] || "";
+      // Deep-link into the bot's inbox. Resolves for the admin (who's signed
+      // into the bot Gmail when investigating); useless for end users, which
+      // is why we no longer store it in the sheet.
+      var reportEmailLink = emailMessageId ? "https://mail.google.com/mail/u/0/#all/" + emailMessageId : "";
       var reportFrom = update.callback_query.from || {};
       var reportName = reportFrom.first_name || reportFrom.username || String(chatId);
       var adminBody =

@@ -7,7 +7,8 @@ function setup() {
   return {
     SpreadsheetApp: SpreadsheetApp,
     mod: loadAppsScript(["GroupSheet.js"], ["ensureGroupSheetHeaders", "GROUP_SHEET_HEADERS", "openGroupSheet"], {
-      SpreadsheetApp: SpreadsheetApp
+      SpreadsheetApp: SpreadsheetApp,
+      G_MESSAGE_ID_COLUMN: 12
     })
   };
 }
@@ -18,13 +19,13 @@ describe("ensureGroupSheetHeaders", () => {
     s.SpreadsheetApp.openById("g1").insertSheet("Splits");
     expect(s.mod.ensureGroupSheetHeaders("g1")).toBe(true);
     var sheet = s.SpreadsheetApp.openById("g1").getSheets()[0];
-    var headers = sheet.getRange(1, 1, 1, 13).getValues()[0];
+    var headers = sheet.getRange(1, 1, 1, 12).getValues()[0];
     expect(headers).toEqual(s.mod.GROUP_SHEET_HEADERS);
   });
 
-  it("declares 13 columns in the right β-schema order", () => {
+  it("declares 12 columns in the right β-schema order", () => {
     var s = setup();
-    expect(s.mod.GROUP_SHEET_HEADERS.length).toBe(13);
+    expect(s.mod.GROUP_SHEET_HEADERS.length).toBe(12);
     // Spot-check the discriminating positions vs the personal sheet
     expect(s.mod.GROUP_SHEET_HEADERS[5]).toBe("Paid By"); // col 6
     expect(s.mod.GROUP_SHEET_HEADERS[6]).toBe("Share Holder"); // col 7

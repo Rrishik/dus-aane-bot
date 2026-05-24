@@ -609,8 +609,7 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
 
       // No tool call \u2014 we have the final response
       if (msg.content) {
-        var emailLink = "https://mail.google.com/mail/u/0/#all/" + messageId;
-        return handleAIResponse(msg.content, emailDate, userEmail, message, emailLink, silent, resolutions);
+        return handleAIResponse(msg.content, emailDate, userEmail, message, silent, resolutions);
       }
     }
   } catch (e) {
@@ -622,7 +621,7 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
 /**
  * Handles the raw text response from the AI provider, attempts JSON parsing, and saves data.
  */
-function handleAIResponse(rawText, emailDate, userEmail, message, emailLink, silent, resolutions) {
+function handleAIResponse(rawText, emailDate, userEmail, message, silent, resolutions) {
   var messageId = message.getId();
   var cleanText = rawText;
 
@@ -640,16 +639,7 @@ function handleAIResponse(rawText, emailDate, userEmail, message, emailLink, sil
           var reason = data.reason || "Not a transaction";
           var user = (userEmail || "").split("@")[0] || "unknown";
           var skipMsg =
-            "ℹ️ *New email detected but skipped*\n" +
-            "👤 *By:* " +
-            escapeMarkdown(user) +
-            "\n" +
-            "Reason: " +
-            reason +
-            "\n" +
-            "[View email](" +
-            emailLink +
-            ")";
+            "ℹ️ *New email detected but skipped*\n" + "👤 *By:* " + escapeMarkdown(user) + "\n" + "Reason: " + reason;
           sendTelegramMessage(getTenantChatId(), skipMsg, { parse_mode: "Markdown" });
         }
         markProcessed(message);
@@ -668,7 +658,7 @@ function handleAIResponse(rawText, emailDate, userEmail, message, emailLink, sil
       // Register the raw extracted merchant in MerchantResolution so the user
       // can later 🏷️ Tag it without having to type the pattern themselves.
       if (rawMerchant) addNewMerchantIfNeeded(rawMerchant);
-      saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent);
+      saveTransaction(data, emailDate, userEmail, messageId, silent);
       markProcessed(message);
       return { saved: true, duplicate: false, data: data };
     } else {
@@ -683,7 +673,7 @@ function handleAIResponse(rawText, emailDate, userEmail, message, emailLink, sil
 /**
  * Saves the transaction structure to the sheet and sends a notification.
  */
-function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silent) {
+function saveTransaction(data, emailDate, userEmail, messageId, silent) {
   var transactionDate = data.transaction_date || "N/A";
   var merchant = data.merchant || "Unknown";
   var amount = data.amount || 0;
@@ -692,18 +682,7 @@ function saveTransaction(data, emailDate, userEmail, messageId, emailLink, silen
   var currency = data.currency || "INR";
   var user = userEmail.split("@")[0];
 
-  appendRowToGoogleSheet([
-    emailDate,
-    transactionDate,
-    merchant,
-    amount,
-    category,
-    type,
-    user,
-    messageId,
-    currency,
-    emailLink
-  ]);
+  appendRowToGoogleSheet([emailDate, transactionDate, merchant, amount, category, type, user, messageId, currency]);
 
   if (!silent) {
     data.email_date = emailDate;

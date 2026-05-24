@@ -17,12 +17,18 @@ Constants.js            # Categories, bank senders, column indexes
 BotHandlers.js          # Telegram command + callback routers
 TelegramUtils.js        # Telegram API wrappers, retry/backoff
 TransactionProcessor.js # Email → LLM → Sheet pipeline
+Forwarding.js           # Verify-forwarding-address one-tap helper
 GoogleSheetUtils.js     # Sheet CRUD + merchant resolution tabs
 Analytics.js            # /stats aggregations and formatters
 AskTools.js             # /ask tool-calling definitions
 AIProviders.js          # Azure OpenAI HTTP client
 TenantRegistry.js       # Tenants tab CRUD
 Onboarding.js           # /start, /register, /account, activation
+Groups.js               # Group provisioning + split/settle/stats UI + writes
+GroupSheet.js           # Group sheet β-schema headers + open helper
+Backfill.js             # /backfill parser, chunked async orchestration
+Nudge.js                # Dormant-tenant weekly nudge
+Quota.js                # Per-tenant LLM cost / call quotas
 AdminHelpers.js         # Manually-run maintenance (create template, seed, etc.)
 worker/                 # Cloudflare Worker proxy
 ```

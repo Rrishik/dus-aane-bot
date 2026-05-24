@@ -21,8 +21,7 @@ var GROUP_SHEET_HEADERS = [
   "Tx ID",
   "Category",
   "Transaction Type",
-  "Message ID",
-  "Email Link"
+  "Message ID"
 ];
 
 // Open a group sheet by ID. Independent of the per-execution tenant context
@@ -38,6 +37,11 @@ function ensureGroupSheetHeaders(sheetId) {
   var sheet = openGroupSheet(sheetId);
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(GROUP_SHEET_HEADERS);
+    // Message ID is the Gmail dedupe key — useless to the user. Tx ID stays
+    // visible because it's how a user spots that N rows belong to one split.
+    try {
+      sheet.hideColumns(G_MESSAGE_ID_COLUMN);
+    } catch (_) {}
     return true;
   }
   return false;

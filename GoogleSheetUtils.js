@@ -147,10 +147,20 @@ function ensureSheetHeaders() {
       "User",
       "Message ID",
       "Currency",
-      "Email Link",
       "Group Ref",
       "Group Message ID"
     ]);
+    // Hide plumbing columns the user never benefits from seeing: the Gmail
+    // dedupe id and the group-linkage fields. Idempotent in Apps Script —
+    // hiding an already-hidden column is a no-op — but we only call this on
+    // first provisioning anyway (the if-empty branch above).
+    try {
+      sheet.hideColumns(MESSAGE_ID_COLUMN);
+      sheet.hideColumns(GROUP_REF_COLUMN, 2); // GROUP_REF + GROUP_MESSAGE_ID
+    } catch (_) {
+      // hideColumns isn't critical — swallow if the sandbox/test mock
+      // doesn't implement it.
+    }
   }
 }
 

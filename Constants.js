@@ -35,9 +35,8 @@ const TRANSACTION_TYPE_COLUMN = 6; // Column F
 const USER_COLUMN = 7; // Column G
 const MESSAGE_ID_COLUMN = 8; // Column H
 const CURRENCY_COLUMN = 9; // Column I
-const EMAIL_LINK_COLUMN = 10; // Column J
-const GROUP_REF_COLUMN = 11; // Column K — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
-const GROUP_MESSAGE_ID_COLUMN = 12; // Column L — Telegram message id of the group's split notification, else empty
+const GROUP_REF_COLUMN = 10; // Column J — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
+const GROUP_MESSAGE_ID_COLUMN = 11; // Column K — Telegram message id of the group's split notification, else empty
 
 // --- Group-sheet schema (β: one row per share) ---
 // Group sheets have a different column layout than personal sheets — they
@@ -56,8 +55,7 @@ const G_TX_ID_COLUMN = 9; // shared across all share rows of one transaction; un
 const G_CATEGORY_COLUMN = 10;
 const G_TRANSACTION_TYPE_COLUMN = 11;
 const G_MESSAGE_ID_COLUMN = 12;
-const G_EMAIL_LINK_COLUMN = 13;
-const G_COL_COUNT = 13;
+const G_COL_COUNT = 12;
 
 // Hard cap on group size. Telegram supports far more, but the split UI fans out
 // quadratically with members and the small-flat-share use case rarely exceeds 4.

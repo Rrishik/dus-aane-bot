@@ -833,7 +833,7 @@ describe("handleGroupHelpCommand", () => {
     );
   }
 
-  it("posts the group help message with sheet button when group is active", () => {
+  it("posts the group help message listing /sheet (sheet is on-demand, no inline button)", () => {
     var sent = [];
     var { SpreadsheetApp } = setupRegistry([
       ["-100", "Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]
@@ -852,8 +852,8 @@ describe("handleGroupHelpCommand", () => {
     expect(sent[0].payload.text).toContain("Group commands");
     expect(sent[0].payload.text).toContain("/start");
     expect(sent[0].payload.text).toContain("/account");
-    var mk = JSON.parse(sent[0].payload.reply_markup);
-    expect(mk.inline_keyboard[0][0].text).toContain("Open group sheet");
+    expect(sent[0].payload.text).toContain("/sheet");
+    expect(sent[0].payload.reply_markup).toBeUndefined();
   });
 
   it("nudges to /start when the group isn't provisioned", () => {
@@ -883,7 +883,7 @@ describe("handleGroupAccountCommand", () => {
     );
   }
 
-  it("renders name, status, currency, members, admin, and sheet link", () => {
+  it("renders name, status, currency, members, admin, and sheet text-only mention", () => {
     var sent = [];
     var { SpreadsheetApp } = setupRegistry([
       ["-100", "Bachelor Pad", "", "g-sheet", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"],
@@ -908,7 +908,8 @@ describe("handleGroupAccountCommand", () => {
     expect(t).toContain("Members (2/4)");
     expect(t).toContain("Admin: Alice");
     expect(t).toContain("INR");
-    expect(t).toContain("[open]"); // sheet link
+    expect(t).toMatch(/Sheet: shared with members/);
+    expect(t).not.toMatch(/https:\/\/docs\.google\.com/);
   });
 
   it("falls back to chat_id label for unregistered members", () => {
@@ -1639,9 +1640,8 @@ var PERSONAL_COL_STUBS = {
   USER_COLUMN: 7,
   MESSAGE_ID_COLUMN: 8,
   CURRENCY_COLUMN: 9,
-  EMAIL_LINK_COLUMN: 10,
-  GROUP_REF_COLUMN: 11,
-  GROUP_MESSAGE_ID_COLUMN: 12,
+  GROUP_REF_COLUMN: 10,
+  GROUP_MESSAGE_ID_COLUMN: 11,
   G_TX_ID_COLUMN: 9
 };
 
@@ -1684,7 +1684,6 @@ function setupSplitFixture(tenantRows, txn) {
     "User",
     "Message ID",
     "Currency",
-    "Email Link",
     "Group Ref",
     "Group Message ID"
   ]);
@@ -1698,7 +1697,6 @@ function setupSplitFixture(tenantRows, txn) {
     txn.user || "Alice",
     txn.messageId,
     txn.currency || "INR",
-    txn.emailLink || "https://mail.google.com/x",
     txn.groupRef || "",
     txn.groupMessageId || ""
   ]);
@@ -1758,7 +1756,7 @@ describe("handleGroupCallback gsp execution", () => {
     // Group sheet got 2 rows (50/50 → both members are share holders).
     var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
     expect(groupSheet.getLastRow()).toBe(2);
-    var r1 = groupSheet.getRange(1, 1, 1, 13).getValues()[0];
+    var r1 = groupSheet.getRange(1, 1, 1, 12).getValues()[0];
     expect(r1[2]).toBe("Swiggy"); // merchant
     expect(r1[3]).toBe(600); // amount
     expect(r1[5]).toBe("111"); // paid by
@@ -1903,7 +1901,7 @@ describe("handleGroupCallback gsp execution", () => {
 
     var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
     expect(groupSheet.getLastRow()).toBe(1);
-    var row = groupSheet.getRange(1, 1, 1, 13).getValues()[0];
+    var row = groupSheet.getRange(1, 1, 1, 12).getValues()[0];
     expect(row[5]).toBe("111"); // paid by
     expect(row[6]).toBe("222"); // share holder = the partner
     expect(row[7]).toBe(600); // share amount = full
@@ -1928,8 +1926,7 @@ function seedGroupShareRows(SpreadsheetApp, sheetId, txId, holders, sharePerHold
       "Tx ID",
       "Category",
       "Transaction Type",
-      "Message ID",
-      "Email Link"
+      "Message ID"
     ]);
   }
   for (var i = 0; i < holders.length; i++) {
@@ -1945,8 +1942,7 @@ function seedGroupShareRows(SpreadsheetApp, sheetId, txId, holders, sharePerHold
       txId,
       "Food",
       "Debit",
-      "1",
-      "https://mail.google.com/x"
+      "1"
     ]);
   }
 }
@@ -2191,7 +2187,7 @@ describe("handleGroupCallback gst execution (settlement)", () => {
 
     var groupSheet = fix.SpreadsheetApp.openById("g1").getSheets()[0];
     expect(groupSheet.getLastRow()).toBe(1); // exactly one row, no per-member fan-out
-    var row = groupSheet.getRange(1, 1, 1, 13).getValues()[0];
+    var row = groupSheet.getRange(1, 1, 1, 12).getValues()[0];
     expect(row[5]).toBe("111"); // paid by
     expect(row[6]).toBe("222"); // share holder = settlement target
     expect(row[7]).toBe(500); // share amount = full
@@ -2349,9 +2345,9 @@ describe("aggregatePairwiseDebts", () => {
       }
     );
   }
-  // Build a 13-col β row. Only the columns the helper reads are populated.
+  // Build a 12-col β row. Only the columns the helper reads are populated.
   function row(currency, payer, holder, share, category) {
-    return ["", "", "", "", currency, payer, holder, share, "tx", category || "Food", "Debit", "msg", "link"];
+    return ["", "", "", "", currency, payer, holder, share, "tx", category || "Food", "Debit", "msg"];
   }
 
   it("empty input → empty object", () => {
@@ -2627,7 +2623,7 @@ describe("handleGroupStatsCommand", () => {
     ]);
     tenantRows.forEach((r) => tab.appendRow(r));
     var grp = SpreadsheetApp.openById("g1").getSheets()[0];
-    // Header row matches G_COL_COUNT=13.
+    // Header row matches G_COL_COUNT=12.
     grp.appendRow([
       "Email Date",
       "Tx Date",
@@ -2640,8 +2636,7 @@ describe("handleGroupStatsCommand", () => {
       "Tx ID",
       "Category",
       "Tx Type",
-      "Message ID",
-      "Email Link"
+      "Message ID"
     ]);
     (groupRows || []).forEach((r) => grp.appendRow(r));
     return SpreadsheetApp;
@@ -2657,10 +2652,10 @@ describe("handleGroupStatsCommand", () => {
       ],
       [
         // Alice paid 600, 50/50 → Bob owes Alice 300.
-        ["d", "d", "Swiggy", 600, "INR", "111", "111", 300, "tx1", "Food", "Debit", "1", ""],
-        ["d", "d", "Swiggy", 600, "INR", "111", "222", 300, "tx1", "Food", "Debit", "1", ""],
+        ["d", "d", "Swiggy", 600, "INR", "111", "111", 300, "tx1", "Food", "Debit", "1"],
+        ["d", "d", "Swiggy", 600, "INR", "111", "222", 300, "tx1", "Food", "Debit", "1"],
         // Bob settled 100. Net: Bob owes Alice 200.
-        ["d", "d", "UPI", 100, "INR", "222", "111", 100, "tx2", "Settlement", "Settlement", "2", ""]
+        ["d", "d", "UPI", 100, "INR", "222", "111", 100, "tx2", "Settlement", "Settlement", "2"]
       ]
     );
     var { handleGroupStatsCommand } = load({
@@ -2677,7 +2672,7 @@ describe("handleGroupStatsCommand", () => {
       G_SHARE_AMOUNT_COLUMN: 8,
       G_TX_ID_COLUMN: 9,
       G_CATEGORY_COLUMN: 10,
-      G_COL_COUNT: 13
+      G_COL_COUNT: 12
     });
     handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
     expect(sent.length).toBe(1);
@@ -2709,7 +2704,7 @@ describe("handleGroupStatsCommand", () => {
       G_SHARE_AMOUNT_COLUMN: 8,
       G_TX_ID_COLUMN: 9,
       G_CATEGORY_COLUMN: 10,
-      G_COL_COUNT: 13
+      G_COL_COUNT: 12
     });
     handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
     expect(sent[0].payload.text).toContain("All settled up");
@@ -2732,7 +2727,7 @@ describe("handleGroupStatsCommand", () => {
       G_SHARE_AMOUNT_COLUMN: 8,
       G_TX_ID_COLUMN: 9,
       G_CATEGORY_COLUMN: 10,
-      G_COL_COUNT: 13
+      G_COL_COUNT: 12
     });
     handleGroupStatsCommand({ message: { chat: { id: -100, type: "group" } } });
     expect(sent[0].payload.text).toContain("isn't set up yet");
@@ -2781,8 +2776,7 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
       "Tx ID",
       "Category",
       "Tx Type",
-      "Message ID",
-      "Email Link"
+      "Message ID"
     ]);
     (groupRows || []).forEach((r) => grp.appendRow(r));
     return SpreadsheetApp;
@@ -2796,10 +2790,10 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
     // Net all zero — but pairwise produces 0 entries; use asymmetric splits.
     // Simpler tangle: A→B 100, B→C 100 → simplified: A→C 100.
     return [
-      ["d", "d", "X", 200, "INR", "111", "111", 100, "tx1", "Food", "Debit", "1", ""],
-      ["d", "d", "X", 200, "INR", "111", "222", 100, "tx1", "Food", "Debit", "1", ""],
-      ["d", "d", "Y", 200, "INR", "222", "222", 100, "tx2", "Food", "Debit", "2", ""],
-      ["d", "d", "Y", 200, "INR", "222", "333", 100, "tx2", "Food", "Debit", "2", ""]
+      ["d", "d", "X", 200, "INR", "111", "111", 100, "tx1", "Food", "Debit", "1"],
+      ["d", "d", "X", 200, "INR", "111", "222", 100, "tx1", "Food", "Debit", "1"],
+      ["d", "d", "Y", 200, "INR", "222", "222", 100, "tx2", "Food", "Debit", "2"],
+      ["d", "d", "Y", 200, "INR", "222", "333", 100, "tx2", "Food", "Debit", "2"]
     ];
   }
 
@@ -2828,7 +2822,7 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
       G_SHARE_AMOUNT_COLUMN: 8,
       G_TX_ID_COLUMN: 9,
       G_CATEGORY_COLUMN: 10,
-      G_COL_COUNT: 13
+      G_COL_COUNT: 12
     });
 
     mod.handleGroupCallback({
@@ -2875,7 +2869,7 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
       G_SHARE_AMOUNT_COLUMN: 8,
       G_TX_ID_COLUMN: 9,
       G_CATEGORY_COLUMN: 10,
-      G_COL_COUNT: 13
+      G_COL_COUNT: 12
     });
 
     mod.handleGroupCallback({
@@ -2918,7 +2912,7 @@ describe("handleGroupCallback gstats execution (toggle simplified/detailed)", ()
       G_SHARE_AMOUNT_COLUMN: 8,
       G_TX_ID_COLUMN: 9,
       G_CATEGORY_COLUMN: 10,
-      G_COL_COUNT: 13
+      G_COL_COUNT: 12
     });
 
     mod.handleGroupCallback({
@@ -3062,8 +3056,7 @@ describe("handleGroupSettleCommand", () => {
       "Tx ID",
       "Category",
       "Tx Type",
-      "Message ID",
-      "Email Link"
+      "Message ID"
     ]);
     return SpreadsheetApp;
   }
@@ -3077,7 +3070,7 @@ describe("handleGroupSettleCommand", () => {
       Utilities: { sleep: () => {}, getUuid: () => "tx-settle-cash" },
       PropertiesService: { getScriptProperties: () => makeProps() },
       MAX_GROUP_MEMBERS: 4,
-      G_COL_COUNT: 13
+      G_COL_COUNT: 12
     };
   }
 

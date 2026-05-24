@@ -490,15 +490,10 @@ function handleGroupHelpCommand(update) {
     "• `/account` — show this group's setup\n" +
     "• `/stats` — who owes whom (per currency)\n" +
     "• `/settle @member <amount>` — record a cash payment to a member\n" +
+    "• `/sheet` — open the group spreadsheet\n" +
     "• `/help` — this message\n\n" +
     "_Email-based settlements: forward the UPI confirmation in DM, tap_ 👥 *Split with <group>* _→_ 🤝 *Settle up* _→ recipient._";
-  var opts = { parse_mode: "Markdown" };
-  if (group.sheet_id) {
-    opts.reply_markup = {
-      inline_keyboard: [[{ text: "📋 Open group sheet", url: sheetUrl(group.sheet_id) }]]
-    };
-  }
-  sendTelegramMessage(chatId, msg, opts);
+  sendTelegramMessage(chatId, msg, { parse_mode: "Markdown" });
 }
 
 // /account in a group: show the group tenant's status — name, sheet link,
@@ -534,8 +529,31 @@ function handleGroupAccountCommand(update) {
     var adminLabel = adminTenant && adminTenant.name ? escapeMarkdown(adminTenant.name) : "`" + adminId + "`";
     lines.push("Admin: " + adminLabel);
   }
-  if (group.sheet_id) lines.push("Sheet: [open](" + sheetUrl(group.sheet_id) + ")");
+  if (group.sheet_id) lines.push("Sheet: shared with members — run `/sheet` to open");
   sendTelegramMessage(chatId, lines.join("\n"), { parse_mode: "Markdown", disable_web_page_preview: true });
+}
+
+// /sheet in a group: on-demand link to the group's shared spreadsheet. Same
+// rationale as personal /sheet — not advertised on /help / /account anymore.
+function handleGroupSheetCommand(update) {
+  var chatId = update.message.chat.id;
+  var group = findGroupTenantByChatId(chatId);
+  if (!group || group.status !== TENANT_STATUS.ACTIVE) {
+    sendTelegramMessage(chatId, "👋 This group isn't set up yet. Promote me to admin and run `/start`.", {
+      parse_mode: "Markdown"
+    });
+    return;
+  }
+  if (!group.sheet_id) {
+    sendTelegramMessage(chatId, "_Sheet not provisioned yet._", { parse_mode: "Markdown" });
+    return;
+  }
+  sendTelegramMessage(chatId, "📋 *Group spreadsheet*", {
+    parse_mode: "Markdown",
+    reply_markup: {
+      inline_keyboard: [[{ text: "📋 Open group sheet", url: sheetUrl(group.sheet_id) }]]
+    }
+  });
 }
 
 // --- Split-UI callback encoding ---
@@ -1166,8 +1184,8 @@ function _recordGroupSplitLocked(args) {
   if (rowNumber < 0) {
     return { ok: false, error: "Transaction not found.", message: "❌ *Transaction not found.*" };
   }
-  // Read the row at the full 13-column width directly. getRowData() only
-  // reaches EMAIL_LINK_COLUMN (col 11) so it can't see GROUP_REF / GROUP_MESSAGE_ID.
+  // Read the row at the full column width directly. getRowData() only reaches
+  // CURRENCY_COLUMN (col 9) so it can't see GROUP_REF / GROUP_MESSAGE_ID.
   var personalSheet = getSpreadsheet().getSheets()[0];
   var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
   // Re-split guard. Caller must undo before splitting again.
@@ -1187,7 +1205,6 @@ function _recordGroupSplitLocked(args) {
   var currency = rowData[CURRENCY_COLUMN - 1] || group.primary_currency || "INR";
   var category = rowData[CATEGORY_COLUMN - 1];
   var txType = rowData[TRANSACTION_TYPE_COLUMN - 1];
-  var emailLink = rowData[EMAIL_LINK_COLUMN - 1];
 
   var txId = Utilities.getUuid();
 
@@ -1241,8 +1258,7 @@ function _recordGroupSplitLocked(args) {
       txId,
       category,
       txType,
-      groupMsgId,
-      emailLink
+      groupMsgId
     ]);
   }
 
@@ -1445,7 +1461,6 @@ function _executeGroupSettlementLocked(cb, decoded, callerChatId, dmChatId, tele
   var merchant = rowData[MERCHANT_COLUMN - 1];
   var category = rowData[CATEGORY_COLUMN - 1];
   var currency = rowData[CURRENCY_COLUMN - 1] || group.primary_currency || "INR";
-  var emailLink = rowData[EMAIL_LINK_COLUMN - 1];
 
   var txId = Utilities.getUuid();
 
@@ -1495,8 +1510,7 @@ function _executeGroupSettlementLocked(cb, decoded, callerChatId, dmChatId, tele
     txId,
     "Settlement",
     "Settlement",
-    groupMsgId,
-    emailLink
+    groupMsgId
   ]);
 
   personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue(group.chat_id + ":" + txId);

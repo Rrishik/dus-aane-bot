@@ -56,6 +56,9 @@ beforeEach(() => {
     ADMIN_CHAT_ID: "CHAT",
     CATEGORIES,
     CREDIT_CATEGORIES,
+    MESSAGE_ID_COLUMN: 8,
+    GROUP_REF_COLUMN: 10,
+    GROUP_MESSAGE_ID_COLUMN: 11,
     Logger: { log: () => {} }
   });
 });
@@ -178,7 +181,7 @@ describe("updateGoogleSheetCellWithFeedback", () => {
 describe("ensureSheetHeaders", () => {
   it("appends headers when sheet is empty", () => {
     api.ensureSheetHeaders();
-    var headers = mainSheet().getRange(1, 1, 1, 12).getValues()[0];
+    var headers = mainSheet().getRange(1, 1, 1, 11).getValues()[0];
     expect(headers).toEqual([
       "Email Date",
       "Transaction Date",
@@ -189,7 +192,6 @@ describe("ensureSheetHeaders", () => {
       "User",
       "Message ID",
       "Currency",
-      "Email Link",
       "Group Ref",
       "Group Message ID"
     ]);

@@ -47,13 +47,10 @@ function adminCreateTemplateSheet() {
  *
  * Used by Phase 4's onboarding flow; exposed as admin helper for dry runs.
  *
- * Ownership: by default the caller (admin) stays as owner and the tenant
- * is added as an editor. Pass `transferOwnership=true` to also kick off a
- * Drive ownership transfer to the tenant — that requires the tenant to
- * accept a Drive notification, so we don't do it as part of the default
- * onboarding path. Tenants can opt in later via `/ownsheet`.
+ * Ownership: the bot's Google account stays as owner and the tenant is
+ * added as an editor.
  */
-function adminProvisionTenantSheet(displayName, shareWithEmail, transferOwnership) {
+function adminProvisionTenantSheet(displayName, shareWithEmail) {
   if (typeof TEMPLATE_SHEET_ID !== "string" || !TEMPLATE_SHEET_ID) {
     throw new Error("TEMPLATE_SHEET_ID not set. Run adminCreateTemplateSheet() first.");
   }
@@ -65,39 +62,9 @@ function adminProvisionTenantSheet(displayName, shareWithEmail, transferOwnershi
     } catch (e) {
       console.error("[adminProvisionTenantSheet] addEditor failed for " + shareWithEmail + ": " + e.message);
     }
-    if (transferOwnership) {
-      try {
-        copy.setOwner(shareWithEmail);
-        console.log("Initiated ownership transfer of " + copy.getId() + " to " + shareWithEmail);
-      } catch (e) {
-        // Cross-account transfers can fail (e.g. recipient not yet on Drive,
-        // Workspace policy). Sheet still works as admin-owned + user-editor.
-        console.error("[adminProvisionTenantSheet] setOwner failed for " + shareWithEmail + ": " + e.message);
-      }
-    }
   }
   console.log("Provisioned sheet: " + copy.getId() + " (" + name + ")");
   return copy.getId();
-}
-
-/**
- * Initiate a Drive ownership transfer of `sheetId` to `email`. The user
- * must accept a Drive notification before the transfer completes. Until
- * then admin remains the owner; the user stays an editor.
- *
- * Returns true on a successful initiate (Drive accepted the request),
- * false on any error (logged to the Executions panel).
- */
-function adminTransferSheetOwnership(sheetId, email) {
-  try {
-    var file = DriveApp.getFileById(sheetId);
-    file.setOwner(email);
-    console.log("[adminTransferSheetOwnership] initiated transfer of " + sheetId + " to " + email);
-    return true;
-  } catch (e) {
-    console.error("[adminTransferSheetOwnership] failed for " + email + ": " + e.message);
-    return false;
-  }
 }
 
 /**
@@ -132,8 +99,7 @@ function adminCreateGroupTemplateSheet() {
  * responsible for registering the group tenant.
  *
  * Optional shareWithEmails: list of member emails to add as editors.
- * Ownership stays with the bot account (no per-group /ownsheet in v1 —
- * see groups-feature design doc).
+ * Ownership stays with the bot account.
  */
 function adminProvisionGroupSheet(displayName, shareWithEmails) {
   if (typeof GROUP_TEMPLATE_SHEET_ID !== "string" || !GROUP_TEMPLATE_SHEET_ID) {

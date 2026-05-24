@@ -44,7 +44,6 @@ function makeStubs(overrides) {
     upsertPendingTenant: vi.fn(),
     activateTenant: vi.fn(() => true),
     adminProvisionTenantSheet: vi.fn(() => "sheet-id-xyz"),
-    adminTransferSheetOwnership: vi.fn(() => true),
     consumePendingGroupInvitesForUser: vi.fn(),
     handleHelpCommand: vi.fn(),
     buildVerifyForwardingUrl: vi.fn((url, chat) => url + "?verify=" + chat),
@@ -64,7 +63,6 @@ const SYMBOLS = [
   "sendSetupInstructions",
   "handleAccountCommand",
   "handleResendSetupCallback",
-  "handleOwnSheetCommand",
   "activatePendingTenantForEmail",
   "gateTenantForCommand"
 ];
@@ -336,7 +334,7 @@ describe("handleAccountCommand", () => {
     expect(env.sent[0].opts.reply_markup).toBeUndefined();
   });
 
-  it("renders status + emails + sheet link + resend button for an ACTIVE tenant", () => {
+  it("renders status + emails + sheet hint + resend button for an ACTIVE tenant", () => {
     var env = makeStubs({
       findTenantByChatId: () => ({
         chat_id: "1",
@@ -353,7 +351,9 @@ describe("handleAccountCommand", () => {
     expect(msg.text).toMatch(/Status.*active/s);
     expect(msg.text).toMatch(/Name: Alice/);
     expect(msg.text).toMatch(/a@x\.com/);
-    expect(msg.text).toMatch(/https:\/\/sheets\/sheet-1/);
+    // Sheet URL is intentionally NOT in /account anymore — user opens via Gmail share notification.
+    expect(msg.text).not.toMatch(/https:\/\/sheets\//);
+    expect(msg.text).toMatch(/Sheet: shared with `a@x\.com`/);
     expect(msg.opts.reply_markup.inline_keyboard[0][0].callback_data).toBe("resend_setup");
   });
 
@@ -416,70 +416,6 @@ describe("handleResendSetupCallback", () => {
   });
 });
 
-describe("handleOwnSheetCommand", () => {
-  it("nudges to forward an email when tenant isn't active yet", () => {
-    var env = makeStubs({
-      findTenantByChatId: () => ({ chat_id: "1", status: TENANT_STATUS.PENDING, emails: ["a@x.com"], sheet_id: null })
-    });
-    var api = load(env.stubs);
-    api.handleOwnSheetCommand("1");
-
-    expect(env.sent[0].text).toMatch(/hasn't been provisioned/);
-    expect(env.stubs.adminTransferSheetOwnership).not.toHaveBeenCalled();
-  });
-
-  it("nudges to forward an email when no tenant exists", () => {
-    var env = makeStubs();
-    var api = load(env.stubs);
-    api.handleOwnSheetCommand("1");
-
-    expect(env.sent[0].text).toMatch(/hasn't been provisioned/);
-  });
-
-  it("warns when the active tenant has no sheet_id (data inconsistency)", () => {
-    var env = makeStubs({
-      findTenantByChatId: () => ({ chat_id: "1", status: TENANT_STATUS.ACTIVE, emails: ["a@x.com"], sheet_id: null })
-    });
-    var api = load(env.stubs);
-    api.handleOwnSheetCommand("1");
-
-    expect(env.sent[0].text).toMatch(/contact the admin/);
-    expect(env.stubs.adminTransferSheetOwnership).not.toHaveBeenCalled();
-  });
-
-  it("warns when Drive refuses the ownership transfer", () => {
-    var env = makeStubs({
-      findTenantByChatId: () => ({
-        chat_id: "1",
-        status: TENANT_STATUS.ACTIVE,
-        emails: ["a@x.com"],
-        sheet_id: "sheet-1"
-      }),
-      adminTransferSheetOwnership: vi.fn(() => false)
-    });
-    var api = load(env.stubs);
-    api.handleOwnSheetCommand("1");
-
-    expect(env.sent[0].text).toMatch(/Drive refused/);
-  });
-
-  it("on success: confirms the transfer request was sent to the primary email", () => {
-    var env = makeStubs({
-      findTenantByChatId: () => ({
-        chat_id: "1",
-        status: TENANT_STATUS.ACTIVE,
-        emails: ["primary@x.com", "secondary@x.com"],
-        sheet_id: "sheet-1"
-      })
-    });
-    var api = load(env.stubs);
-    api.handleOwnSheetCommand("1");
-
-    expect(env.stubs.adminTransferSheetOwnership).toHaveBeenCalledWith("sheet-1", "primary@x.com");
-    expect(env.sent[0].text).toMatch(/Drive has emailed `primary@x\.com`/);
-  });
-});
-
 describe("activatePendingTenantForEmail", () => {
   it("returns null when no pending tenant matches the email", () => {
     var env = makeStubs();
@@ -512,7 +448,7 @@ describe("activatePendingTenantForEmail", () => {
     expect(api.activatePendingTenantForEmail("a@x.com")).toBeNull();
   });
 
-  it("on happy path: provisions, activates, DMs welcome, runs retro-add", () => {
+  it("on happy path: provisions, activates, DMs welcome (no sheet URL), runs retro-add", () => {
     var env = makeStubs({
       findPendingTenantByEmail: () => ({ chat_id: "1", name: "Alice" }),
       findTenantByChatId: () => ({ chat_id: "1", status: TENANT_STATUS.ACTIVE, name: "Alice" })
@@ -524,7 +460,9 @@ describe("activatePendingTenantForEmail", () => {
     expect(env.stubs.adminProvisionTenantSheet).toHaveBeenCalledWith("Alice", "a@x.com");
     expect(env.stubs.activateTenant).toHaveBeenCalledWith("1", "sheet-id-xyz");
     expect(env.sent[0].text).toMatch(/Your first transaction is in/);
-    expect(env.sent[0].opts.reply_markup.inline_keyboard[0][0].url).toBe("https://sheets/sheet-id-xyz");
+    expect(env.sent[0].text).toMatch(/Google just emailed you a share notification/);
+    // Sheet URL is intentionally NOT in the welcome DM — user opens via Gmail share notification.
+    expect(env.sent[0].opts.reply_markup).toBeUndefined();
     expect(env.stubs.consumePendingGroupInvitesForUser).toHaveBeenCalledWith("1", "Alice");
   });
 

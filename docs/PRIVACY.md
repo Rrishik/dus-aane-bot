@@ -48,17 +48,20 @@ Azure OpenAI's data handling follows Microsoft's Azure terms — prompts are not
 
 Per-tenant data, in a Google Sheet **owned by your bot's Google account** and shared with your registered Gmail as an editor:
 
-| Where              | What                                                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| **Main sheet tab** | One row per transaction: date, merchant, amount, category, type, user tag, split status, Gmail message id, currency, email link |
+| Where                  | What                                                                                                                                                                                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Personal sheet tab** | One row per transaction: email date, txn date, merchant, amount, category, type, user, Gmail message id, currency, group ref, group message id                                                                                               |
+| **Group sheet tab**    | One row per **share** (so a 4-way split = 4 rows linked by the same Tx ID): email date, tx date, merchant, amount, currency, paid by, share holder, share amount, tx id, category, tx type, message id. Only exists if you use group splits. |
+
+Group sheets are owned by the bot's Google account and shared with every member of the Telegram group as editor. When you split a personal transaction into a group, both sheets get rows: the personal row gets a `group ref` pointing at the group sheet, and the group sheet gets one row per share-holder.
 
 **Admin sheet** (shared across all tenants — the admin can see it, tenants cannot):
 
-| Tab                  | What                                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `Tenants`            | chat_id, display name, forwarder emails, sheet id, status (`pending`/`active`/`disabled`), created_at, notes  |
-| `MerchantResolution` | Raw bank strings → cleaned merchant names (e.g. `FLIPKART_MWS_MERCH` → `Flipkart`). Universal across tenants. |
-| `CategoryOverrides`  | Merchant → default category (e.g. `Swiggy` → `Food & Dining`). Universal across tenants.                      |
+| Tab                  | What                                                                                                                                                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Tenants`            | chat_id, name, emails, sheet_id, status (`pending`/`active`/`disabled`), created_at, notes, last_forward_at, last_nag_at, nag_count, chat_type (`personal`/`group`), group_members (CSV of chat_ids, groups only), primary_currency |
+| `MerchantResolution` | Raw bank strings → cleaned merchant names (e.g. `FLIPKART_MWS_MERCH` → `Flipkart`). Universal across tenants.                                                                                                                       |
+| `CategoryOverrides`  | Merchant → default category (e.g. `Swiggy` → `Food & Dining`). Universal across tenants.                                                                                                                                            |
 
 `MerchantResolution` and `CategoryOverrides` are shared because the raw patterns banks use are identical for every tenant — centralising them means new tenants inherit a pre-trained bot, and every tenant's new-merchant corrections improve categorisation for everyone. Per-row category edits (the ✏️ Category button) write only to the tenant's own sheet.
 
@@ -115,7 +118,7 @@ There's no self-service command yet. To leave:
 2. **Have the admin remove you** — they delete your `Tenants` row (revokes the bot from routing future forwards to you) and either delete your sheet or transfer ownership to you.
 3. **Stop the forwarding** — in your Gmail, delete the filter that forwards to `dusaanebot.inbox@gmail.com` and remove the forwarding address.
 
-Self-service `/forgetme` is on the admin's future roadmap.
+Self-service deletion isn't implemented yet — ask the admin running your deployment.
 
 ## Telegram's own data
 

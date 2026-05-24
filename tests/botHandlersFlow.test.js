@@ -19,9 +19,8 @@ const PERSONAL_COLS = {
   USER_COLUMN: 7,
   MESSAGE_ID_COLUMN: 8,
   CURRENCY_COLUMN: 9,
-  EMAIL_LINK_COLUMN: 10,
-  GROUP_REF_COLUMN: 11,
-  GROUP_MESSAGE_ID_COLUMN: 12
+  GROUP_REF_COLUMN: 10,
+  GROUP_MESSAGE_ID_COLUMN: 11
 };
 
 // Group sheet column indices (1-based, β schema).
@@ -37,8 +36,7 @@ const GROUP_COLS = {
   G_TX_ID_COLUMN: 9,
   G_CATEGORY_COLUMN: 10,
   G_TRANSACTION_TYPE_COLUMN: 11,
-  G_MESSAGE_ID_COLUMN: 12,
-  G_EMAIL_LINK_COLUMN: 13
+  G_MESSAGE_ID_COLUMN: 12
 };
 
 // Minimal in-process sheet mock that supports the calls BotHandlers makes:
@@ -147,6 +145,7 @@ const SYMBOLS = [
   "resumeAsk",
   "tryResumeAsk",
   "handleHelpCommand",
+  "handleSheetCommand",
   "buildKeyboardForRow",
   "handleBackfillCommand"
 ];
@@ -159,7 +158,7 @@ function load(stubs) {
 
 describe("buildRecentTransactionsMessage", () => {
   function personalRow(opts) {
-    var r = new Array(13).fill("");
+    var r = new Array(11).fill("");
     r[PERSONAL_COLS.EMAIL_DATE_COLUMN - 1] = opts.emailDate || new Date("2026-05-01T10:00:00Z");
     r[PERSONAL_COLS.TRANSACTION_DATE_COLUMN - 1] = opts.txDate || "";
     r[PERSONAL_COLS.MERCHANT_COLUMN - 1] = opts.merchant || "Swiggy";
@@ -172,7 +171,7 @@ describe("buildRecentTransactionsMessage", () => {
   }
 
   function groupRow(opts) {
-    var r = new Array(13).fill("");
+    var r = new Array(12).fill("");
     r[GROUP_COLS.G_EMAIL_DATE_COLUMN - 1] = opts.emailDate || new Date("2026-05-01T10:00:00Z");
     r[GROUP_COLS.G_MERCHANT_COLUMN - 1] = opts.merchant || "Swiggy";
     r[GROUP_COLS.G_AMOUNT_COLUMN - 1] = opts.amount || 500;
@@ -690,16 +689,30 @@ describe("tryResumeAsk", () => {
 // ── handleHelpCommand ───────────────────────────────────────────────────────
 
 describe("handleHelpCommand", () => {
-  it("posts the commands list with a Sheet + README button row", () => {
+  it("posts the commands list with a README-only button row (sheet is on-demand via /sheet)", () => {
     var env = baseStubs();
     var api = load(env.stubs);
     api.handleHelpCommand("1", "alice");
 
     expect(env.sent[0].text).toMatch(/\/ask/);
     expect(env.sent[0].text).toMatch(/\/stats/);
+    expect(env.sent[0].text).toMatch(/\/sheet/);
     var btns = env.sent[0].opts.reply_markup.inline_keyboard[0];
-    expect(btns.find((b) => /Open Sheet/.test(b.text)).url).toBe("https://sheets/sheet-xyz");
+    expect(btns.some((b) => /Open Sheet/.test(b.text))).toBe(false);
     expect(btns.find((b) => /README/.test(b.text)).url).toMatch(/github\.com/);
+  });
+});
+
+describe("handleSheetCommand", () => {
+  it("DMs the Open Sheet button on demand", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    api.handleSheetCommand("1");
+
+    expect(env.sent[0].text).toMatch(/spreadsheet/i);
+    var btn = env.sent[0].opts.reply_markup.inline_keyboard[0][0];
+    expect(btn.text).toMatch(/Open Sheet/);
+    expect(btn.url).toBe("https://sheets/sheet-xyz");
   });
 });
 
