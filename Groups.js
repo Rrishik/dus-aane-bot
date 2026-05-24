@@ -548,12 +548,16 @@ function handleGroupSheetCommand(update) {
     sendTelegramMessage(chatId, "_Sheet not provisioned yet._", { parse_mode: "Markdown" });
     return;
   }
-  sendTelegramMessage(chatId, "📋 *Group spreadsheet*", {
-    parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [[{ text: "📋 Open group sheet", url: sheetUrl(group.sheet_id) }]]
+  sendTelegramMessage(
+    chatId,
+    "📋 *Group spreadsheet*\n\n_⚠️ Make sure you're signed into Google with the same email you registered with — the sheet is shared only with member addresses._",
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[{ text: "📋 Open group sheet", url: sheetUrl(group.sheet_id) }]]
+      }
     }
-  });
+  );
 }
 
 // --- Split-UI callback encoding ---

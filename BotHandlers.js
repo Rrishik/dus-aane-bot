@@ -264,12 +264,16 @@ function handleHelpCommand(chatId, username) {
 // post-backfill); users who want raw data run this command.
 function handleSheetCommand(chatId) {
   var url = sheetUrl(getTenantSheetId());
-  sendTelegramMessage(chatId, "📋 *Your spreadsheet*", {
-    parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [[{ text: "📋 Open Sheet", url: url }]]
+  sendTelegramMessage(
+    chatId,
+    "📋 *Your spreadsheet*\n\n_⚠️ Make sure you're signed into Google with the same email you registered with — the sheet is shared only with that address._",
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[{ text: "📋 Open Sheet", url: url }]]
+      }
     }
-  });
+  );
 }
 
 // Method to handle the callback queries sent from the Telegram message reply buttons.
