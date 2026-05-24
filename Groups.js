@@ -1142,7 +1142,13 @@ function _recordGroupSplitLocked(args) {
   var emailMessageId = args.emailMessageId;
   var groupChatId = args.groupChatId;
   var mode = args.mode;
-  var callerChatId = args.payerChatId;
+  // Always work with the string form — group.group_members is an array of
+  // strings (loadTenants splits the CSV), and getRange().setValue() further
+  // down also writes the payer id into the sheet's PAID_BY column. The
+  // interactive callback path already stringifies; the /ask path used to
+  // pass through the raw Number from update.message.chat.id, which silently
+  // failed the membership check below.
+  var callerChatId = String(args.payerChatId);
 
   var group = findGroupTenantByChatId(groupChatId);
   if (!group || group.status !== TENANT_STATUS.ACTIVE) {

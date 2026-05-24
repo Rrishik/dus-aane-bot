@@ -3330,4 +3330,32 @@ describe("recordGroupSplit (callback-less /ask entry)", () => {
     expect(res.error).toMatch(/Already split/);
     expect(fix.SpreadsheetApp.openById("g1").getSheets()[0].getLastRow()).toBe(0);
   });
+
+  // /ask path passes ctx.chatId straight through — and update.message.chat.id
+  // from Telegram is a Number. group_members is parsed as strings. Without
+  // String() normalization at the function boundary, the indexOf check fails
+  // and the payer gets "you're not a member of this group" for a group they
+  // do belong to.
+  it("accepts a numeric payerChatId (/ask path) and still finds the group membership", () => {
+    var sent = [];
+    var fix = setupSplitFixture(
+      [
+        ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["222", "Bob", "", "s2", "active", "", "", "", "", 0, "personal", "", "INR"],
+        ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
+      ],
+      { messageId: "msg-X", amount: 600, merchant: "Swiggy", category: "Food" }
+    );
+    var mod = load(makeStubs(fix.SpreadsheetApp, sent, true));
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active" });
+
+    var res = mod.recordGroupSplit({
+      emailMessageId: "msg-X",
+      groupChatId: "-100",
+      mode: "50",
+      payerChatId: 111 // numeric, not "111"
+    });
+    expect(res.ok).toBe(true);
+    expect(res.holders.sort()).toEqual(["111", "222"]);
+  });
 });
