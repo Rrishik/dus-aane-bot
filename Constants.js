@@ -11,6 +11,7 @@ const BOT_GET_CHAT_ADMINISTRATORS_URL = `https://api.telegram.org/bot${BOT_TOKEN
 const BOT_GET_CHAT_MEMBER_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChatMember`;
 const BOT_GET_ME_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getMe`;
 const BOT_SEND_CHAT_ACTION_URL = `https://api.telegram.org/bot${BOT_TOKEN}/sendChatAction`;
+const BOT_PIN_CHAT_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/pinChatMessage`;
 
 // Public email address that tenants forward their bank emails to.
 // Displayed in /start and /register onboarding copy.

@@ -51,6 +51,7 @@ function urlStubs() {
     BOT_SET_WEBHOOK_URL: "https://api.telegram.test/bot/setWebhook",
     BOT_DELETE_WEBHOOK_URL: "https://api.telegram.test/bot/deleteWebhook",
     BOT_SET_COMMANDS_URL: "https://api.telegram.test/bot/setMyCommands",
+    BOT_PIN_CHAT_MESSAGE_URL: "https://api.telegram.test/bot/pinChatMessage",
     WORKER_PROXY_URL: "https://example"
   };
 }
@@ -1642,7 +1643,22 @@ var PERSONAL_COL_STUBS = {
   CURRENCY_COLUMN: 9,
   GROUP_REF_COLUMN: 10,
   GROUP_MESSAGE_ID_COLUMN: 11,
-  G_TX_ID_COLUMN: 9
+  // Group-sheet (β) column constants — needed by refreshGroupSplitPin, which
+  // is invoked at the end of every gsp/gst/settle path and reads the group
+  // sheet to recompute live balances.
+  G_EMAIL_DATE_COLUMN: 1,
+  G_TRANSACTION_DATE_COLUMN: 2,
+  G_MERCHANT_COLUMN: 3,
+  G_AMOUNT_COLUMN: 4,
+  G_CURRENCY_COLUMN: 5,
+  G_PAID_BY_COLUMN: 6,
+  G_SHARE_HOLDER_COLUMN: 7,
+  G_SHARE_AMOUNT_COLUMN: 8,
+  G_TX_ID_COLUMN: 9,
+  G_CATEGORY_COLUMN: 10,
+  G_TRANSACTION_TYPE_COLUMN: 11,
+  G_MESSAGE_ID_COLUMN: 12,
+  G_COL_COUNT: 12
 };
 
 // Build a SpreadsheetApp mock with: admin Tenants tab + one personal sheet
@@ -1960,6 +1976,7 @@ describe("handleGroupCallback gun execution (undo)", () => {
     return {
       ...urlStubs(),
       ...PERSONAL_COL_STUBS,
+      CURRENCY_SYMBOLS: { INR: "₹", USD: "$", EUR: "€" },
       SpreadsheetApp: SpreadsheetApp,
       ADMIN_SHEET_ID: ADMIN_SHEET_ID,
       UrlFetchApp: fetchOverride || makeFetch(sent),
@@ -3064,13 +3081,14 @@ describe("handleGroupSettleCommand", () => {
   function commonStubs(SpreadsheetApp, sent) {
     return {
       ...urlStubs(),
+      ...PERSONAL_COL_STUBS,
       SpreadsheetApp,
       ADMIN_SHEET_ID,
       UrlFetchApp: makeFetch(sent),
       Utilities: { sleep: () => {}, getUuid: () => "tx-settle-cash" },
       PropertiesService: { getScriptProperties: () => makeProps() },
       MAX_GROUP_MEMBERS: 4,
-      G_COL_COUNT: 12
+      CURRENCY_SYMBOLS: { INR: "₹", USD: "$", EUR: "€" }
     };
   }
 

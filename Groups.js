@@ -1270,6 +1270,8 @@ function _recordGroupSplitLocked(args) {
   personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue(group.chat_id + ":" + txId);
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
 
+  refreshGroupSplitPin(group);
+
   return {
     ok: true,
     merchant: merchant,
@@ -1373,6 +1375,8 @@ function _executeGroupUndoLocked(cb, decoded, callerChatId, dmChatId, telegramMe
   // Clear personal row's group ref + msg id so the row goes back to "personal".
   personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue("");
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue("");
+
+  refreshGroupSplitPin(group);
 
   // Restore the original transaction keyboard (group parents + status / action rows).
   var personalRow = personalSheet.getRange(rowNumber, 1, 1, CATEGORY_COLUMN).getValues()[0];
@@ -1520,6 +1524,8 @@ function _executeGroupSettlementLocked(cb, decoded, callerChatId, dmChatId, tele
   personalSheet.getRange(rowNumber, GROUP_REF_COLUMN).setValue(group.chat_id + ":" + txId);
   personalSheet.getRange(rowNumber, GROUP_MESSAGE_ID_COLUMN).setValue(groupMsgId);
 
+  refreshGroupSplitPin(group);
+
   // Replace the DM card body with a settlement summary so the message text
   // actually matches the keyboard underneath it. The original card said
   // "🔴 <merchant> — <amount>" which is the *outgoing* payment — confusing
@@ -1559,7 +1565,7 @@ function _executeGroupSettlementLocked(cb, decoded, callerChatId, dmChatId, tele
 //
 // Input:
 //   rows   — array of arrays (the values returned by getRange().getValues(),
-//            EXCLUDING the header). Each row is the full G_COL_COUNT (13)
+//            EXCLUDING the header). Each row is the full G_COL_COUNT (12)
 //            wide. May be empty.
 //
 // Output:
@@ -1985,7 +1991,200 @@ function handleGroupSettleCommand(update) {
     txId, // Tx ID
     "Settlement", // Category
     "Settlement", // Tx Type
-    groupMsgId, // Message ID
-    "" // Email Link
+    groupMsgId // Message ID
   ]);
+
+  refreshGroupSplitPin(group);
+}
+
+// ─── Live balance pin ───────────────────────────────────────────────────────
+// A single message in the group chat that always reflects current who-owes-
+// whom. Refreshed via editMessageText after every split/settlement/undo so
+// the same message_id stays pinned forever (no pin-storm on each refresh).
+//
+// Lifecycle states (encoded in tenant.pin_message_id):
+//   ""              → never bootstrapped; next refresh will send + pin.
+//   <numeric>       → live pin; refresh will editMessageText.
+//   PIN_SKIP_SENTINEL → bootstrap previously failed (no admin / no pin perm);
+//                     stop trying. Clear the cell manually to re-arm.
+//
+// On edit failure (e.g. pin was deleted by an admin), clear pin_message_id
+// and re-bootstrap so the pin self-heals. On bootstrap pin failure, post a
+// one-time nudge in the group + admin DM explaining the missing permission,
+// then mark skip and give up.
+//
+// Currency cap: top 3 by total outstanding amount. Anything beyond that
+// collapses to "_+N more currencies (see /stats)_" so the pin stays scannable.
+var PIN_CURRENCY_CAP = 3;
+
+// Pure formatter. Inputs:
+//   perCurrency — output of simplifyDebtsGreedy
+//   nameOf      — function(chat_id) → display name
+//   groupName   — string for the header
+// Returns Markdown-ready text. Always returns something (never empty).
+function formatGroupBalancesPin(perCurrency, nameOf, groupName) {
+  var resolveName =
+    nameOf ||
+    function (id) {
+      return String(id);
+    };
+  var header = "📌 *" + escapeMarkdown(groupName || "Group") + "* — live balances";
+  var currencies = Object.keys(perCurrency || {});
+  if (!currencies.length) {
+    return header + "\n\n✅ _All settled up._\n\n_Auto-updates after each split or settle._";
+  }
+  // Rank by total outstanding volume per currency.
+  var ranked = currencies
+    .map(function (ccy) {
+      var sum = 0;
+      var entries = perCurrency[ccy] || [];
+      for (var i = 0; i < entries.length; i++) sum += Number(entries[i].amount) || 0;
+      return { ccy: ccy, total: sum };
+    })
+    .sort(function (a, b) {
+      if (b.total !== a.total) return b.total - a.total;
+      return a.ccy < b.ccy ? -1 : 1;
+    });
+
+  var shown = ranked.slice(0, PIN_CURRENCY_CAP);
+  var hidden = ranked.length - shown.length;
+
+  var lines = [header, ""];
+  for (var i = 0; i < shown.length; i++) {
+    var ccy = shown[i].ccy;
+    var sym = typeof currencySymbol === "function" ? currencySymbol(ccy) : ccy;
+    lines.push("*" + escapeMarkdown(ccy) + "*");
+    var entries = perCurrency[ccy] || [];
+    for (var j = 0; j < entries.length; j++) {
+      var e = entries[j];
+      var debtorName = resolveName(e.debtor) || e.debtor;
+      var creditorName = resolveName(e.creditor) || e.creditor;
+      lines.push(
+        "• " + escapeMarkdown(debtorName) + " → " + escapeMarkdown(creditorName) + ": " + sym + formatAmount(e.amount)
+      );
+    }
+    if (i < shown.length - 1) lines.push("");
+  }
+  if (hidden > 0) {
+    lines.push("");
+    lines.push("_+" + hidden + " more currenc" + (hidden === 1 ? "y" : "ies") + " (see /stats)_");
+  }
+  return lines.join("\n");
+}
+
+// Orchestrator. Called from every code path that mutates a group's ledger
+// (split, settle, undo, /settle). Best-effort: any failure is logged and
+// swallowed — we never block a real ledger write on pin housekeeping.
+//
+// groupTenant must be the freshly-loaded tenant row; callers typically have
+// it on hand already (they used it to do the ledger write).
+function refreshGroupSplitPin(groupTenant) {
+  if (!groupTenant || groupTenant.chat_type !== TENANT_CHAT_TYPE.GROUP) return;
+  if (groupTenant.status !== TENANT_STATUS.ACTIVE) return;
+  // Pinning was permanently disabled for this group on a previous attempt.
+  // Cell must be cleared by hand in the admin sheet to re-arm.
+  if (String(groupTenant.pin_message_id) === PIN_SKIP_SENTINEL) return;
+
+  try {
+    var text = _buildGroupPinText(groupTenant);
+    var existing = String(groupTenant.pin_message_id || "");
+
+    if (existing) {
+      // Try to edit the existing pin in place. Failure → fall through to
+      // re-bootstrap (e.g. the pin was deleted, or message id is stale).
+      var editOk = _tryEditPin(groupTenant.chat_id, existing, text);
+      if (editOk) return;
+      // Edit failed — clear the stale id and re-bootstrap below.
+      setGroupPinMessageId(groupTenant.chat_id, "");
+    }
+
+    _bootstrapGroupPin(groupTenant, text);
+  } catch (e) {
+    // Never let pin plumbing break a successful split/settle.
+    console.error("[refreshGroupSplitPin] " + (e && e.message ? e.message : e));
+  }
+}
+
+function _buildGroupPinText(groupTenant) {
+  var sheet = openGroupSheet(groupTenant.sheet_id);
+  var lastRow = sheet.getLastRow();
+  var rows = [];
+  if (lastRow > 1) {
+    rows = sheet.getRange(2, 1, lastRow - 1, G_COL_COUNT).getValues();
+  }
+  var simplified = simplifyDebtsGreedy(aggregatePairwiseDebts(rows));
+  var nameOf = function (id) {
+    var t = findTenantByChatId(id);
+    return t && t.name ? t.name : id;
+  };
+  return formatGroupBalancesPin(simplified, nameOf, groupTenant.name);
+}
+
+// Returns true if the edit succeeded, false on any error. We rely on
+// sendTelegramMessage's underlying sendRequest treating "message is not
+// modified" as a no-op success.
+function _tryEditPin(groupChatId, pinMessageId, text) {
+  try {
+    var resp = sendTelegramMessage(groupChatId, text, {
+      parse_mode: "Markdown",
+      message_id: pinMessageId,
+      disable_web_page_preview: true
+    });
+    if (!resp) return false;
+    var parsed = JSON.parse(resp);
+    return !!(parsed && parsed.ok);
+  } catch (e) {
+    console.warn("[refreshGroupSplitPin] edit failed: " + (e && e.message ? e.message : e));
+    return false;
+  }
+}
+
+// Send + pin a fresh message. On pin failure, post a one-time nudge and
+// mark the tenant skip so we don't retry.
+function _bootstrapGroupPin(groupTenant, text) {
+  var sendResp = sendTelegramMessage(groupTenant.chat_id, text, {
+    parse_mode: "Markdown",
+    disable_web_page_preview: true
+  });
+  var newMsgId = "";
+  try {
+    var parsed = JSON.parse(sendResp || "{}");
+    if (parsed && parsed.result && parsed.result.message_id) {
+      newMsgId = String(parsed.result.message_id);
+    }
+  } catch (_) {}
+  if (!newMsgId) {
+    // Couldn't even send — don't burn the skip sentinel; try again next time.
+    return;
+  }
+
+  var pinned = pinTelegramMessage(groupTenant.chat_id, newMsgId, true);
+  if (pinned) {
+    setGroupPinMessageId(groupTenant.chat_id, newMsgId);
+    return;
+  }
+
+  // Pin failed — most likely the bot isn't admin or lacks can_pin_messages.
+  // Nudge once in the group, DM the admin if we know who they are, then mark
+  // skip so we stop spamming on every subsequent split/settle.
+  setGroupPinMessageId(groupTenant.chat_id, PIN_SKIP_SENTINEL);
+  var nudge =
+    "ℹ️ *Couldn't pin the live balance.* Promote me to admin with " +
+    "_Pin messages_ permission and the next split will set it up.";
+  try {
+    sendTelegramMessage(groupTenant.chat_id, nudge, { parse_mode: "Markdown" });
+  } catch (_) {}
+  var adminId = getGroupAdminChatId(groupTenant);
+  if (adminId) {
+    try {
+      sendTelegramMessage(
+        adminId,
+        "ℹ️ *" +
+          escapeMarkdown(groupTenant.name || "Your group") +
+          "*: I tried to pin a live balance message but don't have permission. " +
+          "Promote me to admin with _Pin messages_ in the group, then trigger any split/settle to retry.",
+        { parse_mode: "Markdown" }
+      );
+    } catch (_) {}
+  }
 }

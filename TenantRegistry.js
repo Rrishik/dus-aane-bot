@@ -20,6 +20,10 @@
 //  15: ask_used_date     ("YYYY-MM-DD" in IST; date that ask_used_today applies to)
 //  16: ask_lifetime_count (integer; total successful /ask calls all-time)
 //  17: ask_cap_hit_count (integer; days the tenant hit the daily /ask cap)
+//  18: pin_message_id   (group rows only; Telegram message_id of the live
+//                       balance pin. Empty = never bootstrapped, numeric =
+//                       active pin, literal "skip" = bootstrap failed once
+//                       and we won't retry until manually cleared.)
 //
 // A row with status=pending has no sheet_id yet; it's created on first forward.
 // dormant = nag-cap reached without a fresh forward; auto-flips back to active
@@ -46,9 +50,10 @@ var TENANT_COLS = {
   ASK_USED_TODAY: 14,
   ASK_USED_DATE: 15,
   ASK_LIFETIME_COUNT: 16,
-  ASK_CAP_HIT_COUNT: 17
+  ASK_CAP_HIT_COUNT: 17,
+  PIN_MESSAGE_ID: 18
 };
-var TENANT_COL_COUNT = 17;
+var TENANT_COL_COUNT = 18;
 var TENANT_STATUS = {
   PENDING: "pending",
   ACTIVE: "active",
@@ -95,7 +100,8 @@ var TENANT_HEADERS = [
   "ask_used_today",
   "ask_used_date",
   "ask_lifetime_count",
-  "ask_cap_hit_count"
+  "ask_cap_hit_count",
+  "pin_message_id"
 ];
 
 function _getOrCreateTenantsTab() {
@@ -150,7 +156,8 @@ function _rowToTenant(row) {
     ask_used_today: parseInt(row[TENANT_COLS.ASK_USED_TODAY - 1], 10) || 0,
     ask_used_date: String(row[TENANT_COLS.ASK_USED_DATE - 1] || ""),
     ask_lifetime_count: parseInt(row[TENANT_COLS.ASK_LIFETIME_COUNT - 1], 10) || 0,
-    ask_cap_hit_count: parseInt(row[TENANT_COLS.ASK_CAP_HIT_COUNT - 1], 10) || 0
+    ask_cap_hit_count: parseInt(row[TENANT_COLS.ASK_CAP_HIT_COUNT - 1], 10) || 0,
+    pin_message_id: String(row[TENANT_COLS.PIN_MESSAGE_ID - 1] || "")
   };
 }
 
@@ -380,6 +387,26 @@ function getGroupAdminChatId(groupTenant) {
   if (!groupTenant || !groupTenant.notes) return "";
   var m = String(groupTenant.notes).match(/admin=(\S+)/);
   return m ? m[1] : "";
+}
+
+// Sentinel value for tenant.pin_message_id meaning "we tried to bootstrap the
+// live-balance pin once, the bot didn't have permission, and we won't retry
+// automatically." To re-arm, clear the cell manually in the admin sheet.
+var PIN_SKIP_SENTINEL = "skip";
+
+// Write the live-balance pin's Telegram message_id (or PIN_SKIP_SENTINEL) onto
+// a group tenant. Returns false if the chat_id isn't found. No-op no-write
+// when the stored value already matches.
+function setGroupPinMessageId(groupChatId, pinMessageId) {
+  var rowNum = _findRowIndexByChatId(groupChatId);
+  if (rowNum === -1) return false;
+  var tab = _getOrCreateTenantsTab();
+  var next = pinMessageId == null ? "" : String(pinMessageId);
+  var current = String(tab.getRange(rowNum, TENANT_COLS.PIN_MESSAGE_ID).getValue() || "");
+  if (current === next) return true;
+  tab.getRange(rowNum, TENANT_COLS.PIN_MESSAGE_ID).setValue(next);
+  invalidateTenantCache();
+  return true;
 }
 
 // Stamp last_forward_at on a tenant. Called from extractTransactions after a

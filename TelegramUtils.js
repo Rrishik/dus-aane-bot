@@ -114,6 +114,27 @@ function sendChatAction(chat_id, action) {
   }
 }
 
+// Pin a message in a chat. Returns true on success, false on any failure
+// (most commonly: bot isn't admin, or lacks can_pin_messages). Never throws —
+// pinning is best-effort cosmetic plumbing, callers fall back to leaving the
+// message un-pinned.
+//
+// disable_notification defaults to true: the live-balance pin refreshes after
+// every split/settle, and we don't want each refresh to ping the whole group.
+function pinTelegramMessage(chat_id, message_id, disable_notification) {
+  try {
+    sendRequest(BOT_PIN_CHAT_MESSAGE_URL, "post", {
+      chat_id: chat_id,
+      message_id: message_id,
+      disable_notification: disable_notification !== false
+    });
+    return true;
+  } catch (e) {
+    console.warn("pinTelegramMessage failed (chat=" + chat_id + ", msg=" + message_id + "): " + e);
+    return false;
+  }
+}
+
 // ─── Group-lifecycle read helpers ───────────────────────────────────────────
 // Thin wrappers — return parsed `result` on success, null on any error.
 // Callers must tolerate null (network failures, bot kicked, privacy mode, etc.).

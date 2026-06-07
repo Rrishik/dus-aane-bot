@@ -160,6 +160,9 @@ describe("schema", () => {
     expect(s.TENANT_COLS.CHAT_TYPE).toBe(11);
     expect(s.TENANT_COLS.GROUP_MEMBERS).toBe(12);
     expect(s.TENANT_COLS.PRIMARY_CURRENCY).toBe(13);
+    expect(s.TENANT_COLS.PIN_MESSAGE_ID).toBe(18);
+    expect(s.TENANT_COL_COUNT).toBe(18);
+    expect(s.TENANT_HEADERS[17]).toBe("pin_message_id");
     expect(s.TENANT_STATUS.DORMANT).toBe("dormant");
   });
 
@@ -260,6 +263,73 @@ describe("group tenant helpers", () => {
     expect(s.getGroupAdminChatId({ notes: "" })).toBe("");
     expect(s.getGroupAdminChatId({ notes: "some other note" })).toBe("");
     expect(s.getGroupAdminChatId({ notes: "admin=42 extra" })).toBe("42");
+  });
+});
+
+describe("setGroupPinMessageId", () => {
+  function setupWithSetter(rows) {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var tab = ss.insertSheet("Tenants");
+    tab.appendRow([
+      "chat_id",
+      "name",
+      "emails",
+      "sheet_id",
+      "status",
+      "created_at",
+      "notes",
+      "last_forward_at",
+      "last_nag_at",
+      "nag_count",
+      "chat_type",
+      "group_members",
+      "primary_currency",
+      "ask_used_today",
+      "ask_used_date",
+      "ask_lifetime_count",
+      "ask_cap_hit_count",
+      "pin_message_id"
+    ]);
+    rows.forEach(function (r) {
+      tab.appendRow(r);
+    });
+    return loadAppsScript(
+      ["TenantRegistry.js"],
+      ["setGroupPinMessageId", "findGroupTenantByChatId", "invalidateTenantCache", "PIN_SKIP_SENTINEL"],
+      { SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }
+    );
+  }
+
+  it("writes the pin_message_id column and invalidates cache", () => {
+    var s = setupWithSetter([
+      ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR", 0, "", 0, 0, ""]
+    ]);
+    expect(s.setGroupPinMessageId("-100", "42")).toBe(true);
+    s.invalidateTenantCache();
+    expect(s.findGroupTenantByChatId("-100").pin_message_id).toBe("42");
+  });
+
+  it("accepts PIN_SKIP_SENTINEL", () => {
+    var s = setupWithSetter([
+      ["-100", "Pad", "", "g1", "active", "", "", "", "", 0, "group", "111,222", "INR", 0, "", 0, 0, ""]
+    ]);
+    expect(s.PIN_SKIP_SENTINEL).toBe("skip");
+    s.setGroupPinMessageId("-100", s.PIN_SKIP_SENTINEL);
+    s.invalidateTenantCache();
+    expect(s.findGroupTenantByChatId("-100").pin_message_id).toBe("skip");
+  });
+
+  it("no-ops when value is unchanged (idempotent)", () => {
+    var s = setupWithSetter([
+      ["-100", "Pad", "", "g1", "active", "", "", "", "", 0, "group", "111,222", "INR", 0, "", 0, 0, "42"]
+    ]);
+    expect(s.setGroupPinMessageId("-100", "42")).toBe(true);
+  });
+
+  it("returns false when group not found", () => {
+    var s = setupWithSetter([]);
+    expect(s.setGroupPinMessageId("-999", "42")).toBe(false);
   });
 });
 
