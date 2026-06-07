@@ -121,3 +121,230 @@ function adminProvisionGroupSheet(displayName, shareWithEmails) {
   console.log("Provisioned group sheet: " + copy.getId() + " (" + name + ")");
   return copy.getId();
 }
+
+// ─── Legacy group-sheet migration ───────────────────────────────────────────
+//
+// One-shot helper for the admin's original sheet — created before the
+// personal/group schema split. The sheet has two interleaved row shapes:
+//
+//   Pre-β personal rows  (early multi-user flat sheet):
+//     [Email Date, Tx Date, Merchant, Amount, Category, Tx Type,
+//      User (username), Split ("Personal"/"Split"), Message ID,
+//      Currency, Link]
+//
+//   β-shaped rows (written after the schema split, mis-headered):
+//     [Email Date, Tx Date, Merchant, Amount, Currency, Paid By (chat_id),
+//      Share Holder (chat_id), Share Amount, Tx ID, Category, Tx Type]
+//
+// The current code already reads β rows correctly (by column position) and
+// skips pre-β rows (col 8 → NaN → bailout). This helper makes the sheet
+// canonical: rewrite header → β labels, convert pre-β rows into β-self-share
+// rows (payer === holder, full amount), preserve everything else as-is.
+// A self-share row is invisible to debt math but keeps the historical entry.
+//
+// Usage from Apps Script editor:
+//   adminMigrateLegacyGroupSheet("<sheetId>");                  // dry-run report
+//   adminMigrateLegacyGroupSheet("<sheetId>", { commit: true }); // backup + rewrite
+//
+// Options:
+//   commit         — false (default) = log-only; true = mutate the sheet.
+//   userToChatId   — optional { "<legacy User cell>": "<chat_id>", ... } map.
+//                    Unresolved users fall back to the raw User string, which
+//                    is harmless for personal rows (payer===holder → no debt)
+//                    but means split rows expand using the raw string as the
+//                    payer's chat_id (won't match a real tenant for debt math).
+//   splitPartners  — optional ["<chat_idA>", "<chat_idB>"]. When set, pre-β
+//                    "Split" rows expand to two β rows (50/50) instead of a
+//                    single self-share row. This restores the historical
+//                    pairwise debt that was implicit in the old flat format.
+//                    Required when you want the migrated balances to reflect
+//                    pre-β splits. Without it, split rows survive as history
+//                    only (no debt contribution).
+//
+// Always creates a `Pre-β Backup <ISO date>` tab in the same spreadsheet on
+// commit, copying the original tab byte-for-byte before any rewrite.
+function adminMigrateLegacyGroupSheet(sheetId, opts) {
+  opts = opts || {};
+  var commit = !!opts.commit;
+  var userMap = opts.userToChatId || {};
+  var splitPartners = Array.isArray(opts.splitPartners) ? opts.splitPartners.slice(0, 2) : null;
+  if (splitPartners && splitPartners.length !== 2) {
+    throw new Error("splitPartners must contain exactly 2 chat_ids when provided");
+  }
+
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sheet = ss.getSheets()[0];
+  var lastRow = sheet.getLastRow();
+  var lastCol = Math.max(sheet.getLastColumn(), G_COL_COUNT);
+  if (lastRow < 2) {
+    console.log("[migrate] sheet has no data rows; nothing to do.");
+    return { migrated: 0, kept: 0, unknown: 0 };
+  }
+  var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+  var converted = [];
+  var stats = { beta: 0, preBetaPersonal: 0, preBetaSplit: 0, splitExpanded: 0, unknown: 0 };
+  for (var i = 1; i < values.length; i++) {
+    var r = values[i];
+    var shape = _classifyLegacyGroupRow(r);
+    if (shape === "beta") {
+      stats.beta++;
+      converted.push(r.slice(0, G_COL_COUNT));
+    } else if (shape === "pre-beta-personal") {
+      stats.preBetaPersonal++;
+      converted.push(_convertPreBetaRow(r, i + 1, userMap));
+    } else if (shape === "pre-beta-split") {
+      stats.preBetaSplit++;
+      if (splitPartners) {
+        // Expand to 2 β rows: payer keeps their half (self-share, no debt),
+        // partner owes their half. Tx ID shared so both rows are one tx.
+        var expanded = _convertPreBetaSplitRow(r, i + 1, userMap, splitPartners);
+        for (var k = 0; k < expanded.length; k++) converted.push(expanded[k]);
+        stats.splitExpanded++;
+      } else {
+        converted.push(_convertPreBetaRow(r, i + 1, userMap));
+      }
+    } else {
+      stats.unknown++;
+      // Preserve unknown rows untouched in their first G_COL_COUNT cells.
+      converted.push(r.slice(0, G_COL_COUNT));
+    }
+  }
+
+  console.log("[migrate] sheetId=" + sheetId + " commit=" + commit);
+  console.log("[migrate]   β rows (preserved):        " + stats.beta);
+  console.log("[migrate]   pre-β personal → β self:   " + stats.preBetaPersonal);
+  if (splitPartners) {
+    console.log(
+      "[migrate]   pre-β split    → 50/50 pair: " + stats.splitExpanded + " (partners: " + splitPartners.join(",") + ")"
+    );
+  } else {
+    console.log("[migrate]   pre-β split    → β self:   " + stats.preBetaSplit);
+    if (stats.preBetaSplit > 0) {
+      console.log(
+        "[migrate]   ⚠️  Split rows became self-share (no retroactive debt). Pass\n" +
+          "[migrate]      { splitPartners: ['<chat_idA>', '<chat_idB>'] } to expand them\n" +
+          "[migrate]      into 50/50 β pairs instead."
+      );
+    }
+  }
+  console.log("[migrate]   unknown shape  (preserved):" + stats.unknown);
+
+  if (!commit) {
+    console.log("[migrate] DRY RUN — re-call with { commit: true } to write.");
+    return stats;
+  }
+
+  // 1. Backup. Duplicate is atomic and stays inside the same spreadsheet so
+  //    the admin can spot-check side-by-side. If a backup with this date
+  //    already exists, append a counter — never overwrite.
+  var stamp = new Date().toISOString().slice(0, 10);
+  var backupName = "Pre-β Backup " + stamp;
+  var n = 1;
+  while (ss.getSheetByName(backupName)) {
+    n++;
+    backupName = "Pre-β Backup " + stamp + " (" + n + ")";
+  }
+  sheet.copyTo(ss).setName(backupName);
+  console.log("[migrate] backup tab created: " + backupName);
+
+  // 2. Rewrite: clear existing data + header, write β header + converted rows.
+  sheet.getRange(1, 1, lastRow, lastCol).clearContent();
+  sheet.getRange(1, 1, 1, GROUP_SHEET_HEADERS.length).setValues([GROUP_SHEET_HEADERS]);
+  if (converted.length) {
+    sheet.getRange(2, 1, converted.length, G_COL_COUNT).setValues(converted);
+  }
+  try {
+    sheet.hideColumns(G_MESSAGE_ID_COLUMN);
+  } catch (_) {}
+  console.log("[migrate] wrote " + converted.length + " rows under β header.");
+  return stats;
+}
+
+// Heuristic classifier — runs on a single raw row from the legacy sheet.
+// Returns one of: "beta" | "pre-beta-personal" | "pre-beta-split" | "unknown".
+function _classifyLegacyGroupRow(r) {
+  var col5 = String(r[4] || "").trim(); // β=Currency, pre-β=Category
+  var col6 = String(r[5] || "").trim(); // β=PaidBy, pre-β=TxType
+  var col8 = String(r[7] || "").trim(); // β=ShareAmount, pre-β=Split
+  // β: col 5 is a 2–4-char alpha currency code AND col 8 is a finite > 0 number.
+  if (/^[A-Z]{2,4}$/.test(col5) && isFinite(Number(col8)) && Number(col8) > 0) {
+    return "beta";
+  }
+  // pre-β: col 8 says "Personal" or "Split" (the legacy Split status column).
+  if (/^personal$/i.test(col8)) return "pre-beta-personal";
+  if (/^split$/i.test(col8)) return "pre-beta-split";
+  // Unknown shape — preserve as-is, let the operator review.
+  return "unknown";
+}
+
+// Convert a pre-β personal/split row to a β self-share row.
+// β columns: [emailDate, txDate, merchant, amount, currency, paidBy,
+//             shareHolder, shareAmt, txId, category, txType, msgId]
+//
+// Pre-β source columns:
+//   r[0] emailDate   r[1] txDate   r[2] merchant   r[3] amount
+//   r[4] category    r[5] txType   r[6] user       r[7] split
+//   r[8] messageId   r[9] currency r[10] link
+//
+// payer === holder by design → row preserved as history, contributes 0 to debts.
+function _convertPreBetaRow(r, rowNum, userMap) {
+  var amount = Number(r[3]) || 0;
+  var user = String(r[6] || "").trim();
+  var resolved = (userMap && userMap[user]) || user || "legacy";
+  var currency = String(r[9] || "INR").trim() || "INR";
+  return [
+    r[0] || "", // email date
+    r[1] || "", // tx date
+    r[2] || "", // merchant
+    amount, // amount
+    currency, // currency
+    resolved, // paid by
+    resolved, // share holder (== payer → no debt)
+    amount, // share amount = full amount (self-share)
+    "legacy-" + rowNum, // tx id (stable per row)
+    r[4] || "", // category
+    r[5] || "", // tx type
+    r[8] || "" // message id (Gmail dedupe key)
+  ];
+}
+
+// Expand a pre-β Split row to TWO β rows for a known 2-person group.
+// Returns the rows in order: [payer-self-share, partner-share].
+//
+// splitPartners = [chat_idA, chat_idB]. The payer is whichever of those two
+// the row's User cell resolves to (via userMap if provided). If the row's
+// User can't be mapped to one of the two partners, we default to partner[0]
+// as payer and partner[1] as the debtor — the operator will see this in the
+// stats and can re-run with a corrected userMap.
+function _convertPreBetaSplitRow(r, rowNum, userMap, splitPartners) {
+  var amount = Number(r[3]) || 0;
+  var user = String(r[6] || "").trim();
+  var resolvedUser = (userMap && userMap[user]) || user;
+  var payer = splitPartners[0];
+  var partner = splitPartners[1];
+  if (resolvedUser === splitPartners[1]) {
+    payer = splitPartners[1];
+    partner = splitPartners[0];
+  }
+  var currency = String(r[9] || "INR").trim() || "INR";
+  var half = Math.round((amount / 2) * 100) / 100;
+  var txId = "legacy-" + rowNum;
+  function row(holder, share) {
+    return [
+      r[0] || "",
+      r[1] || "",
+      r[2] || "",
+      amount,
+      currency,
+      payer,
+      holder,
+      share,
+      txId,
+      r[4] || "",
+      r[5] || "",
+      r[8] || ""
+    ];
+  }
+  return [row(payer, half), row(partner, half)];
+}

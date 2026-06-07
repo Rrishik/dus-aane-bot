@@ -20,6 +20,10 @@ class MockSheet {
   getName() {
     return this.name;
   }
+  setName(name) {
+    this.name = name;
+    return this;
+  }
   getLastRow() {
     return this.data.length;
   }
@@ -49,6 +53,16 @@ class MockSheet {
   // No-op in the mock — production callers use this to hide plumbing columns
   // visually; the in-memory store has no concept of visibility.
   hideColumns(_col, _num) {}
+  // Duplicate this sheet's data into a target MockSpreadsheet under a fresh
+  // name. Mirrors Apps Script's Sheet.copyTo(spreadsheet) shape.
+  copyTo(targetSpreadsheet) {
+    var dup = new MockSheet("Copy of " + this.name);
+    dup.data = this.data.map(function (r) {
+      return r.slice();
+    });
+    targetSpreadsheet.sheets.push(dup);
+    return dup;
+  }
 }
 
 class MockRange {
