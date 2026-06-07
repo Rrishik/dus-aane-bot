@@ -196,6 +196,8 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
     preBetaPersonalDropped: 0,
     preBetaSplit: 0,
     splitExpanded: 0,
+    preBetaPartner: 0,
+    partnerExpanded: 0,
     unknown: 0
   };
   for (var i = 1; i < values.length; i++) {
@@ -222,6 +224,18 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
       } else {
         converted.push(_convertPreBetaRow(r, i + 1, userMap));
       }
+    } else if (shape === "pre-beta-partner") {
+      stats.preBetaPartner++;
+      if (splitPartners) {
+        // Single β row: partner owes 100%. No self-share row needed.
+        var partnerRows = _convertPreBetaPartnerRow(r, i + 1, userMap, splitPartners);
+        for (var p = 0; p < partnerRows.length; p++) converted.push(partnerRows[p]);
+        stats.partnerExpanded++;
+      } else {
+        // Without splitPartners we can't identify "the other person" → fall
+        // back to self-share (preserves history, contributes no debt).
+        converted.push(_convertPreBetaRow(r, i + 1, userMap));
+      }
     } else {
       stats.unknown++;
       // Preserve unknown rows untouched in their first G_COL_COUNT cells.
@@ -240,13 +254,15 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
     console.log(
       "[migrate]   pre-β split    → 50/50 pair: " + stats.splitExpanded + " (partners: " + splitPartners.join(",") + ")"
     );
+    console.log("[migrate]   pre-β partner  → 100% debt: " + stats.partnerExpanded);
   } else {
     console.log("[migrate]   pre-β split    → β self:   " + stats.preBetaSplit);
-    if (stats.preBetaSplit > 0) {
+    console.log("[migrate]   pre-β partner  → β self:   " + stats.preBetaPartner);
+    if (stats.preBetaSplit > 0 || stats.preBetaPartner > 0) {
       console.log(
-        "[migrate]   ⚠️  Split rows became self-share (no retroactive debt). Pass\n" +
-          "[migrate]      { splitPartners: ['<chat_idA>', '<chat_idB>'] } to expand them\n" +
-          "[migrate]      into 50/50 β pairs instead."
+        "[migrate]   ⚠️  Split/Partner rows became self-share (no retroactive debt).\n" +
+          "[migrate]      Pass { splitPartners: ['<chat_idA>', '<chat_idB>'] } to expand\n" +
+          "[migrate]      Split rows into 50/50 β pairs and Partner rows into 100% debts."
       );
     }
   }
@@ -284,7 +300,8 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
 }
 
 // Heuristic classifier — runs on a single raw row from the legacy sheet.
-// Returns one of: "beta" | "pre-beta-personal" | "pre-beta-split" | "unknown".
+// Returns one of:
+//   "beta" | "pre-beta-personal" | "pre-beta-split" | "pre-beta-partner" | "unknown".
 function _classifyLegacyGroupRow(r) {
   var col5 = String(r[4] || "").trim(); // β=Currency, pre-β=Category
   var col6 = String(r[5] || "").trim(); // β=PaidBy, pre-β=TxType
@@ -293,9 +310,11 @@ function _classifyLegacyGroupRow(r) {
   if (/^[A-Z]{2,4}$/.test(col5) && isFinite(Number(col8)) && Number(col8) > 0) {
     return "beta";
   }
-  // pre-β: col 8 says "Personal" or "Split" (the legacy Split status column).
+  // pre-β: col 8 is the legacy Split status column.
   if (/^personal$/i.test(col8)) return "pre-beta-personal";
   if (/^split$/i.test(col8)) return "pre-beta-split";
+  // "Partner" = the OTHER person owes 100% of this expense.
+  if (/^partner$/i.test(col8)) return "pre-beta-partner";
   // Unknown shape — preserve as-is, let the operator review.
   return "unknown";
 }
@@ -402,4 +421,40 @@ function _convertPreBetaSplitRow(r, rowNum, userMap, splitPartners) {
     ];
   }
   return [row(payer, half), row(partner, half)];
+}
+
+// Expand a pre-β "Partner" row — the OTHER person owes 100% of this expense.
+// Returns a SINGLE β row: payer paid the whole thing, the other partner holds
+// 100% of the share. No self-share row needed (payer's share is 0).
+//
+// Same payer-resolution semantics as _convertPreBetaSplitRow: the row's User
+// cell maps to one of the two splitPartners; whoever doesn't match becomes
+// the debtor. If User can't be mapped, we default to partner[0] as payer.
+function _convertPreBetaPartnerRow(r, rowNum, userMap, splitPartners) {
+  var amount = Number(r[3]) || 0;
+  var user = String(r[6] || "").trim();
+  var resolvedUser = (userMap && userMap[user]) || user;
+  var payer = splitPartners[0];
+  var partner = splitPartners[1];
+  if (resolvedUser === splitPartners[1]) {
+    payer = splitPartners[1];
+    partner = splitPartners[0];
+  }
+  var currency = String(r[9] || "INR").trim() || "INR";
+  return [
+    [
+      r[0] || "",
+      r[1] || "",
+      r[2] || "",
+      amount,
+      currency,
+      payer,
+      partner, // share holder = the OTHER person (100%)
+      amount, // share amount = full amount
+      "legacy-" + rowNum,
+      r[4] || "",
+      r[5] || "",
+      r[8] || ""
+    ]
+  ];
 }

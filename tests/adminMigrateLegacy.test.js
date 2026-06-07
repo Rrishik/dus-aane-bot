@@ -12,6 +12,7 @@ function load(SpreadsheetApp) {
       "_classifyLegacyGroupRow",
       "_convertPreBetaRow",
       "_convertPreBetaSplitRow",
+      "_convertPreBetaPartnerRow",
       "GROUP_SHEET_HEADERS"
     ],
     {
@@ -89,6 +90,13 @@ describe("_classifyLegacyGroupRow", () => {
     var { _classifyLegacyGroupRow } = load(makeSpreadsheetApp());
     expect(_classifyLegacyGroupRow(preBetaRow("Mygate", 1000, "Bills & Utilities", "aishwarya", "Split"))).toBe(
       "pre-beta-split"
+    );
+  });
+
+  it("identifies pre-β partner rows by col 8 = 'Partner' (other person owes 100%)", () => {
+    var { _classifyLegacyGroupRow } = load(makeSpreadsheetApp());
+    expect(_classifyLegacyGroupRow(preBetaRow("Lalitha Jewellers", 17677, "Shopping", "aishwarya", "Partner"))).toBe(
+      "pre-beta-partner"
     );
   });
 
@@ -173,6 +181,40 @@ describe("_convertPreBetaSplitRow", () => {
   });
 });
 
+describe("_convertPreBetaPartnerRow", () => {
+  it("emits ONE β row where the other partner holds 100% of the share", () => {
+    var { _convertPreBetaPartnerRow } = load(makeSpreadsheetApp());
+    var src = preBetaRow("Lalitha Jewellers", 17677, "Shopping", "aishwarya", "Partner");
+    var out = _convertPreBetaPartnerRow(src, 462, { aishwarya: "222", ramen: "111" }, ["111", "222"]);
+    expect(out).toHaveLength(1);
+    var row = out[0];
+    expect(row[3]).toBe(17677); // amount
+    expect(row[4]).toBe("INR"); // currency
+    expect(row[5]).toBe("222"); // payer = aishwarya
+    expect(row[6]).toBe("111"); // holder = the OTHER partner (ramen)
+    expect(row[7]).toBe(17677); // 100% share
+    expect(row[8]).toBe("legacy-462");
+    expect(row[9]).toBe("Shopping");
+  });
+
+  it("flips payer/partner when the User cell maps to splitPartners[1]", () => {
+    var { _convertPreBetaPartnerRow } = load(makeSpreadsheetApp());
+    var src = preBetaRow("X", 100, "Food", "ramen", "Partner");
+    var out = _convertPreBetaPartnerRow(src, 1, { ramen: "111" }, ["222", "111"]);
+    expect(out[0][5]).toBe("111"); // payer = ramen
+    expect(out[0][6]).toBe("222"); // holder = the other
+    expect(out[0][7]).toBe(100);
+  });
+
+  it("falls back to splitPartners[0] as payer when User maps to neither", () => {
+    var { _convertPreBetaPartnerRow } = load(makeSpreadsheetApp());
+    var src = preBetaRow("X", 50, "Food", "stranger", "Partner");
+    var out = _convertPreBetaPartnerRow(src, 1, {}, ["111", "222"]);
+    expect(out[0][5]).toBe("111");
+    expect(out[0][6]).toBe("222");
+  });
+});
+
 describe("adminMigrateLegacyGroupSheet — dry run", () => {
   it("reports counts and writes nothing", () => {
     var SpreadsheetApp = makeSpreadsheetApp();
@@ -206,6 +248,8 @@ describe("adminMigrateLegacyGroupSheet — dry run", () => {
       preBetaPersonalDropped: 0,
       preBetaSplit: 1,
       splitExpanded: 0,
+      preBetaPartner: 0,
+      partnerExpanded: 0,
       unknown: 0
     });
     // Header untouched.
@@ -410,6 +454,53 @@ describe("adminMigrateLegacyGroupSheet — commit", () => {
       }).length
     ).toBe(2);
     expect(merchants).toContain("β-row");
+  });
+
+  it("Partner: emits a single 100%-debt β row when splitPartners provided", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]); // header
+    sheet.appendRow(preBetaRow("Lalitha Jewellers", 17677, "Shopping", "aishwarya", "Partner"));
+
+    var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
+    var stats = adminMigrateLegacyGroupSheet("g1", {
+      commit: true,
+      splitPartners: ["111", "222"],
+      userToChatId: { aishwarya: "222", ramen: "111" }
+    });
+
+    expect(stats.preBetaPartner).toBe(1);
+    expect(stats.partnerExpanded).toBe(1);
+    expect(stats.unknown).toBe(0);
+    // One row written: payer=222 (aishwarya), holder=111 (ramen), 100% share.
+    var row = sheet.getRange(2, 1, 1, 12).getValues()[0];
+    expect(row[2]).toBe("Lalitha Jewellers");
+    expect(row[3]).toBe(17677);
+    expect(row[5]).toBe("222"); // payer
+    expect(row[6]).toBe("111"); // holder (the OTHER partner, 100%)
+    expect(row[7]).toBe(17677);
+  });
+
+  it("Partner without splitPartners: falls back to self-share (no debt) and counts as preBetaPartner", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]);
+    sheet.appendRow(preBetaRow("X", 500, "Food", "aishwarya", "Partner"));
+
+    var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
+    var stats = adminMigrateLegacyGroupSheet("g1", {
+      commit: true,
+      userToChatId: { aishwarya: "222" }
+    });
+
+    expect(stats.preBetaPartner).toBe(1);
+    expect(stats.partnerExpanded).toBe(0);
+    var row = sheet.getRange(2, 1, 1, 12).getValues()[0];
+    expect(row[5]).toBe("222"); // payer
+    expect(row[6]).toBe("222"); // holder = payer → no debt
+    expect(row[7]).toBe(500); // self-share
   });
 });
 
