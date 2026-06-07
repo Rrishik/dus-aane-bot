@@ -37,7 +37,7 @@ function load(SpreadsheetApp) {
 
 // Legacy pre-β personal row:
 // [emailDate, txDate, merchant, amount, category, txType, user, split, msgId, currency, link]
-function preBetaRow(merchant, amount, category, user, split) {
+function preBetaRow(merchant, amount, category, user, split, msgId) {
   return [
     "5/1/2026 18:40:59",
     "2026-05-01",
@@ -47,7 +47,7 @@ function preBetaRow(merchant, amount, category, user, split) {
     "Debit",
     user,
     split,
-    "19de3aa261cce063",
+    msgId || "19de3aa261cce063",
     "INR",
     "https://mail.google.com/..."
   ];
@@ -246,6 +246,9 @@ describe("adminMigrateLegacyGroupSheet — dry run", () => {
       beta: 2,
       preBetaPersonal: 1,
       preBetaPersonalDropped: 0,
+      preBetaPersonalMoved: 0,
+      preBetaPersonalMovedSkipDup: 0,
+      preBetaPersonalUnmovable: 0,
       preBetaSplit: 1,
       splitExpanded: 0,
       preBetaPartner: 0,
@@ -501,6 +504,203 @@ describe("adminMigrateLegacyGroupSheet — commit", () => {
     expect(row[5]).toBe("222"); // payer
     expect(row[6]).toBe("222"); // holder = payer → no debt
     expect(row[7]).toBe(500); // self-share
+  });
+
+  it("movePersonal: appends personal rows to target personal sheets (no self-share)", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]);
+    sheet.appendRow(preBetaRow("Mygate", 100, "Bills", "ramen", "Personal", "msg-mygate"));
+    sheet.appendRow(preBetaRow("Coffee", 200, "Food", "ramen", "Personal", "msg-coffee"));
+    sheet.appendRow(preBetaRow("Salon", 800, "Personal", "aishwarya", "Personal", "msg-salon"));
+    sheet.appendRow(betaRow("Already β", 50, "111", "222", 25));
+
+    // Pre-seed target personal sheets with a header so we can assert row counts.
+    var rikks = SpreadsheetApp.openById("pers-ramen").getSheets()[0];
+    rikks.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Category",
+      "Tx Type",
+      "User",
+      "Message ID",
+      "Currency",
+      "Group Ref",
+      "Group Msg Id"
+    ]);
+    var aish = SpreadsheetApp.openById("pers-aish").getSheets()[0];
+    aish.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Category",
+      "Tx Type",
+      "User",
+      "Message ID",
+      "Currency",
+      "Group Ref",
+      "Group Msg Id"
+    ]);
+
+    var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
+    var stats = adminMigrateLegacyGroupSheet("g1", {
+      commit: true,
+      splitPartners: ["111", "222"],
+      userToChatId: { ramen: "111", aishwarya: "222" },
+      movePersonal: { ramen: "pers-ramen", aishwarya: "pers-aish" }
+    });
+
+    expect(stats.preBetaPersonal).toBe(3);
+    expect(stats.preBetaPersonalMoved).toBe(3);
+    expect(stats.preBetaPersonalMovedSkipDup).toBe(0);
+    expect(stats.preBetaPersonalUnmovable).toBe(0);
+
+    // Rikks personal sheet got 2 rows.
+    expect(rikks.getLastRow()).toBe(3);
+    expect(rikks.getRange(2, 3).getValue()).toBe("Mygate");
+    expect(rikks.getRange(2, 4).getValue()).toBe(100);
+    expect(rikks.getRange(2, 8).getValue()).toBe("msg-mygate"); // msg id
+    expect(rikks.getRange(2, 9).getValue()).toBe("INR");
+    expect(rikks.getRange(2, 10).getValue()).toBe(""); // no group ref
+    expect(rikks.getRange(3, 3).getValue()).toBe("Coffee");
+
+    // Aish personal sheet got 1 row.
+    expect(aish.getLastRow()).toBe(2);
+    expect(aish.getRange(2, 3).getValue()).toBe("Salon");
+
+    // Group sheet keeps only the β row (3 personal rows moved out).
+    var groupMerchants = [];
+    for (var r = 2; r <= 4; r++) groupMerchants.push(sheet.getRange(r, 3).getValue());
+    expect(groupMerchants).toContain("Already β");
+    expect(groupMerchants).not.toContain("Mygate");
+    expect(groupMerchants).not.toContain("Salon");
+  });
+
+  it("movePersonal: dedups by Message ID against existing personal sheet rows", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]);
+    sheet.appendRow(preBetaRow("Dup", 100, "Food", "ramen", "Personal", "msg-dup"));
+    sheet.appendRow(preBetaRow("New", 200, "Food", "ramen", "Personal", "msg-new"));
+
+    var rikks = SpreadsheetApp.openById("pers-ramen").getSheets()[0];
+    rikks.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Category",
+      "Tx Type",
+      "User",
+      "Message ID",
+      "Currency",
+      "Group Ref",
+      "Group Msg Id"
+    ]);
+    // Pre-seed with the same Message ID as the "Dup" row.
+    rikks.appendRow(["old", "old", "Dup-existing", 100, "Food", "Debit", "ramen", "msg-dup", "INR", "", ""]);
+
+    var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
+    var stats = adminMigrateLegacyGroupSheet("g1", {
+      commit: true,
+      movePersonal: { ramen: "pers-ramen" }
+    });
+
+    expect(stats.preBetaPersonalMoved).toBe(1);
+    expect(stats.preBetaPersonalMovedSkipDup).toBe(1);
+    expect(rikks.getLastRow()).toBe(3); // header + existing + 1 new (Dup skipped)
+    expect(rikks.getRange(3, 3).getValue()).toBe("New");
+  });
+
+  it("movePersonal: unmapped User cell falls back to self-share with a warning", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]);
+    sheet.appendRow(preBetaRow("Mapped", 100, "Food", "ramen", "Personal", "msg-mapped"));
+    sheet.appendRow(preBetaRow("Unmapped", 200, "Food", "stranger", "Personal", "msg-unmapped"));
+
+    var rikks = SpreadsheetApp.openById("pers-ramen").getSheets()[0];
+    rikks.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Category",
+      "Tx Type",
+      "User",
+      "Message ID",
+      "Currency",
+      "Group Ref",
+      "Group Msg Id"
+    ]);
+
+    var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
+    var stats = adminMigrateLegacyGroupSheet("g1", {
+      commit: true,
+      userToChatId: { ramen: "111", stranger: "999" },
+      movePersonal: { ramen: "pers-ramen" }
+    });
+
+    expect(stats.preBetaPersonalMoved).toBe(1);
+    expect(stats.preBetaPersonalUnmovable).toBe(1);
+    expect(rikks.getLastRow()).toBe(2); // only the mapped one moved
+    // Unmapped one survives as self-share row in the group sheet.
+    expect(sheet.getRange(2, 3).getValue()).toBe("Unmapped");
+    expect(sheet.getRange(2, 6).getValue()).toBe("999"); // payer
+    expect(sheet.getRange(2, 7).getValue()).toBe("999"); // holder == payer
+  });
+
+  it("movePersonal: rejects combination with dropPersonal", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    ss.getSheets()[0].appendRow(["Email Date"]);
+
+    var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
+    expect(() =>
+      adminMigrateLegacyGroupSheet("g1", {
+        movePersonal: { ramen: "pers-ramen" },
+        dropPersonal: true
+      })
+    ).toThrow(/mutually exclusive/);
+  });
+
+  it("movePersonal: dry run does not append to target sheets", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]);
+    sheet.appendRow(preBetaRow("X", 100, "Food", "ramen", "Personal"));
+
+    var rikks = SpreadsheetApp.openById("pers-ramen").getSheets()[0];
+    rikks.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Category",
+      "Tx Type",
+      "User",
+      "Message ID",
+      "Currency",
+      "Group Ref",
+      "Group Msg Id"
+    ]);
+
+    var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
+    var stats = adminMigrateLegacyGroupSheet("g1", {
+      movePersonal: { ramen: "pers-ramen" }
+      // commit: false
+    });
+
+    // Dry run reports queued counts but doesn't actually append.
+    expect(rikks.getLastRow()).toBe(1); // header only
+    expect(stats.preBetaPersonalMoved).toBe(0); // counted only on commit
   });
 });
 

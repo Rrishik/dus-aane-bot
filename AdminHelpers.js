@@ -166,6 +166,13 @@ function adminProvisionGroupSheet(displayName, shareWithEmails) {
 //                    user's personal sheet — importing them as group
 //                    self-share rows would inflate group analytics without
 //                    adding any debt signal.
+//   movePersonal   — optional { "<legacy User cell>": "<personalSheetId>", ... }.
+//                    When set and a personal row's User cell matches a key,
+//                    the row is appended to that personal sheet (dedup'd by
+//                    Message ID) instead of being kept as self-share or
+//                    dropped. Personal rows whose User cell isn't in the
+//                    map fall back to self-share with a warning (never
+//                    silently lost). Mutually exclusive with dropPersonal.
 //
 // Always creates a `Pre-β Backup <ISO date>` tab in the same spreadsheet on
 // commit, copying the original tab byte-for-byte before any rewrite.
@@ -178,6 +185,10 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
     throw new Error("splitPartners must contain exactly 2 chat_ids when provided");
   }
   var dropPersonal = !!opts.dropPersonal;
+  var movePersonal = opts.movePersonal || null;
+  if (movePersonal && dropPersonal) {
+    throw new Error("movePersonal and dropPersonal are mutually exclusive — pick one");
+  }
 
   var ss = SpreadsheetApp.openById(sheetId);
   var sheet = ss.getSheets()[0];
@@ -190,10 +201,16 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
   var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
 
   var converted = [];
+  // movePersonal target queues: { sheetId: [row, row, ...] }. Built during
+  // the classify pass, flushed after the main rewrite on commit.
+  var moveQueues = {};
   var stats = {
     beta: 0,
     preBetaPersonal: 0,
     preBetaPersonalDropped: 0,
+    preBetaPersonalMoved: 0,
+    preBetaPersonalMovedSkipDup: 0,
+    preBetaPersonalUnmovable: 0,
     preBetaSplit: 0,
     splitExpanded: 0,
     preBetaPartner: 0,
@@ -211,6 +228,22 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
       if (dropPersonal) {
         stats.preBetaPersonalDropped++;
         continue;
+      }
+      if (movePersonal) {
+        var userCell = String(r[6] || "").trim();
+        var targetSheetId = movePersonal[userCell];
+        if (targetSheetId) {
+          (moveQueues[targetSheetId] = moveQueues[targetSheetId] || []).push(r);
+          continue; // dedup + flush happens in the commit block
+        }
+        stats.preBetaPersonalUnmovable++;
+        console.log(
+          "[migrate]   ⚠️  row " +
+            (i + 1) +
+            ' user="' +
+            userCell +
+            '" not in movePersonal map → falling back to self-share'
+        );
       }
       converted.push(_convertPreBetaRow(r, i + 1, userMap));
     } else if (shape === "pre-beta-split") {
@@ -247,6 +280,22 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
   console.log("[migrate]   β rows (preserved):        " + stats.beta);
   if (dropPersonal) {
     console.log("[migrate]   pre-β personal DROPPED:      " + stats.preBetaPersonalDropped);
+  } else if (movePersonal) {
+    var queuedTotal = 0;
+    Object.keys(moveQueues).forEach(function (sid) {
+      queuedTotal += moveQueues[sid].length;
+    });
+    console.log("[migrate]   pre-β personal QUEUED FOR MOVE: " + queuedTotal);
+    Object.keys(moveQueues).forEach(function (sid) {
+      console.log("[migrate]     → " + sid + ": " + moveQueues[sid].length + " row(s) (Message ID dedup at commit)");
+    });
+    if (stats.preBetaPersonalUnmovable > 0) {
+      console.log(
+        "[migrate]   pre-β personal UNMOVABLE → β self: " +
+          stats.preBetaPersonalUnmovable +
+          " (User cell not in movePersonal map)"
+      );
+    }
   } else {
     console.log("[migrate]   pre-β personal → β self:   " + stats.preBetaPersonal);
   }
@@ -296,7 +345,79 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
     sheet.hideColumns(G_MESSAGE_ID_COLUMN);
   } catch (_) {}
   console.log("[migrate] wrote " + converted.length + " rows under β header.");
+
+  // 3. Flush movePersonal queues. Per target sheet: read existing Message IDs
+  //    once, append rows whose Message ID isn't already there.
+  if (movePersonal) {
+    Object.keys(moveQueues).forEach(function (targetSheetId) {
+      var queue = moveQueues[targetSheetId];
+      var moved = _flushLegacyMovesToPersonal(targetSheetId, queue);
+      stats.preBetaPersonalMoved += moved.moved;
+      stats.preBetaPersonalMovedSkipDup += moved.skipped;
+      console.log(
+        "[migrate]   moved " + moved.moved + " row(s) \u2192 " + targetSheetId + " (" + moved.skipped + " dedup'd)"
+      );
+    });
+  }
   return stats;
+}
+
+// Append a batch of legacy pre-\u03b2 personal rows to a target personal sheet,
+// skipping any whose Message ID already exists there. Returns counts.
+//
+// Pre-\u03b2 source cols (from the legacy group sheet):
+//   r[0] emailDate  r[1] txDate    r[2] merchant   r[3] amount
+//   r[4] category   r[5] txType    r[6] user       r[7] split
+//   r[8] messageId  r[9] currency  r[10] link
+//
+// Personal sheet cols (target):
+//   1 emailDate  2 txDate     3 merchant   4 amount   5 category
+//   6 txType     7 user       8 messageId  9 currency 10 groupRef 11 groupMsgId
+//
+// Group ref + group message id stay empty \u2014 these rows are not group splits.
+function _flushLegacyMovesToPersonal(targetSheetId, queue) {
+  if (!queue || !queue.length) return { moved: 0, skipped: 0 };
+  var ss = SpreadsheetApp.openById(targetSheetId);
+  var sheet = ss.getSheets()[0];
+  var existing = {};
+  var last = sheet.getLastRow();
+  if (last >= 2) {
+    var msgIdCol = (typeof MESSAGE_ID_COLUMN === "number" && MESSAGE_ID_COLUMN) || 8;
+    var col = sheet.getRange(2, msgIdCol, last - 1, 1).getValues();
+    for (var i = 0; i < col.length; i++) {
+      var v = String(col[i][0] || "").trim();
+      if (v) existing[v] = true;
+    }
+  }
+  var toAppend = [];
+  var skipped = 0;
+  for (var j = 0; j < queue.length; j++) {
+    var r = queue[j];
+    var msgId = String(r[8] || "").trim();
+    if (msgId && existing[msgId]) {
+      skipped++;
+      continue;
+    }
+    toAppend.push([
+      r[0] || "", // email date
+      r[1] || "", // tx date
+      r[2] || "", // merchant
+      Number(r[3]) || 0, // amount
+      r[4] || "", // category
+      r[5] || "", // tx type
+      r[6] || "", // user (preserve legacy username for traceability)
+      msgId, // message id
+      String(r[9] || "INR").trim() || "INR", // currency
+      "", // group ref (not a group split)
+      "" // group message id
+    ]);
+    if (msgId) existing[msgId] = true; // prevent intra-batch dup
+  }
+  if (toAppend.length) {
+    var startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, toAppend.length, 11).setValues(toAppend);
+  }
+  return { moved: toAppend.length, skipped: skipped };
 }
 
 // Heuristic classifier — runs on a single raw row from the legacy sheet.
@@ -457,4 +578,83 @@ function _convertPreBetaPartnerRow(r, rowNum, userMap, splitPartners) {
       r[8] || ""
     ]
   ];
+}
+
+// ─── Parameterless wrappers (run from the Apps Script editor) ───────────────
+//
+// These auto-resolve everything the migrator needs from the Tenants tab on
+// ADMIN_SHEET_ID. Specific to admins whose admin sheet IS the legacy group
+// sheet (i.e. ADMIN_SHEET_ID is registered as a group tenant with exactly 2
+// members). For any other setup, call adminMigrateLegacyGroupSheet directly.
+//
+//   adminInspectLegacyAdmin()        — dump unknown rows.
+//   adminDryRunLegacyAdmin()         — full classify report, no writes.
+//   adminCommitLegacyAdmin()         — backup, rewrite header, expand
+//                                      Split/Partner rows, MOVE personal
+//                                      rows into each member's personal
+//                                      sheet (dedup'd by Message ID).
+
+function adminInspectLegacyAdmin() {
+  return adminInspectLegacyGroupSheet(ADMIN_SHEET_ID);
+}
+
+function adminDryRunLegacyAdmin() {
+  return adminMigrateLegacyGroupSheet(ADMIN_SHEET_ID, _resolveLegacyAdminOpts(false));
+}
+
+function adminCommitLegacyAdmin() {
+  return adminMigrateLegacyGroupSheet(ADMIN_SHEET_ID, _resolveLegacyAdminOpts(true));
+}
+
+// Read the Tenants tab on ADMIN_SHEET_ID, find the group tenant that owns
+// this sheet, look up its 2 members, and assemble userToChatId/splitPartners/
+// movePersonal from their emails + personal sheet_ids.
+//
+// Convention: legacy User cell == gmail local-part of one of the member's
+// emails. So "aishwarya.gurjar98" matches "aishwarya.gurjar98@gmail.com".
+function _resolveLegacyAdminOpts(commit) {
+  var tenants = loadTenants();
+  var groupTenant = null;
+  for (var i = 0; i < tenants.length; i++) {
+    if (tenants[i].sheet_id === ADMIN_SHEET_ID && tenants[i].chat_type === TENANT_CHAT_TYPE.GROUP) {
+      groupTenant = tenants[i];
+      break;
+    }
+  }
+  if (!groupTenant) {
+    throw new Error(
+      "[wrapper] No group tenant in Tenants tab points at ADMIN_SHEET_ID. " +
+        "This wrapper assumes the admin sheet is also a legacy group sheet."
+    );
+  }
+  var members = groupTenant.group_members || [];
+  if (members.length !== 2) {
+    throw new Error("[wrapper] Wrapper supports exactly 2-member groups. Got " + members.length + ".");
+  }
+  var userMap = {};
+  var movePersonal = {};
+  members.forEach(function (memberChatId) {
+    var m = findTenantByChatId(memberChatId);
+    if (!m) throw new Error("[wrapper] Member tenant missing: " + memberChatId);
+    if (!m.sheet_id) throw new Error("[wrapper] Member " + memberChatId + " has no sheet_id");
+    (m.emails || []).forEach(function (email) {
+      var local = String(email).split("@")[0].toLowerCase().trim();
+      if (!local) return;
+      userMap[local] = memberChatId;
+      movePersonal[local] = m.sheet_id;
+    });
+  });
+  console.log("[wrapper] resolved members for " + groupTenant.name + ":");
+  members.forEach(function (cid) {
+    var t = findTenantByChatId(cid);
+    console.log("  - " + cid + " " + t.name + " sheet=" + t.sheet_id + " emails=" + (t.emails || []).join(","));
+  });
+  console.log("[wrapper] userToChatId: " + JSON.stringify(userMap));
+  console.log("[wrapper] movePersonal targets: " + Object.keys(movePersonal).length);
+  return {
+    commit: !!commit,
+    userToChatId: userMap,
+    splitPartners: members,
+    movePersonal: movePersonal
+  };
 }
