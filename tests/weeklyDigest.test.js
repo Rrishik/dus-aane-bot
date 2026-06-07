@@ -162,3 +162,46 @@ describe("formatWeeklyMessage", () => {
     expect(msg).toContain("Amazon");
   });
 });
+
+// Regression: sendWeeklySummaries used to fan out to *all* active tenants
+// including group ones. Group sheets use a different schema (β: one row per
+// share), so getAllTransactions read the wrong columns — every group digest
+// came out as ₹0 with no categories. Loop must skip group tenants.
+describe("sendWeeklySummaries tenant filter", () => {
+  it("only sends to personal active tenants with a sheet_id", () => {
+    var sent = [];
+    var contextSet = [];
+    var stubs = {
+      Session,
+      Utilities,
+      CATEGORY_EMOJIS: {},
+      CURRENCY_SYMBOLS: { INR: "₹" },
+      escapeMarkdown: (s) => String(s),
+      TENANT_STATUS: { ACTIVE: "active", PENDING: "pending" },
+      TENANT_CHAT_TYPE: { PERSONAL: "personal", GROUP: "group" },
+      loadTenants: () => [
+        { chat_id: "1", status: "active", chat_type: "personal", sheet_id: "s1" },
+        { chat_id: "2", status: "active", chat_type: "group", sheet_id: "g1" },
+        { chat_id: "3", status: "pending", chat_type: "personal", sheet_id: "s3" },
+        { chat_id: "4", status: "active", chat_type: "personal", sheet_id: "" }
+      ],
+      setCurrentTenant: (t) => contextSet.push(t && t.chat_id),
+      weekRangeFor: () => ({ start: new Date(2026, 3, 17), end: new Date(2026, 3, 23) }),
+      getWeeklyAnalytics: () => ({
+        totalTransactions: 1,
+        spentByCurrency: { INR: 100 },
+        prevSpentByCurrency: {},
+        categorySpend: {},
+        topTransactions: []
+      }),
+      formatWeeklyMessage: () => "msg",
+      sendTelegramMessage: (chatId) => sent.push(chatId)
+    };
+    var { sendWeeklySummaries } = loadAppsScript(["Code.js"], ["sendWeeklySummaries"], stubs);
+
+    sendWeeklySummaries();
+
+    expect(sent).toEqual(["1"]);
+    expect(contextSet).toEqual(["1", null]);
+  });
+});

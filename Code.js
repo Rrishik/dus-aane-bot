@@ -156,7 +156,13 @@ function triggerEmailProcessing() {
 function sendWeeklySummaries() {
   var range = weekRangeFor(new Date());
   var tenants = loadTenants().filter(function (t) {
-    return t.status === TENANT_STATUS.ACTIVE && t.sheet_id;
+    // Personal tenants only. Group sheets use the β-schema (one row per
+    // share) with different columns, so getAllTransactions reads garbage
+    // off them — type, category, currency don't line up and every digest
+    // came out as ₹0. Group digests need their own shape (settlement
+    // balances per member), not category breakdowns. Build that
+    // separately when needed.
+    return t.status === TENANT_STATUS.ACTIVE && t.chat_type === TENANT_CHAT_TYPE.PERSONAL && t.sheet_id;
   });
 
   var sentCount = 0;
