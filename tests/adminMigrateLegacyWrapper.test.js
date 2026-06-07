@@ -110,8 +110,10 @@ function load(SpreadsheetApp) {
     ["TenantRegistry.js", "GroupSheet.js", "AdminHelpers.js"],
     [
       "_resolveLegacyAdminOpts",
+      "_resolveLegacyAdminMembers",
       "adminInspectLegacyAdmin",
       "adminDryRunLegacyAdmin",
+      "adminBackfillPayerPersonalCopies",
       "loadTenants",
       "invalidateTenantCache"
     ],
@@ -245,5 +247,163 @@ describe("adminInspectLegacyAdmin", () => {
     var hits = adminInspectLegacyAdmin();
     expect(hits.length).toBe(1);
     expect(hits[0].cells[2]).toBe("weird");
+  });
+});
+
+// Helper for backfill tests: append a backup tab to the admin sheet shaped
+// like the migrator's snapshot, then call the backfill helper.
+function preBetaSplitRow(merchant, amount, user, msgId) {
+  return [
+    "5/1/2026",
+    "5/1/2026",
+    merchant,
+    amount,
+    "Food",
+    "Debit",
+    user,
+    "Split",
+    msgId,
+    "INR",
+    "https://mail.google.com/..."
+  ];
+}
+function preBetaPartnerRow(merchant, amount, user, msgId) {
+  return [
+    "5/1/2026",
+    "5/1/2026",
+    merchant,
+    amount,
+    "Shopping",
+    "Debit",
+    user,
+    "Partner",
+    msgId,
+    "INR",
+    "https://mail.google.com/..."
+  ];
+}
+function preBetaPersonalRow(merchant, amount, user, msgId) {
+  return [
+    "5/1/2026",
+    "5/1/2026",
+    merchant,
+    amount,
+    "Food",
+    "Debit",
+    user,
+    "Personal",
+    msgId,
+    "INR",
+    "https://mail.google.com/..."
+  ];
+}
+
+function setupBackupFixture(rows, backupName) {
+  var SpreadsheetApp = setupAdminFixture();
+  var admin = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var backup = admin.insertSheet(backupName || "Pre-β Backup 2026-06-07");
+  backup.appendRow(["Email Date"]); // header (content immaterial for classify)
+  rows.forEach(function (r) {
+    backup.appendRow(r);
+  });
+  return SpreadsheetApp;
+}
+
+describe("adminBackfillPayerPersonalCopies", () => {
+  it("dry run: counts Split + Partner rows, writes nothing", () => {
+    var SpreadsheetApp = setupBackupFixture([
+      preBetaSplitRow("Mygate", 1000, "ramenarishik", "m1"),
+      preBetaSplitRow("Coffee", 600, "aishwarya.gurjar98", "m2"),
+      preBetaPartnerRow("Lalitha", 17677, "aishwarya.gurjar98", "m3"),
+      preBetaPersonalRow("Lunch", 200, "ramenarishik", "m4") // ignored
+    ]);
+    var { adminBackfillPayerPersonalCopies } = load(SpreadsheetApp);
+
+    var stats = adminBackfillPayerPersonalCopies();
+
+    expect(stats.scanned).toBe(3); // Split + Split + Partner (Personal ignored)
+    expect(stats.queued).toBe(3);
+    expect(stats.appended).toBe(0); // dry run
+    expect(stats.unresolved).toBe(0);
+    // No writes to personal sheets.
+    expect(SpreadsheetApp.openById("pers-rikks").getSheets()[0].getLastRow()).toBe(1);
+    expect(SpreadsheetApp.openById("pers-aish").getSheets()[0].getLastRow()).toBe(1);
+  });
+
+  it("commit: writes payer-side rows with group_ref to each payer's personal sheet", () => {
+    var SpreadsheetApp = setupBackupFixture([
+      preBetaSplitRow("Mygate", 1000, "ramenarishik", "m1"),
+      preBetaPartnerRow("Lalitha", 17677, "aishwarya.gurjar98", "m2")
+    ]);
+    var { adminBackfillPayerPersonalCopies } = load(SpreadsheetApp);
+
+    var stats = adminBackfillPayerPersonalCopies({ commit: true });
+
+    expect(stats.appended).toBe(2);
+    expect(stats.skippedDup).toBe(0);
+    var rikks = SpreadsheetApp.openById("pers-rikks").getSheets()[0];
+    var aish = SpreadsheetApp.openById("pers-aish").getSheets()[0];
+    // Rikks paid the Mygate split (row 2 in backup) → 1 row in rikks sheet.
+    expect(rikks.getLastRow()).toBe(2);
+    expect(rikks.getRange(2, 3).getValue()).toBe("Mygate");
+    expect(rikks.getRange(2, 4).getValue()).toBe(1000); // full amount
+    expect(rikks.getRange(2, 8).getValue()).toBe("m1");
+    expect(rikks.getRange(2, 10).getValue()).toBe("-4775764963:legacy-2"); // group ref
+    // Aishwarya paid the Lalitha partner row (row 3 in backup) → 1 row in aish sheet.
+    expect(aish.getLastRow()).toBe(2);
+    expect(aish.getRange(2, 3).getValue()).toBe("Lalitha");
+    expect(aish.getRange(2, 4).getValue()).toBe(17677);
+    expect(aish.getRange(2, 10).getValue()).toBe("-4775764963:legacy-3");
+  });
+
+  it("is idempotent — re-running skips rows that already have the Message ID", () => {
+    var SpreadsheetApp = setupBackupFixture([preBetaSplitRow("Mygate", 1000, "ramenarishik", "m1")]);
+    var { adminBackfillPayerPersonalCopies } = load(SpreadsheetApp);
+
+    var first = adminBackfillPayerPersonalCopies({ commit: true });
+    expect(first.appended).toBe(1);
+
+    var second = adminBackfillPayerPersonalCopies({ commit: true });
+    expect(second.appended).toBe(0);
+    expect(second.skippedDup).toBe(1);
+    expect(SpreadsheetApp.openById("pers-rikks").getSheets()[0].getLastRow()).toBe(2);
+  });
+
+  it("unresolved User cell falls back to splitPartners[0] and warns", () => {
+    var SpreadsheetApp = setupBackupFixture([preBetaSplitRow("X", 500, "stranger", "m1")]);
+    var { adminBackfillPayerPersonalCopies } = load(SpreadsheetApp);
+    var stats = adminBackfillPayerPersonalCopies({ commit: true });
+
+    expect(stats.unresolved).toBe(1);
+    expect(stats.appended).toBe(1);
+    // Default payer = first member = 1205002551 (rikks).
+    var rikks = SpreadsheetApp.openById("pers-rikks").getSheets()[0];
+    expect(rikks.getLastRow()).toBe(2);
+    expect(rikks.getRange(2, 3).getValue()).toBe("X");
+  });
+
+  it("throws when no `Pre-β Backup *` tab exists", () => {
+    var SpreadsheetApp = setupAdminFixture(); // no backup tab added
+    var { adminBackfillPayerPersonalCopies } = load(SpreadsheetApp);
+    expect(() => adminBackfillPayerPersonalCopies()).toThrow(/no `Pre-β Backup/);
+  });
+
+  it("picks the latest backup when multiple exist (lexicographic max)", () => {
+    var SpreadsheetApp = setupBackupFixture(
+      [preBetaSplitRow("Old", 100, "ramenarishik", "m1")],
+      "Pre-β Backup 2026-06-06"
+    );
+    var admin = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+    var newer = admin.insertSheet("Pre-β Backup 2026-06-07");
+    newer.appendRow(["Email Date"]);
+    newer.appendRow(preBetaSplitRow("New", 200, "ramenarishik", "m2"));
+
+    var { adminBackfillPayerPersonalCopies } = load(SpreadsheetApp);
+    var stats = adminBackfillPayerPersonalCopies({ commit: true });
+
+    // Only the newer tab's row is processed.
+    expect(stats.appended).toBe(1);
+    var rikks = SpreadsheetApp.openById("pers-rikks").getSheets()[0];
+    expect(rikks.getRange(2, 3).getValue()).toBe("New");
   });
 });

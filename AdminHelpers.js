@@ -613,6 +613,27 @@ function adminCommitLegacyAdmin() {
 // Convention: legacy User cell == gmail local-part of one of the member's
 // emails. So "aishwarya.gurjar98" matches "aishwarya.gurjar98@gmail.com".
 function _resolveLegacyAdminOpts(commit) {
+  var ctx = _resolveLegacyAdminMembers();
+  console.log("[wrapper] resolved members for " + ctx.groupTenant.name + ":");
+  ctx.members.forEach(function (m) {
+    console.log("  - " + m.chat_id + " " + m.name + " sheet=" + m.sheet_id + " emails=" + (m.emails || []).join(","));
+  });
+  console.log("[wrapper] userToChatId: " + JSON.stringify(ctx.userMap));
+  console.log("[wrapper] movePersonal targets: " + Object.keys(ctx.movePersonal).length);
+  return {
+    commit: !!commit,
+    userToChatId: ctx.userMap,
+    splitPartners: ctx.members.map(function (m) {
+      return m.chat_id;
+    }),
+    movePersonal: ctx.movePersonal
+  };
+}
+
+// Shared resolver — extracts the group tenant pointing at ADMIN_SHEET_ID and
+// builds the user/local-part lookup tables. Used by both the migrator wrapper
+// and the payer-copy backfill helper.
+function _resolveLegacyAdminMembers() {
   var tenants = loadTenants();
   var groupTenant = null;
   for (var i = 0; i < tenants.length; i++) {
@@ -627,34 +648,196 @@ function _resolveLegacyAdminOpts(commit) {
         "This wrapper assumes the admin sheet is also a legacy group sheet."
     );
   }
-  var members = groupTenant.group_members || [];
-  if (members.length !== 2) {
-    throw new Error("[wrapper] Wrapper supports exactly 2-member groups. Got " + members.length + ".");
+  var memberIds = groupTenant.group_members || [];
+  if (memberIds.length !== 2) {
+    throw new Error("[wrapper] Wrapper supports exactly 2-member groups. Got " + memberIds.length + ".");
   }
   var userMap = {};
   var movePersonal = {};
-  members.forEach(function (memberChatId) {
-    var m = findTenantByChatId(memberChatId);
-    if (!m) throw new Error("[wrapper] Member tenant missing: " + memberChatId);
-    if (!m.sheet_id) throw new Error("[wrapper] Member " + memberChatId + " has no sheet_id");
+  var members = memberIds.map(function (cid) {
+    var m = findTenantByChatId(cid);
+    if (!m) throw new Error("[wrapper] Member tenant missing: " + cid);
+    if (!m.sheet_id) throw new Error("[wrapper] Member " + cid + " has no sheet_id");
     (m.emails || []).forEach(function (email) {
       var local = String(email).split("@")[0].toLowerCase().trim();
       if (!local) return;
-      userMap[local] = memberChatId;
+      userMap[local] = cid;
       movePersonal[local] = m.sheet_id;
     });
+    return m;
   });
-  console.log("[wrapper] resolved members for " + groupTenant.name + ":");
-  members.forEach(function (cid) {
-    var t = findTenantByChatId(cid);
-    console.log("  - " + cid + " " + t.name + " sheet=" + t.sheet_id + " emails=" + (t.emails || []).join(","));
+  return { groupTenant: groupTenant, members: members, userMap: userMap, movePersonal: movePersonal };
+}
+
+// ─── Backfill: payer-side personal copies for legacy Split/Partner rows ─────
+//
+// The main migrator (adminMigrateLegacyGroupSheet) writes Split/Partner rows
+// ONLY to the group sheet as expanded β rows. In the current runtime, when a
+// transaction is split, the payer's personal sheet ALSO holds a row (full
+// amount, group_ref set), so /stats in the payer's DM includes their share
+// of group expenses. The migrator skipped this side, leaving an asymmetry.
+//
+// This helper backfills the missing payer-side rows by reading from the
+// `Pre-β Backup *` tab the migrator created. Idempotent via Message ID
+// dedup against each target personal sheet — safe to re-run.
+//
+// Usage:
+//   adminBackfillPayerPersonalCopies();                  // dry-run
+//   adminBackfillPayerPersonalCopies({ commit: true });  // write
+//
+// Options:
+//   commit         — false (default) = log-only; true = append rows.
+//   backupTabName  — explicit "Pre-β Backup <date>" tab to read. Defaults
+//                    to the latest such tab on ADMIN_SHEET_ID.
+function adminBackfillPayerPersonalCopies(opts) {
+  opts = opts || {};
+  var commit = !!opts.commit;
+  var ctx = _resolveLegacyAdminMembers();
+  var groupChatId = ctx.groupTenant.chat_id;
+  var splitPartners = ctx.members.map(function (m) {
+    return m.chat_id;
   });
-  console.log("[wrapper] userToChatId: " + JSON.stringify(userMap));
-  console.log("[wrapper] movePersonal targets: " + Object.keys(movePersonal).length);
-  return {
-    commit: !!commit,
-    userToChatId: userMap,
-    splitPartners: members,
-    movePersonal: movePersonal
-  };
+  // Maps payer chat_id → target personal sheet_id.
+  var sheetByChatId = {};
+  ctx.members.forEach(function (m) {
+    sheetByChatId[m.chat_id] = m.sheet_id;
+  });
+
+  var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
+  var backupTab = opts.backupTabName ? ss.getSheetByName(opts.backupTabName) : _findLatestBackupTab(ss);
+  if (!backupTab) {
+    throw new Error("[backfill] no `Pre-β Backup *` tab found in admin sheet");
+  }
+  console.log("[backfill] reading from tab: " + backupTab.getName());
+
+  var lastRow = backupTab.getLastRow();
+  var lastCol = Math.max(backupTab.getLastColumn(), 11);
+  if (lastRow < 2) {
+    console.log("[backfill] backup tab is empty.");
+    return { scanned: 0, queued: 0, appended: 0, skippedDup: 0, unresolved: 0 };
+  }
+  var values = backupTab.getRange(1, 1, lastRow, lastCol).getValues();
+
+  // Queue per target sheet so we read existing Message IDs once.
+  var queues = {};
+  var stats = { scanned: 0, queued: 0, appended: 0, skippedDup: 0, unresolved: 0 };
+  for (var i = 1; i < values.length; i++) {
+    var r = values[i];
+    var shape = _classifyLegacyGroupRow(r);
+    if (shape !== "pre-beta-split" && shape !== "pre-beta-partner") continue;
+    stats.scanned++;
+
+    // Resolve payer the same way the migrator did.
+    var userCell = String(r[6] || "")
+      .toLowerCase()
+      .trim();
+    var payerChatId = ctx.userMap[userCell];
+    if (!payerChatId) {
+      // Mirror the migrator's fallback: default to splitPartners[0] as payer.
+      // Logged so it's visible.
+      payerChatId = splitPartners[0];
+      stats.unresolved++;
+      console.log(
+        "[backfill]   ⚠️  row " + (i + 1) + ' user="' + userCell + '" unresolved → defaulting payer to ' + payerChatId
+      );
+    }
+    var targetSheetId = sheetByChatId[payerChatId];
+    if (!targetSheetId) {
+      stats.unresolved++;
+      console.log("[backfill]   ⚠️  row " + (i + 1) + " payer " + payerChatId + " has no sheet_id — skipped");
+      continue;
+    }
+    var groupRef = groupChatId + ":legacy-" + (i + 1);
+    var personalRow = [
+      r[0] || "", // email date
+      r[1] || "", // tx date
+      r[2] || "", // merchant
+      Number(r[3]) || 0, // amount (full original)
+      r[4] || "", // category
+      r[5] || "", // tx type
+      r[6] || "", // user (preserve legacy cell for traceability)
+      String(r[8] || "").trim(), // message id
+      String(r[9] || "INR").trim() || "INR", // currency
+      groupRef, // group ref → marks this as a group-split row
+      "" // group message id (none — no Telegram msg associated)
+    ];
+    (queues[targetSheetId] = queues[targetSheetId] || []).push(personalRow);
+    stats.queued++;
+  }
+
+  console.log(
+    "[backfill] scanned " + stats.scanned + " Split/Partner row(s), queued " + stats.queued + " payer copies."
+  );
+  Object.keys(queues).forEach(function (sid) {
+    console.log("[backfill]   → " + sid + ": " + queues[sid].length + " row(s)");
+  });
+
+  if (!commit) {
+    console.log("[backfill] DRY RUN — re-call with { commit: true } to write.");
+    return stats;
+  }
+
+  Object.keys(queues).forEach(function (targetSheetId) {
+    var result = _flushPayerCopiesToPersonal(targetSheetId, queues[targetSheetId]);
+    stats.appended += result.appended;
+    stats.skippedDup += result.skipped;
+    console.log(
+      "[backfill]   appended " + result.appended + " row(s) → " + targetSheetId + " (" + result.skipped + " dedup'd)"
+    );
+  });
+  return stats;
+}
+
+function adminBackfillPayerCopiesAdmin(commit) {
+  return adminBackfillPayerPersonalCopies({ commit: !!commit });
+}
+
+// Find the most recent "Pre-β Backup *" tab. Sort by name desc so the
+// numbered duplicates ("Pre-β Backup 2026-06-07 (2)") win over the unnumbered
+// original from the same day.
+function _findLatestBackupTab(ss) {
+  var tabs = ss.getSheets().filter(function (s) {
+    return /^Pre-β Backup /.test(s.getName());
+  });
+  if (!tabs.length) return null;
+  tabs.sort(function (a, b) {
+    return a.getName() < b.getName() ? 1 : a.getName() > b.getName() ? -1 : 0;
+  });
+  return tabs[0];
+}
+
+// Append payer-side copies to a personal sheet, dedup'd by Message ID.
+// Shape matches _flushLegacyMovesToPersonal but writes the supplied rows
+// directly (no re-projection from legacy columns).
+function _flushPayerCopiesToPersonal(targetSheetId, rows) {
+  if (!rows || !rows.length) return { appended: 0, skipped: 0 };
+  var ss = SpreadsheetApp.openById(targetSheetId);
+  var sheet = ss.getSheets()[0];
+  var existing = {};
+  var last = sheet.getLastRow();
+  if (last >= 2) {
+    var msgIdCol = (typeof MESSAGE_ID_COLUMN === "number" && MESSAGE_ID_COLUMN) || 8;
+    var col = sheet.getRange(2, msgIdCol, last - 1, 1).getValues();
+    for (var i = 0; i < col.length; i++) {
+      var v = String(col[i][0] || "").trim();
+      if (v) existing[v] = true;
+    }
+  }
+  var toAppend = [];
+  var skipped = 0;
+  for (var j = 0; j < rows.length; j++) {
+    var row = rows[j];
+    var msgId = String(row[7] || "").trim();
+    if (msgId && existing[msgId]) {
+      skipped++;
+      continue;
+    }
+    toAppend.push(row);
+    if (msgId) existing[msgId] = true;
+  }
+  if (toAppend.length) {
+    var startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, toAppend.length, 11).setValues(toAppend);
+  }
+  return { appended: toAppend.length, skipped: skipped };
 }
