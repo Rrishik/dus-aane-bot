@@ -160,6 +160,12 @@ function adminProvisionGroupSheet(displayName, shareWithEmails) {
 //                    Required when you want the migrated balances to reflect
 //                    pre-β splits. Without it, split rows survive as history
 //                    only (no debt contribution).
+//   dropPersonal   — default false. When true, pre-β "Personal" rows are
+//                    discarded entirely (not even kept as self-share).
+//                    Use this when the personal rows already live in each
+//                    user's personal sheet — importing them as group
+//                    self-share rows would inflate group analytics without
+//                    adding any debt signal.
 //
 // Always creates a `Pre-β Backup <ISO date>` tab in the same spreadsheet on
 // commit, copying the original tab byte-for-byte before any rewrite.
@@ -171,6 +177,7 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
   if (splitPartners && splitPartners.length !== 2) {
     throw new Error("splitPartners must contain exactly 2 chat_ids when provided");
   }
+  var dropPersonal = !!opts.dropPersonal;
 
   var ss = SpreadsheetApp.openById(sheetId);
   var sheet = ss.getSheets()[0];
@@ -183,7 +190,14 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
   var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
 
   var converted = [];
-  var stats = { beta: 0, preBetaPersonal: 0, preBetaSplit: 0, splitExpanded: 0, unknown: 0 };
+  var stats = {
+    beta: 0,
+    preBetaPersonal: 0,
+    preBetaPersonalDropped: 0,
+    preBetaSplit: 0,
+    splitExpanded: 0,
+    unknown: 0
+  };
   for (var i = 1; i < values.length; i++) {
     var r = values[i];
     var shape = _classifyLegacyGroupRow(r);
@@ -192,6 +206,10 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
       converted.push(r.slice(0, G_COL_COUNT));
     } else if (shape === "pre-beta-personal") {
       stats.preBetaPersonal++;
+      if (dropPersonal) {
+        stats.preBetaPersonalDropped++;
+        continue;
+      }
       converted.push(_convertPreBetaRow(r, i + 1, userMap));
     } else if (shape === "pre-beta-split") {
       stats.preBetaSplit++;
@@ -213,7 +231,11 @@ function adminMigrateLegacyGroupSheet(sheetId, opts) {
 
   console.log("[migrate] sheetId=" + sheetId + " commit=" + commit);
   console.log("[migrate]   β rows (preserved):        " + stats.beta);
-  console.log("[migrate]   pre-β personal → β self:   " + stats.preBetaPersonal);
+  if (dropPersonal) {
+    console.log("[migrate]   pre-β personal DROPPED:      " + stats.preBetaPersonalDropped);
+  } else {
+    console.log("[migrate]   pre-β personal → β self:   " + stats.preBetaPersonal);
+  }
   if (splitPartners) {
     console.log(
       "[migrate]   pre-β split    → 50/50 pair: " + stats.splitExpanded + " (partners: " + splitPartners.join(",") + ")"
@@ -276,6 +298,39 @@ function _classifyLegacyGroupRow(r) {
   if (/^split$/i.test(col8)) return "pre-beta-split";
   // Unknown shape — preserve as-is, let the operator review.
   return "unknown";
+}
+
+// Companion helper: dump every row that adminMigrateLegacyGroupSheet classifies
+// as "unknown" so the operator can decide what to do before committing.
+// Pure read — never mutates the sheet.
+function adminInspectLegacyGroupSheet(sheetId, opts) {
+  opts = opts || {};
+  var limit = typeof opts.limit === "number" ? opts.limit : 20;
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sheet = ss.getSheets()[0];
+  var lastRow = sheet.getLastRow();
+  var lastCol = Math.max(sheet.getLastColumn(), G_COL_COUNT);
+  if (lastRow < 2) {
+    console.log("[inspect] sheet has no data rows.");
+    return [];
+  }
+  var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var hits = [];
+  for (var i = 1; i < values.length; i++) {
+    if (_classifyLegacyGroupRow(values[i]) === "unknown") {
+      hits.push({ rowNum: i + 1, cells: values[i].slice(0, 11) });
+      if (hits.length >= limit) break;
+    }
+  }
+  if (!hits.length) {
+    console.log("[inspect] no unknown rows found.");
+    return [];
+  }
+  console.log("[inspect] " + hits.length + " unknown row(s) (showing up to " + limit + "):");
+  hits.forEach(function (h) {
+    console.log("  row " + h.rowNum + ": " + JSON.stringify(h.cells));
+  });
+  return hits;
 }
 
 // Convert a pre-β personal/split row to a β self-share row.

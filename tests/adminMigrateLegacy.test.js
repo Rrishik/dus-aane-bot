@@ -8,6 +8,7 @@ function load(SpreadsheetApp) {
     ["GroupSheet.js", "AdminHelpers.js"],
     [
       "adminMigrateLegacyGroupSheet",
+      "adminInspectLegacyGroupSheet",
       "_classifyLegacyGroupRow",
       "_convertPreBetaRow",
       "_convertPreBetaSplitRow",
@@ -199,7 +200,14 @@ describe("adminMigrateLegacyGroupSheet — dry run", () => {
     var { adminMigrateLegacyGroupSheet } = load(SpreadsheetApp);
     var stats = adminMigrateLegacyGroupSheet("g1");
 
-    expect(stats).toEqual({ beta: 2, preBetaPersonal: 1, preBetaSplit: 1, splitExpanded: 0, unknown: 0 });
+    expect(stats).toEqual({
+      beta: 2,
+      preBetaPersonal: 1,
+      preBetaPersonalDropped: 0,
+      preBetaSplit: 1,
+      splitExpanded: 0,
+      unknown: 0
+    });
     // Header untouched.
     expect(sheet.getRange(1, 5).getValue()).toBe("Category");
     // No backup tab created on dry run.
@@ -354,5 +362,97 @@ describe("adminMigrateLegacyGroupSheet — commit", () => {
 
     expect(stats).toEqual({ migrated: 0, kept: 0, unknown: 0 });
     expect(ss.getSheets().length).toBe(1); // no backup created
+  });
+
+  it("dropPersonal: discards pre-β personal rows entirely (not even self-share)", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow([
+      "Email Date",
+      "Tx Date",
+      "Merchant",
+      "Amount",
+      "Category",
+      "Tx Type",
+      "User",
+      "Split",
+      "Message ID",
+      "Currency",
+      "Link"
+    ]);
+    sheet.appendRow(preBetaRow("Personal-1", 100, "Food", "ramen", "Personal"));
+    sheet.appendRow(preBetaRow("Personal-2", 200, "Food", "ramen", "Personal"));
+    sheet.appendRow(preBetaRow("Split-1", 600, "Food", "ramen", "Split"));
+    sheet.appendRow(betaRow("β-row", 700, "111", "222", 350));
+
+    var { adminMigrateLegacyGroupSheet, GROUP_SHEET_HEADERS } = load(SpreadsheetApp);
+    var stats = adminMigrateLegacyGroupSheet("g1", {
+      commit: true,
+      dropPersonal: true,
+      splitPartners: ["111", "222"],
+      userToChatId: { ramen: "111" }
+    });
+
+    expect(stats.preBetaPersonal).toBe(2);
+    expect(stats.preBetaPersonalDropped).toBe(2);
+    expect(sheet.getRange(1, 1, 1, GROUP_SHEET_HEADERS.length).getValues()[0]).toEqual(GROUP_SHEET_HEADERS);
+    // No personal merchant survives. (Don't lean on getLastRow — the mock
+    // doesn't shrink data[] after clearContent; real Apps Script does.)
+    var merchants = [];
+    for (var r = 2; r <= 4; r++) merchants.push(sheet.getRange(r, 3).getValue());
+    expect(merchants).not.toContain("Personal-1");
+    expect(merchants).not.toContain("Personal-2");
+    // The remaining 3 written rows are: 2 split-expanded + 1 β.
+    expect(
+      merchants.filter(function (m) {
+        return m === "Split-1";
+      }).length
+    ).toBe(2);
+    expect(merchants).toContain("β-row");
+  });
+});
+
+describe("adminInspectLegacyGroupSheet", () => {
+  it("returns rows the classifier flags as unknown, capped by limit", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]); // header
+    sheet.appendRow(betaRow("OK", 100, "111", "222", 50)); // beta
+    sheet.appendRow(preBetaRow("OK", 100, "Food", "u", "Personal")); // pre-beta
+    sheet.appendRow(["", "", "junk", "", "", "", "", "", "", "", ""]); // unknown
+    sheet.appendRow(["x", "y", "z", 1, "Food", "Debit", "u", "??", "m", "INR", "l"]); // unknown
+
+    var { adminInspectLegacyGroupSheet } = load(SpreadsheetApp);
+    var hits = adminInspectLegacyGroupSheet("g1");
+    expect(hits.length).toBe(2);
+    expect(hits[0].rowNum).toBe(4);
+    expect(hits[1].rowNum).toBe(5);
+    expect(hits[0].cells[2]).toBe("junk");
+  });
+
+  it("respects the limit option", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]);
+    for (var i = 0; i < 5; i++) {
+      sheet.appendRow(["", "", "junk" + i, "", "", "", "", "", "", "", ""]);
+    }
+    var { adminInspectLegacyGroupSheet } = load(SpreadsheetApp);
+    var hits = adminInspectLegacyGroupSheet("g1", { limit: 2 });
+    expect(hits.length).toBe(2);
+  });
+
+  it("returns [] when there are no unknown rows", () => {
+    var SpreadsheetApp = makeSpreadsheetApp();
+    var ss = SpreadsheetApp.openById("g1");
+    var sheet = ss.getSheets()[0];
+    sheet.appendRow(["Email Date"]);
+    sheet.appendRow(betaRow("OK", 100, "111", "222", 50));
+
+    var { adminInspectLegacyGroupSheet } = load(SpreadsheetApp);
+    expect(adminInspectLegacyGroupSheet("g1")).toEqual([]);
   });
 });
