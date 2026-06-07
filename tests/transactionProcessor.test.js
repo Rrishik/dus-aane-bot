@@ -281,6 +281,20 @@ describe("handleAIResponse", () => {
     expect(env.appended).toHaveLength(0);
     expect(env.sent[0].text).toMatch(/skipped/);
     expect(env.sent[0].text).toMatch(/OTP code/);
+    // Single-forwarder tenant (personal chat) → no 👤 attribution line;
+    // it'd be the same name on every skip notice and just adds noise.
+    expect(env.sent[0].text).not.toMatch(/By:/);
+  });
+
+  it("not_a_transaction on multi-forwarder tenant → includes 👤 By line", () => {
+    var env = baseStubs({
+      findTenantByChatId: () => ({ chat_id: "111", emails: ["a@x.com", "b@x.com"] })
+    });
+    var api = load(env.stubs);
+
+    var out = call(api, '{"not_a_transaction":true,"reason":"OTP code"}');
+    expect(out.saved).toBe(false);
+    expect(env.sent[0].text).toMatch(/By:.*a/);
   });
 
   it("not_a_transaction with silent=true → no Telegram DM, still marks processed", () => {

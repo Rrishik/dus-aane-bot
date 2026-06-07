@@ -637,9 +637,16 @@ function handleAIResponse(rawText, emailDate, userEmail, message, silent, resolu
       if (data.not_a_transaction) {
         if (!silent) {
           var reason = data.reason || "Not a transaction";
-          var user = (userEmail || "").split("@")[0] || "unknown";
-          var skipMsg =
-            "ℹ️ *New email detected but skipped*\n" + "👤 *By:* " + escapeMarkdown(user) + "\n" + "Reason: " + reason;
+          // Mirror saveTransaction: only attribute by forwarder when the
+          // tenant has more than one (groups). In a personal chat the line
+          // is always the same name and just adds noise.
+          var skipTenant = findTenantByChatId(getTenantChatId());
+          var skipMsg = "ℹ️ *New email detected but skipped*\n";
+          if (skipTenant && skipTenant.emails && skipTenant.emails.length > 1) {
+            var user = (userEmail || "").split("@")[0] || "unknown";
+            skipMsg += "👤 *By:* " + escapeMarkdown(user) + "\n";
+          }
+          skipMsg += "Reason: " + reason;
           sendTelegramMessage(getTenantChatId(), skipMsg, { parse_mode: "Markdown" });
         }
         markProcessed(message);
