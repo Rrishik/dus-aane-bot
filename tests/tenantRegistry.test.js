@@ -25,7 +25,7 @@ function setup(rows) {
   rows.forEach(function (r) {
     tab.appendRow(r);
   });
-  return loadAppsScript(
+  var api = loadAppsScript(
     ["TenantRegistry.js"],
     [
       "stampLastForward",
@@ -53,6 +53,8 @@ function setup(rows) {
     ],
     { SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }
   );
+  api._SpreadsheetApp = SpreadsheetApp;
+  return api;
 }
 
 describe("stampLastForward", () => {
@@ -211,6 +213,8 @@ describe("group tenant helpers", () => {
     expect(t.sheet_id).toBe("grp-sheet");
     expect(t.group_members).toEqual(["111", "222"]);
     expect(s.getGroupAdminChatId(t)).toBe("111");
+    var tab = s._SpreadsheetApp.openById(ADMIN_SHEET_ID).getSheetByName("Tenants");
+    expect(tab.getRange(2, s.TENANT_COLS.GROUP_MEMBERS).getNumberFormat()).toBe("@");
   });
 
   it("findGroupTenantByChatId returns null for personal tenants", () => {
@@ -244,6 +248,8 @@ describe("group tenant helpers", () => {
     expect(s.setGroupMembers("g1", ["333", "444"])).toBe(true);
     s.invalidateTenantCache();
     expect(s.findTenantByChatId("g1").group_members).toEqual(["333", "444"]);
+    var tab = s._SpreadsheetApp.openById(ADMIN_SHEET_ID).getSheetByName("Tenants");
+    expect(tab.getRange(2, s.TENANT_COLS.GROUP_MEMBERS).getNumberFormat()).toBe("@");
   });
 
   it("findGroupsForMember enumerates active groups containing the member", () => {

@@ -8,6 +8,7 @@
 //   sheet.getRange(row, col, nRows, nCols) (rectangle)
 //   sheet.getDataRange()
 //   range.getValue() / getValues() / setValue(v) / setValues(arr) / clearContent()
+//   range.getNumberFormat() / setNumberFormat(format)
 //
 // Conventions match Apps Script: 1-indexed rows/cols, getValues() returns a 2D
 // array, missing cells read as empty string.
@@ -16,6 +17,7 @@ class MockSheet {
   constructor(name) {
     this.name = name;
     this.data = []; // 2D array of cell values (rows of cols)
+    this.numberFormats = [];
   }
   getName() {
     return this.name;
@@ -100,6 +102,23 @@ class MockRange {
         this.sheet.data[this.row - 1 + i][this.col - 1 + j] = arr[i][j];
       }
     }
+  }
+  getNumberFormat() {
+    var row = this.sheet.numberFormats[this.row - 1] || [];
+    return row[this.col - 1] || "";
+  }
+  setNumberFormat(format) {
+    for (var i = 0; i < this.numRows; i++) {
+      var rowIdx = this.row - 1 + i;
+      while (this.sheet.numberFormats.length <= rowIdx) this.sheet.numberFormats.push([]);
+      var row = this.sheet.numberFormats[rowIdx];
+      for (var j = 0; j < this.numCols; j++) {
+        var colIdx = this.col - 1 + j;
+        while (row.length <= colIdx) row.push("");
+        row[colIdx] = format;
+      }
+    }
+    return this;
   }
   clearContent() {
     for (var i = 0; i < this.numRows; i++) {

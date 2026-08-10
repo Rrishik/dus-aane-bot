@@ -294,6 +294,12 @@ function findGroupTenantByChatId(chatId) {
   return t && t.chat_type === TENANT_CHAT_TYPE.GROUP ? t : null;
 }
 
+function _writeGroupMembers(tab, rowNum, membersCsv) {
+  var cell = tab.getRange(rowNum, TENANT_COLS.GROUP_MEMBERS);
+  cell.setNumberFormat("@");
+  cell.setValue(membersCsv);
+}
+
 // Insert a fresh active group tenant. Caller must ensure the chat_id isn't
 // already registered (idempotency lives one layer up, in the /start handler).
 function insertGroupTenant(chatId, name, sheetId, members, adminChatId) {
@@ -319,9 +325,10 @@ function insertGroupTenant(chatId, name, sheetId, members, adminChatId) {
     "",
     0,
     TENANT_CHAT_TYPE.GROUP,
-    membersCsv,
+    "",
     DEFAULT_PRIMARY_CURRENCY
   ]);
+  _writeGroupMembers(tab, tab.getLastRow(), membersCsv);
   invalidateTenantCache();
 }
 
@@ -338,7 +345,7 @@ function setGroupMembers(groupChatId, members) {
       return s.length > 0;
     })
     .join(",");
-  tab.getRange(rowNum, TENANT_COLS.GROUP_MEMBERS).setValue(csv);
+  _writeGroupMembers(tab, rowNum, csv);
   invalidateTenantCache();
   return true;
 }
