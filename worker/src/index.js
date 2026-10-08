@@ -3,6 +3,7 @@ import { createContext } from "./app/context.js";
 import { handleIngestEmail } from "./app/ingestRoute.js";
 import { handleBackfillProgress } from "./app/backfill.js";
 import { handleUpdate } from "./app/webhook.js";
+import { runScheduled } from "./app/cron.js";
 
 // GET /healthz reports whether the D1 binding answers.
 export async function healthz(env) {
@@ -36,6 +37,12 @@ export default {
     }
     if (!isNative(env)) return proxyToAppsScript(request, env, ctx);
     return handleTelegramWebhook(request, env, ctx);
+  },
+
+  // Apps Script owns the scheduled jobs until cutover.
+  async scheduled(event, env, ctx) {
+    if (!isNative(env)) return;
+    ctx.waitUntil(runScheduled(createContext(env), event.scheduledTime));
   }
 };
 

@@ -16,3 +16,7 @@ binding = "DB"
 database_name = "dus-aane-bot"
 database_id = "e7b12ae1-a783-4a2f-875e-a6128ffc226f"
 migrations_dir = "migrations"
+
+# 08:00 IST daily; src/app/cron.js picks the jobs by IST weekday.
+[triggers]
+crons = ["30 2 * * *"]
