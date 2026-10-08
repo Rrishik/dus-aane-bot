@@ -175,7 +175,7 @@ describe("findLinkCandidate", () => {
   }
   const incoming = (over) => ({ ...base, accountLast4: null, reference: null, ...over });
 
-  it("matches on reference regardless of date or amount", async () => {
+  it("matches on reference regardless of date or amount, but not across directions", async () => {
     const { db, id } = await withExisting({ reference: "628012345678" });
     const hit = await txns.findLinkCandidate(
       db,
@@ -183,6 +183,21 @@ describe("findLinkCandidate", () => {
       incoming({ reference: "628012345678", occurredOn: "2026-09-01" })
     );
     expect(hit).toMatchObject({ strength: "reference", transaction: { id } });
+    // A refund can reuse the original reference.
+    expect(
+      await txns.findLinkCandidate(db, "111", incoming({ reference: "628012345678", direction: "credit" }))
+    ).toBeNull();
+  });
+
+  it("never links two sources of the same channel (two identical payments stay two)", async () => {
+    const { db, id } = await withExisting({ accountLast4: "1234", reference: "628012345678" });
+    const sms = incoming({ accountLast4: "1234", reference: "628012345678", channel: "sms" });
+    expect(await txns.findLinkCandidate(db, "111", sms)).toBeNull();
+    const email = { ...sms, channel: "email" };
+    expect(await txns.findLinkCandidate(db, "111", email)).toMatchObject({
+      strength: "reference",
+      transaction: { id }
+    });
   });
 
   it("matches same account + amount within a day as 'account'", async () => {

@@ -190,29 +190,48 @@ export async function listTransactions(db, tenantId, opts = {}) {
 }
 
 // Is this incoming read the same payment as an existing transaction?
-//   strength "reference" — same UPI ref / RRN / UTR: certain.
+//   strength "reference" — same UPI ref / RRN / UTR and direction: certain.
 //   strength "account"   — same account/card, amount, currency, direction,
 //                          date within ±1 day: very likely.
 //   strength "amount"    — same amount/currency/direction/date but no account
 //                          on one side: possible (caller should ask).
 // A differing reference or account on both sides rules a candidate out.
+// t.channel excludes transactions that already have a source from that
+// channel: two emails (or two SMS) are always two payments, even when
+// they look identical (same coffee twice on the same card).
 export async function findLinkCandidate(db, tenantId, t) {
   const tid = String(tenantId);
+  const channelFilter = t.channel
+    ? " AND NOT EXISTS (SELECT 1 FROM transaction_sources s WHERE s.transaction_id = transactions.id AND s.source = ?)"
+    : "";
+  const channelParams = t.channel ? [t.channel] : [];
   if (t.reference) {
     const byRef = await db
       .prepare(
-        "SELECT * FROM transactions WHERE tenant_id = ? AND reference = ? AND status <> 'deleted' ORDER BY created_at LIMIT 1"
+        "SELECT * FROM transactions WHERE tenant_id = ? AND reference = ? AND direction = ? AND status <> 'deleted'" +
+          channelFilter +
+          " ORDER BY created_at LIMIT 1"
       )
-      .bind(tid, t.reference)
+      .bind(tid, t.reference, t.direction, ...channelParams)
       .first();
     if (byRef) return { transaction: byRef, strength: "reference" };
   }
   const rows = await db
     .prepare(
       "SELECT * FROM transactions WHERE tenant_id = ? AND amount_minor = ? AND currency = ? AND direction = ? " +
-        "AND occurred_on BETWEEN ? AND ? AND status <> 'deleted' ORDER BY created_at DESC LIMIT 20"
+        "AND occurred_on BETWEEN ? AND ? AND status <> 'deleted'" +
+        channelFilter +
+        " ORDER BY created_at DESC LIMIT 20"
     )
-    .bind(tid, t.amountMinor, t.currency, t.direction, shiftIsoDate(t.occurredOn, -1), shiftIsoDate(t.occurredOn, 1))
+    .bind(
+      tid,
+      t.amountMinor,
+      t.currency,
+      t.direction,
+      shiftIsoDate(t.occurredOn, -1),
+      shiftIsoDate(t.occurredOn, 1),
+      ...channelParams
+    )
     .all();
   const candidates = rows.results.filter(
     (c) =>
