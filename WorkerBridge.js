@@ -116,6 +116,7 @@ var WORKER_ACTIONS = {
   // Read-only poller health for the Diagnose workflow: filter decisions for
   // recent bot-inbox mail (no addresses or content), last run, triggers.
   poller_status: function (p) {
+    if (p.pollNow) extractTransactions();
     var hours = Math.min(Math.max(Number(p.hours) || 3, 1), 48);
     var props = PropertiesService.getScriptProperties();
     var parse = function (k, d) {
@@ -165,6 +166,7 @@ var WORKER_ACTIONS = {
         ? Math.round((Date.now() - Number(props.getProperty("gmail.runStartedAt"))) / 60000)
         : null,
       retryCount: Object.keys(parse(WORKER_RETRY_PROP, {})).length,
+      lastWorkerFailure: parse("gmail.lastWorkerFailure", null),
       triggers: ScriptApp.getProjectTriggers().map(function (t) {
         return t.getHandlerFunction();
       }),
@@ -221,11 +223,12 @@ function postToWorker(path, payload) {
     headers: { "X-Dab-Timestamp": ts, "X-Dab-Signature": hmacHex(secret, ts + "." + body) },
     muteHttpExceptions: true
   });
+  var text = resp.getContentText() || "";
   var json = null;
   try {
-    json = JSON.parse(resp.getContentText() || "null");
+    json = JSON.parse(text || "null");
   } catch (_) {}
-  return { code: resp.getResponseCode(), json: json };
+  return { code: resp.getResponseCode(), json: json, text: json ? null : text };
 }
 
 // Hand one forwarded email to the Worker. 2xx means handled (saved,
@@ -254,6 +257,21 @@ function ingestEmailViaWorker(message, forwarder, silent) {
   }
   if (res.code === 400) markProcessed(message);
   console.warn("[ingestEmailViaWorker] " + message.getId() + " → HTTP " + res.code);
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      "gmail.lastWorkerFailure",
+      JSON.stringify({
+        at: new Date().toISOString(),
+        code: res.code,
+        error: (res.json && (res.json.error || res.json.status)) || null,
+        body: res.json
+          ? null
+          : String(res.text || "")
+              .replace(/\s+/g, " ")
+              .slice(0, 300)
+      })
+    );
+  } catch (_) {}
   return "failed";
 }
 

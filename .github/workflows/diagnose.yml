@@ -7,6 +7,10 @@ on:
       hours:
         description: Look back this many hours
         default: "3"
+      poll_now:
+        description: Run the Gmail poller once first
+        type: boolean
+        default: false
 
 jobs:
   diagnose:
@@ -44,7 +48,7 @@ jobs:
           node --input-type=module -e '
             import { callAppsScript } from "./worker/src/app/appsScript.js";
             const ctx = { env: process.env, now: () => Date.now(), fetch: (...a) => fetch(...a) };
-            const s = await callAppsScript(ctx, "poller_status", { hours: Number("${{ inputs.hours }}") });
+            const s = await callAppsScript(ctx, "poller_status", { hours: Number("${{ inputs.hours }}"), pollNow: ${{ inputs.poll_now }} });
             delete s.ok;
             const { recent, ...rest } = s;
             console.log(JSON.stringify(rest, null, 1));
