@@ -4,7 +4,9 @@ function deleteWebhook() {
 
 // Shared secret for the Telegram → Worker → Apps Script hops. Optional in
 // AConfig.js so a config without it still loads; when unset, webhook auth is
-// off (logged on every doPost).
+// off (logged on every doPost). Telegram only accepts [A-Za-z0-9_-]{1,256}.
+var WEBHOOK_SECRET_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
+
 function getWebhookSecret() {
   return typeof WEBHOOK_SECRET !== "undefined" && WEBHOOK_SECRET ? String(WEBHOOK_SECRET) : "";
 }
@@ -13,6 +15,12 @@ function getWebhookSecret() {
 // forwards to Apps Script. Run once, and again whenever WEBHOOK_SECRET
 // changes (Telegram then sends it as X-Telegram-Bot-Api-Secret-Token).
 function setTelegramWebhook() {
+  var secret = getWebhookSecret();
+  if (secret && !WEBHOOK_SECRET_PATTERN.test(secret)) {
+    throw new Error(
+      "WEBHOOK_SECRET may only contain A-Z, a-z, 0-9, _ and - (1-256 chars). Fix the GitHub secret and redeploy."
+    );
+  }
   deleteWebhook();
   var payload = {
     url: WORKER_PROXY_URL,
@@ -21,7 +29,6 @@ function setTelegramWebhook() {
     // reliably when the bot is a group admin (enforced at /start).
     allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "chat_member"]
   };
-  var secret = getWebhookSecret();
   if (secret) payload.secret_token = secret;
 
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);

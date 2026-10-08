@@ -150,6 +150,13 @@ describe("simple Telegram wrappers", () => {
     expect(api.getWebhookSecret()).toBe("s3cret");
   });
 
+  it("setTelegramWebhook refuses a secret Telegram would reject, before touching the webhook", () => {
+    var env = baseStubs({ WEBHOOK_SECRET: "has spaces+symbols!" });
+    var api = load(env.stubs);
+    expect(() => api.setTelegramWebhook()).toThrow(/A-Z, a-z, 0-9, _ and -/);
+    expect(env.stubs.UrlFetchApp.fetch).not.toHaveBeenCalled();
+  });
+
   it("setTelegramCommands registers separate command lists for private vs group scopes", () => {
     var env = baseStubs();
     var api = load(env.stubs);
