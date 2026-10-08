@@ -62,6 +62,31 @@ var WORKER_ACTIONS = {
     if (!msg) throw new Error("message not found");
     return { text: msg.getPlainBody() || "", receivedAt: msg.getDate().getTime() };
   },
+  // Rewrites the tenant's export sheet (created on first use) and shares it
+  // with their registered emails.
+  export_to_sheet: function (p) {
+    if (!p.header || !p.rows) throw new Error("header and rows are required");
+    var ss = null;
+    if (p.sheetId) {
+      try {
+        ss = SpreadsheetApp.openById(String(p.sheetId));
+      } catch (_) {}
+    }
+    if (!ss) ss = SpreadsheetApp.create(p.title || "Dus Aane Bot — export");
+    var sheet = ss.getSheets()[0];
+    sheet.clear();
+    var values = [p.header].concat(p.rows);
+    sheet.getRange(1, 1, values.length, p.header.length).setValues(values);
+    sheet.setFrozenRows(1);
+    (p.emails || []).forEach(function (email) {
+      try {
+        ss.addEditor(String(email));
+      } catch (e) {
+        console.warn("[export_to_sheet] share failed: " + e.message);
+      }
+    });
+    return { sheetId: ss.getId(), url: ss.getUrl() };
+  },
   backfill_range: function (p) {
     if (!p.chatId || !p.emails || !p.emails.length || !p.startMs || !p.endMs) throw new Error("invalid range");
     _saveWorkerBackfill(String(p.chatId), {

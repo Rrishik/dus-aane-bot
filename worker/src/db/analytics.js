@@ -2,9 +2,9 @@
 // tenant's own share (0 if someone else holds all of it); one that settled a
 // group debt counts 0 — matching the Apps Script getAllTransactions().
 
-export async function listEffectiveTransactions(db, tenantId, { from, to } = {}) {
-  const where = ["t.tenant_id = ?", "t.status = 'confirmed'"];
-  const params = [String(tenantId)];
+export async function listEffectiveTransactions(db, tenantId, { from, to, statuses = ["confirmed"] } = {}) {
+  const where = ["t.tenant_id = ?", "t.status IN (" + statuses.map(() => "?").join(", ") + ")"];
+  const params = [String(tenantId), ...statuses];
   if (from) {
     where.push("t.occurred_on >= ?");
     params.push(from);

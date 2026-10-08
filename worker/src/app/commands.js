@@ -35,6 +35,7 @@ export async function handleHelp(ctx, chatId) {
       "• /register — add another Gmail to forward from\n" +
       "• /account — status & resend setup\n" +
       "• /export — download your data\n" +
+      "• /deletemydata — delete everything\n" +
       "• /help — this message\n\n" +
       "_Paste a bank SMS here any time to add it._",
     { reply_markup: { inline_keyboard: [[{ text: "📖 README", url: README_URL }]] } }

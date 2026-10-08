@@ -104,12 +104,13 @@ export function createTelegram({
       if (allowedUpdates) payload.allowed_updates = allowedUpdates;
       return call("setWebhook", payload);
     },
-    sendDocument: (chatId, { filename, content, mimeType = "text/csv", caption }) =>
+    sendDocument: (chatId, { filename, content, mimeType = "text/csv", caption, replyMarkup }) =>
       request("sendDocument", () => {
         const form = new FormData();
         form.append("chat_id", String(chatId));
         form.append("document", new Blob([content], { type: mimeType }), filename);
         if (caption) form.append("caption", caption);
+        if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
         return { body: form };
       })
   };

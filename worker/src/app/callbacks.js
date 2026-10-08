@@ -7,6 +7,7 @@ import { isUsable, gateText } from "./onboarding.js";
 import { handleCardAction } from "./cardActions.js";
 import { isGroupCallback, handleGroupCallback } from "./groups.js";
 import { handleAskFollowUp } from "./ask.js";
+import { handleExportSheet, handleWipeCallback } from "./data.js";
 
 const statsBackRow = [{ text: "🔙 Back", callback_data: "stats_back" }];
 
@@ -59,6 +60,12 @@ export async function handleCallback(ctx, cb) {
     await sendSetupEmail(ctx, chatId, await getTenantEmails(ctx.db, chatId));
     return;
   }
+  // /deletemydata works for pending tenants too.
+  if (data === "wipe_yes" || data === "wipe_no") {
+    await ctx.tg.answerCallbackQuery(cb.id, "");
+    if (tenant) await handleWipeCallback(ctx, chatId, messageId, data.slice(5));
+    return;
+  }
   if (!isUsable(tenant)) {
     await ctx.tg.answerCallbackQuery(
       cb.id,
@@ -77,6 +84,7 @@ export async function handleCallback(ctx, cb) {
 
   if (action === "stats") return handleStatsCallback(ctx, chatId, messageId, payload);
   if (action === "askfu") return handleAskFollowUp(ctx, chatId, messageId);
+  if (action === "export" && payload.startsWith("sheet_")) return handleExportSheet(ctx, chatId, payload.slice(6));
   if (data === "premium_info") {
     await ctx.tg.sendMessage(chatId, "💎 *Premium coming soon* — we'll let you know when it's ready.");
     return;

@@ -227,3 +227,18 @@ export async function takeGroupInvites(db, userId) {
     .all();
   return rows.results.map((r) => r.group_id);
 }
+
+// /deletemydata. Cascades remove emails, transactions (with their sources,
+// splits and linked settlements), memberships, quota and backfill state.
+// Shares the user holds in others' splits and /settle cash entries stay so
+// the other members' balances still add up.
+export async function deleteTenantData(db, tenantId) {
+  const id = String(tenantId);
+  await db.batch([
+    db.prepare("DELETE FROM merchant_rules WHERE tenant_id = ?").bind(id),
+    db.prepare("DELETE FROM group_invites WHERE user_id = ?").bind(id),
+    db.prepare("UPDATE parser_events SET tenant_id = NULL, source_ref = NULL WHERE tenant_id = ?").bind(id),
+    db.prepare("DELETE FROM settings WHERE key = ?").bind("export_sheet:" + id),
+    db.prepare("DELETE FROM tenants WHERE id = ? AND kind = 'personal'").bind(id)
+  ]);
+}

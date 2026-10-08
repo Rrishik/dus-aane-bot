@@ -15,6 +15,7 @@ import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
 import { handleTagReply, handleCancel } from "./cardActions.js";
 import { handleAsk, handleAskResume, handlePendingAsk } from "./ask.js";
+import { handleExport, handleDeleteMyData } from "./data.js";
 import { isUsable, gateText } from "./onboarding.js";
 import {
   handleGroupStart,
@@ -26,7 +27,7 @@ import {
   handleMembershipUpdate
 } from "./groups.js";
 
-const ONBOARDING = ["/start", "/register", "/account"];
+const ONBOARDING = ["/start", "/register", "/account", "/deletemydata"];
 
 const PERSONAL_COMMANDS = {
   "/start": (ctx, m) => handleStart(ctx, m.chatId, m.username),
@@ -38,7 +39,9 @@ const PERSONAL_COMMANDS = {
   "/stats": (ctx, m) => handleStats(ctx, m.chatId),
   "/backfill": (ctx, m) => handleBackfill(ctx, m.chatId, m.text),
   "/cancel": (ctx, m) => handleCancel(ctx, m),
-  "/ask": (ctx, m) => handleAsk(ctx, m)
+  "/ask": (ctx, m) => handleAsk(ctx, m),
+  "/export": (ctx, m) => handleExport(ctx, m.chatId, m.text),
+  "/deletemydata": (ctx, m, tenant) => handleDeleteMyData(ctx, m.chatId, tenant)
 };
 
 const GROUP_COMMANDS = {

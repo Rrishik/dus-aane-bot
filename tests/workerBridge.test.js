@@ -264,6 +264,73 @@ describe("Worker-driven /backfill", () => {
   });
 });
 
+describe("export_to_sheet", () => {
+  function sheetStub(existing) {
+    const made = [];
+    const opened = {};
+    const book = (id) => {
+      const state = { id, values: null, cleared: 0, frozen: 0, editors: [] };
+      const sheet = {
+        clear: () => state.cleared++,
+        getRange: (r, c, rows, cols) => ({
+          setValues: (v) => {
+            expect([r, c, rows, cols]).toEqual([1, 1, v.length, v[0].length]);
+            state.values = v;
+          }
+        }),
+        setFrozenRows: (n) => (state.frozen = n)
+      };
+      return {
+        state,
+        getSheets: () => [sheet],
+        getId: () => id,
+        getUrl: () => "https://docs/" + id,
+        addEditor: (e) => {
+          if (e === "bad") throw new Error("invalid email");
+          state.editors.push(e);
+        }
+      };
+    };
+    return {
+      made,
+      opened,
+      SpreadsheetApp: {
+        openById: (id) => {
+          if (id !== existing) throw new Error("not found");
+          return (opened[id] = opened[id] || book(id));
+        },
+        create: (title) => {
+          const b = book("new-" + (made.length + 1));
+          made.push({ title, b });
+          return b;
+        }
+      }
+    };
+  }
+  const payload = { title: "T", header: ["A", "B"], rows: [[1, "x"]], emails: ["a@x.com", "bad"] };
+
+  it("creates the sheet on first use, then rewrites it", () => {
+    const stub = sheetStub("s1");
+    const { api } = load({ extra: { SpreadsheetApp: stub.SpreadsheetApp } });
+    expect(api.WORKER_ACTIONS.export_to_sheet({ ...payload, sheetId: "" })).toEqual({
+      sheetId: "new-1",
+      url: "https://docs/new-1"
+    });
+    expect(stub.made[0].b.state).toMatchObject({
+      values: [
+        ["A", "B"],
+        [1, "x"]
+      ],
+      frozen: 1,
+      editors: ["a@x.com"]
+    });
+
+    expect(api.WORKER_ACTIONS.export_to_sheet({ ...payload, sheetId: "s1" }).sheetId).toBe("s1");
+    expect(stub.opened.s1.state.cleared).toBe(1);
+    expect(api.WORKER_ACTIONS.export_to_sheet({ ...payload, sheetId: "gone" }).sheetId).toBe("new-2");
+  });
+});
+
 describe("verify-forwarding link", () => {
   it("signs the forwarder emails into the link; old links still verify", () => {
     const { api } = load({ props: fakeProps({ verify_token_secret: "vs" }) });
