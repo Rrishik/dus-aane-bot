@@ -10,3 +10,9 @@ invocation_logs = true
 [vars]
 # APPS_SCRIPT_URL is set via `wrangler secret put APPS_SCRIPT_URL`
 # Do NOT put it here — use secrets for the actual URL
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dus-aane-bot"
+database_id = "e7b12ae1-a783-4a2f-875e-a6128ffc226f"
+migrations_dir = "migrations"

@@ -65,6 +65,15 @@ npm test
 
 Tests load source files into a `vm` sandbox via `tests/_loader.js` and stub the Apps Script services. The loader also supplies defaults for a few shared constants/predicates (`SHARED_DEFAULTS`); a loaded file's own declarations and per-test stubs always win.
 
+## Worker (D1 migration in progress)
+
+The Cloudflare Worker in `worker/` is being built up to replace the Apps Script runtime (see the migration plan). Until cutover it only proxies Telegram updates to Apps Script; the D1 schema, data layer and API clients land ahead of the switch.
+
+- **Schema** — `worker/migrations/NNNN_*.sql`, applied to the `dus-aane-bot` D1 database by CI (`wrangler d1 migrations apply --remote`) before each Worker deploy. Never edit an applied migration; add a new one.
+- **Tests** — `worker/test/*.test.js` run under the same `npm test`, in Node, against `worker/test/helpers/d1.js`: a D1-compatible wrapper over `node:sqlite` (Node 22.13+/24) that applies the real migrations. No `workerd`/`wrangler` needed locally.
+- **Data access** — every query in `worker/src/db/` takes a `tenantId` and filters on it; D1 has no row-level security, so keep it that way (the isolation tests in `db.tenantsTransactions.test.js` guard it).
+- **Parser** — `worker/src/parser/parser.gen.js` is generated from the root `BankTemplates.js` + `Parser.js`. After editing either, run `npm run parser:sync`; CI fails if the generated file is stale.
+
 ## Formatting
 
 ```powershell
