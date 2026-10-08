@@ -6,3 +6,9 @@ scripts/*
 .clasp.json.*.bak
 .commit-msg.tmp
 .coverage/
+
+# D1 import artifacts (contain personal data)
+import.sql
+import-report.json
+*dump*.json
+worker/apply.log

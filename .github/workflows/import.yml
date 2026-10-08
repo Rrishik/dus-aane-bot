@@ -1,0 +1,53 @@
+name: Import Sheets into D1
+
+# Manual: copies the Google Sheets data into D1 (idempotent) and checks it.
+#   plan  — build the SQL and print counts only
+#   apply — import into D1, then verify
+# verify: strict for the first import; lenient for the re-run right after
+# switching NATIVE_MODE on (the bot may already have added or deleted rows).
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [plan, apply]
+        default: plan
+      verify:
+        type: choice
+        options: [strict, lenient]
+        default: strict
+
+concurrency: d1-import
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - run: npm ci
+
+      - name: Build import SQL from the sheets
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
+        run: node worker/scripts/import-sheets.mjs --out import.sql --report import-report.json
+
+      # Output hidden: wrangler errors can echo SQL rows into public logs.
+      - name: Apply to D1
+        if: inputs.mode == 'apply'
+        working-directory: worker
+        run: |
+          npx --yes wrangler@4.81.1 d1 execute dus-aane-bot --remote --yes --file ../import.sql > apply.log 2>&1 \
+            || { echo "D1 import failed; wrangler output hidden (may contain personal data)."; tail -n 3 apply.log | cut -c1-120 | sed -E "s/'[^']*'/'…'/g"; exit 1; }
+          echo "Imported."
+
+      - name: Verify D1 against the sheets
+        if: inputs.mode == 'apply'
+        run: node worker/scripts/verify-import.mjs --report import-report.json --wrangler ${{ inputs.verify == 'lenient' && '--lenient' || '' }}

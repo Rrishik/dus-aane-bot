@@ -5,15 +5,27 @@ import { escapeMarkdown } from "./format.js";
 import { getSplitForTransaction, getSettlementForTransaction } from "../db/splits.js";
 import { cardText, keyboardFor, canReread } from "./cards.js";
 
+// Cards posted before the move to D1 carry the Gmail message id (or SMS id)
+// instead of the transaction id; resolve those through the sources.
+async function findTxn(ctx, tid, id) {
+  const txn = await getTransaction(ctx.db, tid, id);
+  if (txn) return txn;
+  const legacy = await ctx.db
+    .prepare("SELECT transaction_id FROM transaction_sources WHERE tenant_id = ? AND source_ref = ? LIMIT 1")
+    .bind(tid, String(id))
+    .first("transaction_id");
+  return legacy ? getTransaction(ctx.db, tid, legacy) : null;
+}
+
 export async function loadCardState(ctx, tenantId, txnId) {
   const tid = String(tenantId);
-  const txn = await getTransaction(ctx.db, tid, txnId);
+  const txn = await findTxn(ctx, tid, txnId);
   if (!txn) return null;
   const [sources, groups, split, settlement, emailCount] = await Promise.all([
-    getSources(ctx.db, tid, txnId),
+    getSources(ctx.db, tid, txn.id),
     groupsForMember(ctx.db, tid),
-    getSplitForTransaction(ctx.db, txnId),
-    getSettlementForTransaction(ctx.db, txnId),
+    getSplitForTransaction(ctx.db, txn.id),
+    getSettlementForTransaction(ctx.db, txn.id),
     ctx.db.prepare("SELECT COUNT(*) AS n FROM tenant_emails WHERE tenant_id = ?").bind(tid).first("n")
   ]);
   const isSplit = !!(split || settlement);

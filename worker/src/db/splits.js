@@ -102,7 +102,12 @@ export async function groupBalances(db, groupId) {
     )
     .bind(gid)
     .all();
+  return netBalances(owed.results, paid.results);
+}
 
+// owed/paid: [{ currency, debtor, creditor, amount }] → per-currency net
+// pairs. Shared with the import verifier.
+export function netBalances(owed, paid) {
   // ledger[currency]["a|b"] = what a owes b minus what b owes a (a < b).
   const ledger = {};
   function bump(currency, debtor, creditor, amount) {
@@ -111,8 +116,8 @@ export async function groupBalances(db, groupId) {
     const key = a + "|" + b;
     ledger[currency][key] = (ledger[currency][key] || 0) + sign * amount;
   }
-  owed.results.forEach((r) => bump(r.currency, r.debtor, r.creditor, r.amount));
-  paid.results.forEach((r) => bump(r.currency, r.debtor, r.creditor, -r.amount));
+  owed.forEach((r) => bump(r.currency, r.debtor, r.creditor, r.amount));
+  paid.forEach((r) => bump(r.currency, r.debtor, r.creditor, -r.amount));
 
   const out = {};
   for (const currency of Object.keys(ledger)) {
