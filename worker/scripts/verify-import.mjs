@@ -1,6 +1,7 @@
 // Sheets → D1 import, step 2: compare D1 with the import report.
 //
 //   node worker/scripts/verify-import.mjs --report import-report.json --wrangler [--lenient]
+//     [--db <name>] [--config <wrangler file>]   (staging: dus-aane-bot-staging, wrangler.staging.toml)
 //   node worker/scripts/verify-import.mjs --report import-report.json \
 //     --totals totals.json --owed owed.json --paid paid.json [--lenient]
 //
@@ -93,8 +94,10 @@ export function diffBalances(expected, actual) {
 }
 
 function main() {
-  const flag = (n) => process.argv[process.argv.indexOf("--" + n) + 1];
+  const flag = (n) => (process.argv.includes("--" + n) ? process.argv[process.argv.indexOf("--" + n) + 1] : null);
   const report = JSON.parse(readFileSync(flag("report"), "utf8"));
+  const db = flag("db") || "dus-aane-bot";
+  const config = flag("config") ? ["--config", flag("config")] : [];
   // --wrangler: query D1 directly (CI); otherwise read saved outputs.
   const read = process.argv.includes("--wrangler")
     ? (n) =>
@@ -106,9 +109,10 @@ function main() {
               "wrangler@" + WRANGLER_VERSION,
               "d1",
               "execute",
-              "dus-aane-bot",
+              db,
               "--remote",
               "--json",
+              ...config,
               "--command",
               VERIFY_QUERIES[n]
             ],

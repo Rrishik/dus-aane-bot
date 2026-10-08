@@ -73,7 +73,7 @@ The Cloudflare Worker in `worker/` is being built up to replace the Apps Script 
 - **Tests** — `worker/test/*.test.js` run under the same `npm test`, in Node, against `worker/test/helpers/d1.js`: a D1-compatible wrapper over `node:sqlite` (Node 22.13+/24) that applies the real migrations. No `workerd`/`wrangler` needed locally.
 - **Data access** — every query in `worker/src/db/` takes a `tenantId` and filters on it; D1 has no row-level security, so keep it that way (the isolation tests in `db.tenantsTransactions.test.js` guard it).
 - **Parser** — `worker/src/parser/parser.gen.js` is generated from the root `BankTemplates.js` + `Parser.js`. After editing either, run `npm run parser:sync`; CI fails if the generated file is stale.
-- **Mode switch** — the repository variable `NATIVE_MODE=1` deploys the Worker with `MODE=native` (it runs the bot on D1) and Apps Script with `NATIVE_MODE = "1"` (the Gmail poller hands emails to `POST /ingest/email`; its crons stand down). Unset, everything stays on Apps Script.
+- **Mode switch** — the repository variable `NATIVE_MODE=1` deploys the Worker with `MODE=native` (it runs the bot on D1) and Apps Script with `NATIVE_MODE = "1"` (the Gmail poller hands emails to `POST /ingest/email`; its crons stand down). Unset, everything stays on Apps Script. Staging, cutover and rollback steps: [CUTOVER.md](CUTOVER.md).
 - **Bridge** — `WorkerBridge.js` (Apps Script) and `worker/src/app/appsScript.js` + `auth.js` (Worker) sign every call with the `INTERNAL_SECRET` GitHub secret. Apps Script only does what the Worker can't: send the setup email, read the bot's Gmail (poller, `/backfill`, Re-read).
 
 ## Formatting

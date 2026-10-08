@@ -1,0 +1,32 @@
+# Staging: a second Telegram bot on its own Worker, D1 database and queue,
+# always native. Deployed by .github/workflows/staging.yml, which fills in
+# the D1 id. No cron triggers: staging can hold a copy of real users and
+# must never message them unprompted.
+name = "dus-aane-bot-staging"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+[vars]
+MODE = "native"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dus-aane-bot-staging"
+database_id = "STAGING_D1_ID"
+migrations_dir = "migrations"
+
+[[queues.producers]]
+binding = "UPDATES"
+queue = "dus-aane-bot-updates-staging"
+
+[[queues.consumers]]
+queue = "dus-aane-bot-updates-staging"
+max_batch_size = 1
+max_batch_timeout = 0
+max_retries = 0

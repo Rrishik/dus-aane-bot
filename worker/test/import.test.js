@@ -262,6 +262,27 @@ describe("Sheets → D1 import", () => {
     expect(await ctx.db.prepare("SELECT COUNT(*) AS n FROM splits").first("n")).toBe(0);
   });
 
+  it("catch-up only inserts: edits made in the bot after cutover survive", async () => {
+    const { ctx } = await imported(sampleDump({ orphan: false }));
+    const id = idFor("111", "email", "gm1");
+    await ctx.db.exec("UPDATE transactions SET category = 'Groceries' WHERE id = '" + id + "'");
+    await ctx.db.exec("UPDATE tenants SET status = 'dormant' WHERE id = '222'");
+    await ctx.db.exec("UPDATE merchant_rules SET category = 'Shopping' WHERE tenant_id = '111'");
+
+    const dump = sampleDump({ orphan: false });
+    dump.personal["111"].rows.push(personalRow({ 2: "Late", 3: 42, 7: "gm-late" }));
+    const { sql } = buildImport(dump, { now: NOW, catchUp: true });
+    expect(sql.some((s) => /DO UPDATE/.test(s))).toBe(false);
+    await ctx.db.exec(sql.join("\n"));
+
+    expect(await ctx.db.prepare("SELECT category FROM transactions WHERE id = ?").bind(id).first("category")).toBe(
+      "Groceries"
+    );
+    expect((await getTenant(ctx.db, "222")).status).toBe("dormant");
+    expect((await getMerchantRules(ctx.db, "111")).find((r) => r.personal).category).toBe("Shopping");
+    expect(await ctx.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE merchant = 'Late'").first("n")).toBe(1);
+  });
+
   it("old cards keep working through their Gmail/SMS ids", async () => {
     const { ctx } = await imported();
     await handleUpdate(ctx, {

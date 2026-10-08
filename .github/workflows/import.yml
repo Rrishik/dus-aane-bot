@@ -1,21 +1,18 @@
 name: Import Sheets into D1
 
-# Manual: copies the Google Sheets data into D1 (idempotent) and checks it.
-#   plan  — build the SQL and print counts only
-#   apply — import into D1, then verify
-# verify: strict for the first import; lenient for the re-run right after
-# switching NATIVE_MODE on (the bot may already have added or deleted rows).
+# Manual: copies the Google Sheets data into production D1 and checks it.
+#   plan     — build the SQL and print counts only
+#   apply    — import (idempotent upsert), then verify strictly
+#   catch-up — right after switching NATIVE_MODE on: insert-only (edits made
+#              in the bot since are kept), then verify leniently
+# See docs/CUTOVER.md.
 on:
   workflow_dispatch:
     inputs:
       mode:
         type: choice
-        options: [plan, apply]
+        options: [plan, apply, catch-up]
         default: plan
-      verify:
-        type: choice
-        options: [strict, lenient]
-        default: strict
 
 concurrency: d1-import
 
@@ -37,11 +34,11 @@ jobs:
         env:
           APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
           INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
-        run: node worker/scripts/import-sheets.mjs --out import.sql --report import-report.json
+        run: node worker/scripts/import-sheets.mjs --out import.sql --report import-report.json ${{ inputs.mode == 'catch-up' && '--catch-up' || '' }}
 
       # Output hidden: wrangler errors can echo SQL rows into public logs.
       - name: Apply to D1
-        if: inputs.mode == 'apply'
+        if: inputs.mode != 'plan'
         working-directory: worker
         run: |
           npx --yes wrangler@4.81.1 d1 execute dus-aane-bot --remote --yes --file ../import.sql > apply.log 2>&1 \
@@ -49,5 +46,5 @@ jobs:
           echo "Imported."
 
       - name: Verify D1 against the sheets
-        if: inputs.mode == 'apply'
-        run: node worker/scripts/verify-import.mjs --report import-report.json --wrangler ${{ inputs.verify == 'lenient' && '--lenient' || '' }}
+        if: inputs.mode != 'plan'
+        run: node worker/scripts/verify-import.mjs --report import-report.json --wrangler ${{ inputs.mode == 'catch-up' && '--lenient' || '' }}

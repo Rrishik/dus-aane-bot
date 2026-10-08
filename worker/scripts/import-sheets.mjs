@@ -3,6 +3,7 @@
 //   node worker/scripts/import-sheets.mjs --out import.sql --report import-report.json
 //     [--dump dump.json]       read a saved dump instead of calling Apps Script
 //     [--save-dump dump.json]  keep the fetched dump (contains personal data!)
+//     [--catch-up]             insert-only re-run after cutover
 //
 // Env when fetching: APPS_SCRIPT_URL, INTERNAL_SECRET. Output on stdout is
 // aggregate counts only: this runs in public CI logs.
@@ -41,7 +42,7 @@ async function main() {
   const out = arg("out") || "import.sql";
   const reportPath = arg("report") || "import-report.json";
   const dump = await loadDump();
-  const { sql, report } = buildImport(dump);
+  const { sql, report } = buildImport(dump, { catchUp: process.argv.includes("--catch-up") });
   writeFileSync(out, sql.join("\n") + "\n");
   writeFileSync(reportPath, JSON.stringify(report));
   console.log(summarize(report));

@@ -309,7 +309,19 @@ function groupSql(gid, rows, groupRefs, now, report, skip) {
 }
 
 // → { sql: string[], report }. report.expected feeds the post-import check.
-export function buildImport(dump, { now = Date.now() } = {}) {
+// catchUp: insert-only (every conflict is DO NOTHING), for the re-run right
+// after cutover, so edits made in the bot since the first import survive.
+export function buildImport(dump, { now = Date.now(), catchUp = false } = {}) {
+  const out = buildStatements(dump, now);
+  if (catchUp) {
+    out.sql = out.sql.map((s) =>
+      s.replace(/ ON CONFLICT (\([^)]*\) )?DO UPDATE SET [\s\S]*;$/, " ON CONFLICT DO NOTHING;")
+    );
+  }
+  return out;
+}
+
+function buildStatements(dump, now) {
   const sql = [];
   const report = {
     tenants: 0,

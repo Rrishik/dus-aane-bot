@@ -1,0 +1,138 @@
+name: Staging
+
+# Manual. A second Telegram bot (STAGING_BOT_TOKEN) on its own Worker, D1
+# database and queue, in native mode, for a full check before cutover.
+#   deploy   — create D1/queue if missing, migrate, deploy, point the
+#              staging bot's webhook at it, smoke test
+#   import   — copy the live sheets into staging D1 and verify (strict)
+#   teardown — delete the staging Worker, queue and D1 (and its data copy)
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options: [deploy, import, teardown]
+        default: deploy
+
+concurrency: staging
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      STAGING_BOT_TOKEN: ${{ secrets.STAGING_BOT_TOKEN }}
+      W: npx --yes wrangler@4.81.1
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - run: npm ci
+        working-directory: .
+
+      - name: Resolve the staging D1 database
+        run: |
+          id_of() {
+            $W d1 list --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{const d=JSON.parse(s.slice(s.indexOf("["))).find((x)=>x.name==="dus-aane-bot-staging");process.stdout.write(d?d.uuid:"")}catch(_){}})'
+          }
+          id=$(id_of)
+          if [ -z "$id" ] && [ "${{ inputs.action }}" != "teardown" ]; then
+            $W d1 create dus-aane-bot-staging > /dev/null
+            id=$(id_of)
+            test -n "$id" || { echo "::error::Couldn't create the staging D1 database."; exit 1; }
+          fi
+          [ -n "$id" ] && sed -i "s/STAGING_D1_ID/$id/" wrangler.staging.toml
+          echo "D1: ${id:-none}"
+
+      - name: Deploy the staging Worker
+        if: inputs.action == 'deploy'
+        env:
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
+          ADMIN_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+        run: |
+          test -n "$STAGING_BOT_TOKEN" || { echo "::error::Add the STAGING_BOT_TOKEN secret (a second bot from @BotFather) first."; exit 1; }
+          $W queues list 2>&1 | grep -q "dus-aane-bot-updates-staging" || $W queues create dus-aane-bot-updates-staging
+          $W d1 migrations apply dus-aane-bot-staging --remote --config wrangler.staging.toml
+          $W deploy --config wrangler.staging.toml | tee deploy.log
+          url=$(grep -oE "https://dus-aane-bot-staging\.[a-z0-9-]+\.workers\.dev" deploy.log | head -n1)
+          test -n "$url" || { echo "::error::No workers.dev URL in the deploy output."; exit 1; }
+          echo "STAGING_URL=$url" >> "$GITHUB_ENV"
+          node -e '
+            const o = { BOT_TOKEN: process.env.STAGING_BOT_TOKEN };
+            for (const k of ["INTERNAL_SECRET", "WEBHOOK_SECRET", "APPS_SCRIPT_URL", "ADMIN_CHAT_ID", "AZURE_OPENAI_ENDPOINT",
+              "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_DEPLOYMENT_NAME", "AZURE_OPENAI_API_VERSION"]) o[k] = process.env[k];
+            require("fs").writeFileSync("secrets.json", JSON.stringify(o));'
+          $W secret bulk secrets.json --config wrangler.staging.toml
+          rm -f secrets.json
+
+      - name: Point the staging bot at the staging Worker
+        if: inputs.action == 'deploy'
+        env:
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          node --input-type=module -e '
+            const call = async (m, body) =>
+              (await fetch("https://api.telegram.org/bot" + process.env.STAGING_BOT_TOKEN + "/" + m, {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {})
+              })).json();
+            const hook = await call("setWebhook", {
+              url: process.env.STAGING_URL,
+              secret_token: process.env.WEBHOOK_SECRET,
+              allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "chat_member"],
+              drop_pending_updates: true
+            });
+            if (!hook.ok) { console.error("setWebhook failed: " + hook.description); process.exit(1); }
+            await call("setMyCommands", { scope: { type: "all_private_chats" }, commands: [
+              { command: "start", description: "Onboard / show welcome" },
+              { command: "ask", description: "Ask anything about your spending" },
+              { command: "stats", description: "Dashboard: recent, trends" },
+              { command: "export", description: "Download your data" },
+              { command: "account", description: "Account & settings" },
+              { command: "help", description: "Show available commands" } ] });
+            await call("setMyCommands", { scope: { type: "all_group_chats" }, commands: [
+              { command: "start", description: "Set up / re-sync this group" },
+              { command: "stats", description: "Who owes whom" },
+              { command: "help", description: "Group commands" } ] });
+            const me = await call("getMe");
+            console.log("Staging bot @" + me.result.username + " → " + process.env.STAGING_URL);'
+
+      - name: Smoke test
+        if: inputs.action == 'deploy'
+        env:
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: node scripts/smoke.mjs "$STAGING_URL"
+
+      # Output hidden: wrangler errors can echo SQL rows into public logs.
+      - name: Import the sheets into staging D1
+        if: inputs.action == 'import'
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
+        run: |
+          node scripts/import-sheets.mjs --out ../import.sql --report ../import-report.json
+          $W d1 execute dus-aane-bot-staging --remote --yes --config wrangler.staging.toml --file ../import.sql > apply.log 2>&1 \
+            || { echo "::error::Import failed; wrangler output hidden (may contain personal data)."; exit 1; }
+          node scripts/verify-import.mjs --report ../import-report.json --wrangler --db dus-aane-bot-staging --config wrangler.staging.toml
+
+      - name: Tear down
+        if: inputs.action == 'teardown'
+        run: |
+          if [ -n "$STAGING_BOT_TOKEN" ]; then
+            node -e 'fetch("https://api.telegram.org/bot" + process.env.STAGING_BOT_TOKEN + "/deleteWebhook").then((r) => r.json()).then((r) => console.log("deleteWebhook: " + r.ok))'
+          fi
+          $W delete --config wrangler.staging.toml --force || true
+          $W queues delete dus-aane-bot-updates-staging || true
+          $W d1 delete dus-aane-bot-staging --skip-confirmation || true
