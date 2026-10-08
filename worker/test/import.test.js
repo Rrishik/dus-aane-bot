@@ -220,12 +220,14 @@ describe("Sheets → D1 import", () => {
 
   it("verification flags what didn't make it", async () => {
     const { ctx, report } = await imported();
-    expect(await verifyAgainst(ctx, report)).toEqual(["group …100: balances differ"]);
+    expect(await verifyAgainst(ctx, report)).toEqual([
+      "group …100: INR balances differ (0 missing, 0 extra, 1 different)"
+    ]);
     await ctx.db.exec("DELETE FROM transactions WHERE tenant_id = '222'");
     expect(await verifyAgainst(ctx, report)).toEqual([
       "tenant …222: 0 rows, expected 1",
       "tenant …222: INR:credit total differs",
-      "group …100: balances differ"
+      "group …100: INR balances differ (0 missing, 0 extra, 1 different)"
     ]);
   });
 

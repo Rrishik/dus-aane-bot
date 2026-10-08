@@ -68,9 +68,28 @@ export function verifyImport(report, { totals, owed, paid }, { strict = true } =
       owed.filter((r) => r.group_id === gid),
       paid.filter((r) => r.group_id === gid)
     );
-    if (JSON.stringify(got) !== JSON.stringify(exp)) problems.push("group " + mask(gid) + ": balances differ");
+    for (const diff of diffBalances(exp, got)) problems.push("group " + mask(gid) + ": " + diff);
   }
   return problems;
+}
+
+// Per-currency differences, without amounts or ids (public logs).
+export function diffBalances(expected, actual) {
+  const out = [];
+  const key = (e) => e.debtor + ">" + e.creditor;
+  for (const ccy of [...new Set([...Object.keys(expected), ...Object.keys(actual)])].sort()) {
+    const exp = new Map((expected[ccy] || []).map((e) => [key(e), e.amountMinor]));
+    const act = new Map((actual[ccy] || []).map((e) => [key(e), e.amountMinor]));
+    const missing = [...exp.keys()].filter((k) => !act.has(k)).length;
+    const extra = [...act.keys()].filter((k) => !exp.has(k)).length;
+    const changed = [...exp.keys()].filter((k) => act.has(k) && act.get(k) !== exp.get(k)).length;
+    if (missing || extra || changed) {
+      out.push(
+        ccy + " balances differ (" + [missing + " missing", extra + " extra", changed + " different"].join(", ") + ")"
+      );
+    }
+  }
+  return out;
 }
 
 function main() {
