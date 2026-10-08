@@ -5,7 +5,9 @@
     "format": "prettier --write \"**/*.js\"",
     "format:check": "prettier --check \"**/*.js\"",
     "test": "vitest run",
-    "coverage": "node scripts/coverage.js"
+    "coverage": "node scripts/coverage.js",
+    "parser:sync": "node worker/scripts/sync-parser.mjs",
+    "parser:check": "node worker/scripts/sync-parser.mjs --check"
   },
   "devDependencies": {
     "@vitest/coverage-istanbul": "^1.6.1",
