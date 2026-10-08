@@ -17,6 +17,18 @@ database_name = "dus-aane-bot"
 database_id = "e7b12ae1-a783-4a2f-875e-a6128ffc226f"
 migrations_dir = "migrations"
 
+# Slow updates (/ask, SMS paste, Apps Script calls) run in the queue
+# consumer: one at a time, no batching delay, never retried (could double-post).
+[[queues.producers]]
+binding = "UPDATES"
+queue = "dus-aane-bot-updates"
+
+[[queues.consumers]]
+queue = "dus-aane-bot-updates"
+max_batch_size = 1
+max_batch_timeout = 0
+max_retries = 0
+
 # 08:00 IST daily; src/app/cron.js picks the jobs by IST weekday.
 [triggers]
 crons = ["30 2 * * *"]
