@@ -127,14 +127,14 @@ describe("simple Telegram wrappers", () => {
     expect(payloadOf(call)).toEqual({});
   });
 
-  it("setTelegramWebhook deletes then sets, passing allowed_updates including chat_member events", () => {
+  it("setTelegramWebhook sets in one call (no delete first), passing allowed_updates including chat_member events", () => {
     var env = baseStubs();
     var api = load(env.stubs);
     api.setTelegramWebhook();
 
     var calls = env.stubs.UrlFetchApp.fetch.mock.calls;
-    expect(calls.map((c) => c[0])).toEqual(["https://api/deleteWebhook", "https://api/setWebhook"]);
-    var payload = payloadOf(calls[1]);
+    expect(calls.map((c) => c[0])).toEqual(["https://api/setWebhook"]);
+    var payload = payloadOf(calls[0]);
     expect(payload.url).toBe("https://proxy/");
     expect(payload.allowed_updates).toContain("my_chat_member");
     expect(payload.allowed_updates).toContain("chat_member");
@@ -146,7 +146,7 @@ describe("simple Telegram wrappers", () => {
     var api = load(env.stubs);
     api.setTelegramWebhook();
 
-    expect(payloadOf(env.stubs.UrlFetchApp.fetch.mock.calls[1]).secret_token).toBe("s3cret");
+    expect(payloadOf(env.stubs.UrlFetchApp.fetch.mock.calls[0]).secret_token).toBe("s3cret");
     expect(api.getWebhookSecret()).toBe("s3cret");
   });
 

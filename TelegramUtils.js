@@ -14,6 +14,8 @@ function getWebhookSecret() {
 // Webhook setup — points Telegram at the Cloudflare Worker proxy that
 // forwards to Apps Script. Run once, and again whenever WEBHOOK_SECRET
 // changes (Telegram then sends it as X-Telegram-Bot-Api-Secret-Token).
+// setWebhook replaces any existing webhook atomically, so a failed call
+// leaves the previous one in place.
 function setTelegramWebhook() {
   var secret = getWebhookSecret();
   if (secret && !WEBHOOK_SECRET_PATTERN.test(secret)) {
@@ -21,7 +23,6 @@ function setTelegramWebhook() {
       "WEBHOOK_SECRET may only contain A-Z, a-z, 0-9, _ and - (1-256 chars). Fix the GitHub secret and redeploy."
     );
   }
-  deleteWebhook();
   var payload = {
     url: WORKER_PROXY_URL,
     // chat_member / my_chat_member aren't in the default set — we need them
