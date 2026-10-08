@@ -113,6 +113,64 @@ var WORKER_ACTIONS = {
   export_dump: function () {
     return { dump: buildSheetsDump() };
   },
+  // Read-only poller health for the Diagnose workflow: filter decisions for
+  // recent bot-inbox mail (no addresses or content), last run, triggers.
+  poller_status: function (p) {
+    var hours = Math.min(Math.max(Number(p.hours) || 3, 1), 48);
+    var props = PropertiesService.getScriptProperties();
+    var parse = function (k, d) {
+      try {
+        return JSON.parse(props.getProperty(k) || "null") || d;
+      } catch (_) {
+        return d;
+      }
+    };
+    var labelId = null;
+    try {
+      labelId = getProcessedLabelId();
+    } catch (_) {}
+    var list = Gmail.Users.Messages.list("me", { q: "newer_than:" + Math.ceil(hours / 24) + "d", maxResults: 50 });
+    var cutoff = Date.now() - hours * 3600000;
+    var recent = [];
+    ((list && list.messages) || []).forEach(function (m) {
+      var meta;
+      try {
+        meta = Gmail.Users.Messages.get("me", m.id, { format: "minimal" });
+      } catch (_) {
+        return;
+      }
+      var at = Number(meta.internalDate);
+      if (at < cutoff) return;
+      var headers = getMessageHeaders(m.id) || {};
+      var msg = null;
+      try {
+        msg = GmailApp.getMessageById(m.id);
+      } catch (_) {}
+      var forwarder = extractForwarderFromHeaders(headers);
+      recent.push({
+        minutesAgo: Math.round((Date.now() - at) / 60000),
+        labelled: !!labelId && (meta.labelIds || []).indexOf(labelId) !== -1,
+        inInbox: (meta.labelIds || []).indexOf("INBOX") !== -1,
+        ignoredByHeaders: shouldIgnoreByHeaders(headers),
+        allowedBank: msg ? isFromAllowedBank(msg) : null,
+        autoForwarded: !!headers.xForwardedFor,
+        forwarderDomain: forwarder ? forwarder.split("@")[1] : null,
+        inRetry: Object.prototype.hasOwnProperty.call(parse(WORKER_RETRY_PROP, {}), m.id)
+      });
+    });
+    return {
+      nativeMode: isNativeMode(),
+      lastRun: parse(POLLER_LAST_RUN_PROP, null),
+      runLockAgeMin: props.getProperty("gmail.runStartedAt")
+        ? Math.round((Date.now() - Number(props.getProperty("gmail.runStartedAt"))) / 60000)
+        : null,
+      retryCount: Object.keys(parse(WORKER_RETRY_PROP, {})).length,
+      triggers: ScriptApp.getProjectTriggers().map(function (t) {
+        return t.getHandlerFunction();
+      }),
+      recent: recent
+    };
+  },
   backfill_range: function (p) {
     if (!p.chatId || !p.emails || !p.emails.length || !p.startMs || !p.endMs) throw new Error("invalid range");
     _saveWorkerBackfill(String(p.chatId), {
@@ -204,6 +262,16 @@ function ingestEmailViaWorker(message, forwarder, silent) {
 var WORKER_RETRY_PROP = "gmail.workerRetry";
 var WORKER_RETRY_MAX_ATTEMPTS = 6;
 var WORKER_RETRY_MAX_IDS = 200;
+var POLLER_LAST_RUN_PROP = "gmail.lastRun";
+
+function recordPollerRun(found, stats) {
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      POLLER_LAST_RUN_PROP,
+      JSON.stringify({ at: new Date().toISOString(), found: found, stats: stats })
+    );
+  } catch (_) {}
+}
 
 // Hand this run's emails to the Worker. Failures (Worker or LLM down) are
 // kept in a small retry list and re-sent on the next runs, so the history

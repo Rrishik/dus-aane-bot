@@ -250,6 +250,7 @@ function _extractTransactionsLocked(props) {
   if (isNativeMode()) {
     var stats = ingestBatchViaWorker(messagesToProcess);
     console.log("[extractTransactions] worker " + JSON.stringify(stats));
+    recordPollerRun(messagesToProcess.length, stats);
     if (newHistoryIdToSave) props.setProperty("gmail.lastHistoryId", newHistoryIdToSave);
     return;
   }

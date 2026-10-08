@@ -36,6 +36,21 @@ jobs:
               w.last_error_date ? "(" + new Date(w.last_error_date * 1000).toISOString() + ")" : "");
             console.log("allowed updates:", (w.allowed_updates || []).join(","));'
 
+      - name: Gmail poller (Apps Script)
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
+        run: |
+          node --input-type=module -e '
+            import { callAppsScript } from "./worker/src/app/appsScript.js";
+            const ctx = { env: process.env, now: () => Date.now(), fetch: (...a) => fetch(...a) };
+            const s = await callAppsScript(ctx, "poller_status", { hours: Number("${{ inputs.hours }}") });
+            delete s.ok;
+            const { recent, ...rest } = s;
+            console.log(JSON.stringify(rest, null, 1));
+            console.log("recent bot-inbox mail (newest first):");
+            for (const m of recent) console.log(JSON.stringify(m));'
+
       - name: D1 activity
         working-directory: worker
         run: |
