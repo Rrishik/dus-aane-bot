@@ -6,7 +6,7 @@ var ASK_TOOLS = [
     function: {
       name: "get_spending_summary",
       description:
-        "Get total spending and income summary for a date range. Returns debit/credit totals per currency and transaction count.",
+        "Get total spending and income summary for a date range. spend_by_currency excludes card bill payments, transfers out and investments (reported separately as non_spend_debits_by_currency).",
       parameters: {
         type: "object",
         properties: {
@@ -204,34 +204,42 @@ function executeAskTool(toolName, args, allTransactions, ctx) {
   }
 
   var debits = filtered.filter(function (t) {
-    return t.type === "Debit";
+    return isDebit(t.type);
   });
-  var credits = filtered.filter(function (t) {
-    return t.type === "Credit";
-  });
+  var spend = filtered.filter(isSpendTransaction);
+  var credits = filtered.filter(isCreditTransaction);
 
   switch (toolName) {
     case "get_spending_summary":
       return {
         total_transactions: filtered.length,
-        debit_count: debits.length,
+        spend_count: spend.length,
         credit_count: credits.length,
-        debits_by_currency: sumByCurrency(debits),
+        spend_by_currency: sumByCurrency(spend),
+        // Card bill payments, transfers out, investments — money moved, not spent.
+        non_spend_debits_by_currency: sumByCurrency(
+          debits.filter(function (t) {
+            return !isSpendTransaction(t);
+          })
+        ),
         credits_by_currency: sumByCurrency(credits)
       };
 
     case "get_category_breakdown":
       return {
-        categories: aggregateByField(debits, "category")
+        categories: aggregateByField(debits, "category").map(function (c) {
+          c.counts_as_spend = NON_SPEND_CATEGORIES.indexOf(c.name) === -1;
+          return c;
+        })
       };
 
     case "get_top_merchants":
       return {
-        merchants: aggregateByField(debits, "merchant").slice(0, args.limit || 5)
+        merchants: aggregateByField(spend, "merchant").slice(0, args.limit || 5)
       };
 
     case "get_user_spend":
-      return { users: aggregateByUser(debits) };
+      return { users: aggregateByUser(spend) };
 
     case "search_transactions":
       return execSearchTransactions(filtered, args);
@@ -272,9 +280,13 @@ function execSearchTransactions(filtered, args) {
     });
   }
   if (args.transaction_type) {
-    var tt = args.transaction_type;
+    var tt = String(args.transaction_type).trim().toLowerCase();
     results = results.filter(function (t) {
-      return t.type === tt;
+      return (
+        String(t.type || "")
+          .trim()
+          .toLowerCase() === tt
+      );
     });
   }
   if (args.min_amount !== undefined) {
@@ -341,7 +353,7 @@ function execUpdateTransaction(allTransactions, args) {
   var changes = [];
 
   if (args.category !== undefined && args.category !== null && args.category !== "") {
-    var valid = match.type === "Credit" ? CREDIT_CATEGORIES : CATEGORIES;
+    var valid = isCredit(match.type) ? CREDIT_CATEGORIES : CATEGORIES;
     if (valid.indexOf(args.category) === -1) {
       return {
         ok: false,
@@ -350,11 +362,11 @@ function execUpdateTransaction(allTransactions, args) {
     }
     var catRes = updateGoogleSheetCellWithFeedback(rowNumber, CATEGORY_COLUMN, args.category, match.category);
     if (!catRes.success) return { ok: false, error: catRes.message || "Category update failed" };
-    // Teach the bot the merchant→category mapping so future emails default
-    // to the same pick — mirrors the inline 📂 callback behaviour.
+    // Teach this user's future transactions the merchant→category mapping —
+    // mirrors the inline 📂 callback behaviour.
     if (match.merchant) {
       try {
-        setCategoryOverride(match.merchant, args.category);
+        setMyMerchant(match.merchant, { category: args.category });
       } catch (_) {}
     }
     changes.push({ field: "category", from: match.category, to: args.category });
@@ -513,6 +525,9 @@ function getAskSystemPrompt() {
     "- Available credit categories: " +
     CREDIT_CATEGORIES.join(", ") +
     "\n" +
+    "- 'Spending' means spend_by_currency: it excludes " +
+    NON_SPEND_CATEGORIES.join(", ") +
+    " (money moved, not spent). Mention those separately only when asked or when they explain a total\n" +
     "- Correct likely typos in merchant names before searching (e.g., flipart → flipkart, swiggi → swiggy, amzn → amazon)\n" +
     "- Use short/common merchant name for search — the data may have suffixes like _mws_merch\n" +
     "- Prefer answering with the data you already have. For read-only answers, call ask_user only when a required parameter is genuinely missing and cannot be inferred — never for confirmation or stylistic choices. For mutation tools, see below.\n" +

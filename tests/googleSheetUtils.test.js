@@ -30,7 +30,12 @@ const SYMBOLS = [
   "populateResolutionSheet",
   "reapplyMerchantResolutions",
   "populateCategoryOverridesForReview",
-  "applyCategoryOverridesToMainSheet"
+  "applyCategoryOverridesToMainSheet",
+  "isCredit",
+  "setMyMerchant",
+  "getMyMerchants",
+  "getMerchantResolutionsForTenant",
+  "resolveMerchant"
 ];
 
 let app, api;
@@ -179,32 +184,81 @@ describe("updateGoogleSheetCellWithFeedback", () => {
 });
 
 describe("ensureSheetHeaders", () => {
-  it("appends headers when sheet is empty", () => {
+  const HEADERS = [
+    "Email Date",
+    "Transaction Date",
+    "Merchant",
+    "Amount",
+    "Category",
+    "Transaction Type",
+    "User",
+    "Message ID",
+    "Currency",
+    "Group Ref",
+    "Group Message ID",
+    "Parsed By",
+    "Source Text",
+    "Status"
+  ];
+
+  it("appends all 14 headers when sheet is empty", () => {
     api.ensureSheetHeaders();
-    var headers = mainSheet().getRange(1, 1, 1, 11).getValues()[0];
-    expect(headers).toEqual([
-      "Email Date",
-      "Transaction Date",
-      "Merchant",
-      "Amount",
-      "Category",
-      "Transaction Type",
-      "User",
-      "Message ID",
-      "Currency",
-      "Group Ref",
-      "Group Message ID"
-    ]);
+    expect(mainSheet().getRange(1, 1, 1, 14).getValues()[0]).toEqual(HEADERS);
   });
 
-  it("is a no-op when headers already exist", () => {
-    seed(mainSheet(), [["existing"]]);
+  it("tops up a legacy 11-column header row without touching data rows", () => {
+    seed(mainSheet(), [HEADERS.slice(0, 11), ["d1", "", "Swiggy", 100]]);
+    api.ensureSheetHeaders();
+    expect(mainSheet().getRange(1, 1, 1, 14).getValues()[0]).toEqual(HEADERS);
+    expect(mainSheet().getLastRow()).toBe(2);
+    expect(mainSheet().getRange(2, 3).getValue()).toBe("Swiggy");
+  });
+
+  it("is a no-op when the header row is already complete", () => {
+    seed(mainSheet(), [HEADERS]);
+    var hide = vi.spyOn(mainSheet(), "hideColumns");
     api.ensureSheetHeaders();
     expect(mainSheet().getLastRow()).toBe(1);
-    expect(mainSheet().getRange(1, 1).getValue()).toBe("existing");
+    expect(hide).not.toHaveBeenCalled();
   });
 });
 
+describe("isCredit", () => {
+  it("matches Credit case-insensitively", () => {
+    expect(api.isCredit(" credit ")).toBe(true);
+    expect(api.isCredit("Debit")).toBe(false);
+    expect(api.isCredit(null)).toBe(false);
+  });
+});
+
+describe("MyMerchants (per-user merchant memory)", () => {
+  it("setMyMerchant upserts by case-insensitive pattern and keeps omitted fields", () => {
+    api.setMyMerchant("BUNDL TECH", { name: "Swiggy" });
+    api.setMyMerchant("bundl tech", { category: "Food & Dining" });
+    expect(api.getMyMerchants()).toEqual([{ pattern: "bundl tech", name: "Swiggy", category: "Food & Dining" }]);
+  });
+
+  it("getMerchantResolutionsForTenant puts personal entries first and applies personal categories to shared names", () => {
+    seed(tab("MerchantResolution") || app.openById(ADMIN_SHEET_ID).insertSheet("MerchantResolution"), [
+      ["Raw Pattern", "Resolved Name"],
+      ["swiggy_mws", "Swiggy"]
+    ]);
+    api.setCategoryOverride("Swiggy", "Food & Dining");
+    api.setMyMerchant("Swiggy", { category: "Groceries" });
+    api.setMyMerchant("bundl", { name: "Swiggy" });
+
+    var list = api.getMerchantResolutionsForTenant();
+    expect(list.map((r) => r.pattern)).toEqual(["swiggy", "bundl", "swiggy_mws"]);
+    expect(list[2]).toMatchObject({ resolved: "Swiggy", category: "Groceries", personalCategory: true });
+
+    expect(api.resolveMerchant("BUNDL TECH 123", list)).toEqual({
+      merchant: "Swiggy",
+      category: "Groceries",
+      personalCategory: true
+    });
+    expect(api.resolveMerchant("SWIGGY_MWS_MERCH", list)).toMatchObject({ merchant: "Swiggy", category: "Groceries" });
+  });
+});
 describe("addNewMerchantIfNeeded", () => {
   it("returns false on empty input", () => {
     expect(api.addNewMerchantIfNeeded("")).toBe(false);

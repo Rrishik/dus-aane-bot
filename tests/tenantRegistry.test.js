@@ -6,7 +6,7 @@ const ADMIN_SHEET_ID = "admin-sheet";
 
 // Set up a fresh in-memory Tenants sheet and load the script against it.
 // Each test gets its own isolated sandbox + sheet store.
-function setup(rows) {
+function setup(rows, extraStubs) {
   var SpreadsheetApp = makeSpreadsheetApp();
   var ss = SpreadsheetApp.openById(ADMIN_SHEET_ID);
   var tab = ss.insertSheet("Tenants");
@@ -45,13 +45,14 @@ function setup(rows) {
       "upsertPendingTenant",
       "activateTenant",
       "sameChatId",
+      "isTenantUsable",
       "TENANT_STATUS",
       "TENANT_COLS",
       "TENANT_CHAT_TYPE",
       "TENANT_HEADERS",
       "TENANT_COL_COUNT"
     ],
-    { SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }
+    Object.assign({ SpreadsheetApp: SpreadsheetApp, ADMIN_SHEET_ID: ADMIN_SHEET_ID }, extraStubs || {})
   );
   api._SpreadsheetApp = SpreadsheetApp;
   return api;
@@ -355,6 +356,84 @@ describe("findTenantByEmail", () => {
   it("returns null when only a group tenant carries the address", () => {
     var s = setup([["-100", "Pad", "alice@x.com", "grp", "active", "", "admin=111", "", "", 0, "group", "111", "INR"]]);
     expect(s.findTenantByEmail("alice@x.com")).toBe(null);
+  });
+
+  it("still routes a dormant tenant's forwards (so the next forward can reactivate it)", () => {
+    var s = setup([["111", "Alice", "alice@x.com", "sheet-a", "dormant", "", "", "", "", 3, "personal", "", "INR"]]);
+    expect(s.findTenantByEmail("alice@x.com").chat_id).toBe("111");
+  });
+});
+
+describe("isTenantUsable", () => {
+  it("is true for active and dormant tenants only", () => {
+    var s = setup([]);
+    expect(s.isTenantUsable({ status: "active" })).toBe(true);
+    expect(s.isTenantUsable({ status: "dormant" })).toBe(true);
+    expect(s.isTenantUsable({ status: "pending" })).toBe(false);
+    expect(s.isTenantUsable({ status: "disabled" })).toBe(false);
+    expect(s.isTenantUsable(null)).toBe(false);
+  });
+});
+
+describe("tenant cache (CacheService)", () => {
+  function sharedCache() {
+    var c = {};
+    return {
+      store: c,
+      api: {
+        getScriptCache: () => ({
+          get: (k) => (k in c ? c[k] : null),
+          put: (k, v) => {
+            c[k] = String(v);
+          },
+          remove: (k) => {
+            delete c[k];
+          }
+        })
+      }
+    };
+  }
+  var ROW = ["111", "Alice", "alice@x.com", "sheet-a", "active", "", "", "", "", 0, "personal", "", "INR"];
+
+  it("a later execution reads tenants from the cache, not the sheet", () => {
+    var cache = sharedCache();
+    var first = setup([ROW], { CacheService: cache.api });
+    expect(first.findTenantByChatId("111").name).toBe("Alice");
+
+    // Fresh "execution" over an empty Tenants tab: still served from cache.
+    var second = setup([], { CacheService: cache.api });
+    expect(second.findTenantByChatId("111").name).toBe("Alice");
+  });
+
+  it("writes invalidate the shared cache", () => {
+    var cache = sharedCache();
+    var s = setup([ROW], { CacheService: cache.api });
+    s.loadTenants();
+    expect(cache.store["tenants:v1"]).toBeDefined();
+    var before = cache.store["tenants:version"];
+    s.activateTenant("111", "sheet-b");
+    expect(cache.store["tenants:v1"]).toBeUndefined();
+    expect(cache.store["tenants:version"]).not.toBe(before);
+    expect(s.findTenantByChatId("111").sheet_id).toBe("sheet-b");
+  });
+
+  it("a payload published under an older version is ignored (read/write race)", () => {
+    var cache = sharedCache();
+    var s = setup([ROW], { CacheService: cache.api });
+    s.loadTenants();
+    // A concurrent reader re-publishes stale rows after a writer bumped the version.
+    var stale = JSON.parse(cache.store["tenants:v1"]);
+    stale.rows[0][1] = "Stale Name";
+    s.invalidateTenantCache();
+    cache.store["tenants:v1"] = JSON.stringify(stale);
+
+    var next = setup([ROW], { CacheService: cache.api });
+    expect(next.findTenantByChatId("111").name).toBe("Alice");
+  });
+
+  it("works without CacheService (falls back to the sheet)", () => {
+    var s = setup([ROW]);
+    expect(s.findTenantByChatId("111").name).toBe("Alice");
   });
 });
 

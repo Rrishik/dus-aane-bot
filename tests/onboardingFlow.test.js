@@ -68,7 +68,7 @@ const SYMBOLS = [
 ];
 
 function load(stubs) {
-  return loadAppsScript(["Onboarding.js"], SYMBOLS, stubs);
+  return loadAppsScript(["PendingInput.js", "Onboarding.js"], SYMBOLS, stubs);
 }
 
 describe("handleStartCommand", () => {
@@ -109,7 +109,7 @@ describe("handleRegisterCommand", () => {
     var api = load(env.stubs);
     api.handleRegisterCommand("42", "alice", "/register");
 
-    expect(env.props.store.pending_register_42).toBe("1");
+    expect(JSON.parse(env.props.store.pending_register_42).v).toBe("1");
     expect(env.sent).toHaveLength(1);
     expect(env.sent[0].text).toMatch(/What's the Gmail address/);
   });
@@ -136,7 +136,7 @@ describe("handleRegisterEmailReply", () => {
 
   it("consumes the reply, clears the flag, and registers the trimmed address", () => {
     var env = makeStubs();
-    env.props.store.pending_register_42 = "1";
+    env.props.store.pending_register_42 = JSON.stringify({ v: "1", t: Date.now() });
     var api = load(env.stubs);
 
     expect(api.handleRegisterEmailReply("42", "alice", "  me@example.com  ")).toBe(true);

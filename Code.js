@@ -19,6 +19,19 @@ function doGet(e) {
 // Process most commands inline for instant responses; defer /backfill to async trigger
 function doPost(e) {
   try {
+    // The Worker forwards Telegram's verified updates with ?k=<secret>.
+    // Anything else (someone POSTing to the public /exec URL) is dropped.
+    var secret = getWebhookSecret();
+    if (secret) {
+      var provided = (e && e.parameter && e.parameter.k) || "";
+      if (!_constantTimeEquals(String(provided), secret)) {
+        console.warn("[doPost] rejected update with missing/invalid webhook secret");
+        return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+      }
+    } else {
+      console.warn("[doPost] WEBHOOK_SECRET not configured — webhook auth is off");
+    }
+
     var contents = e.postData.contents;
     var update = JSON.parse(contents);
 
@@ -41,11 +54,20 @@ function doPost(e) {
       return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
     }
 
-    // Tenant resolution. Set context only for active tenants — pending/disabled
-    // chats must NOT fall through to admin defaults (would cross-tenant-leak).
+    // Tenant resolution. Set context only for usable (active/dormant) tenants
+    // — pending/disabled chats must NOT fall through to admin defaults
+    // (would cross-tenant-leak).
     var incomingTenant = incomingChatId != null ? findTenantByChatId(incomingChatId) : null;
-    var isActive = incomingTenant && incomingTenant.status === TENANT_STATUS.ACTIVE;
+    var isActive = isTenantUsable(incomingTenant);
     if (isActive) setCurrentTenant(incomingTenant);
+
+    // "📬 Resend setup" (on /account and nudges) must work for pending
+    // tenants too — they're the ones who most need it.
+    if (update.callback_query && update.callback_query.data === "resend_setup") {
+      if (incomingTenant) handleResendSetupCallback(incomingChatId, update.callback_query.id);
+      else answerCallbackQuery(update.callback_query.id, "Please /start to set up your account.", true);
+      return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
+    }
 
     // Callbacks (inline button taps) require an active tenant — anything else
     // would hit admin data via the fallback accessors. Silently drop them.
@@ -81,21 +103,16 @@ function doPost(e) {
 
     if (isDeferred) {
       var chatId = update.message.chat.id;
-      var ackResp = sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.");
-      try {
-        var parsedAck = JSON.parse(ackResp);
-        if (parsedAck.result && parsedAck.result.message_id) {
-          var propsAck = PropertiesService.getScriptProperties();
-          propsAck.setProperty("backfill_ack_msg_id", parsedAck.result.message_id.toString());
-          propsAck.setProperty("backfill_ack_chat_id", chatId.toString());
-        }
-      } catch (e) {
-        console.error("Backfill ack parse error:", e);
-      }
-
       var props = PropertiesService.getScriptProperties();
-      props.setProperty("pending_update", contents);
-      ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
+      var ackMsgId = _parseSentMessageId(
+        sendTelegramMessage(chatId, "⏳ *Backfill started...* This may take a few minutes.")
+      );
+      if (ackMsgId) props.setProperty("backfill_ack:" + chatId, String(ackMsgId));
+
+      // Keyed by trigger id so concurrent users' deferred updates don't
+      // overwrite each other.
+      var trigger = ScriptApp.newTrigger("processWebhookUpdate").timeBased().after(1000).create();
+      props.setProperty("pending_update:" + trigger.getUniqueId(), contents);
     } else if (update.message) {
       handleMessage(update);
     }
@@ -105,18 +122,15 @@ function doPost(e) {
   return ContentService.createTextOutput("OK").setMimeType(ContentService.MimeType.TEXT);
 }
 
-// Process the stored webhook update (runs async via trigger, for /backfill)
-function processWebhookUpdate() {
-  // Clean up this trigger
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "processWebhookUpdate") {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
+// Process a stored webhook update (runs async via a one-shot trigger, for /backfill)
+function processWebhookUpdate(e) {
+  var uid = e && e.triggerUid;
+  deleteOwnTrigger(uid, "processWebhookUpdate");
 
   var props = PropertiesService.getScriptProperties();
-  var contents = props.getProperty("pending_update");
-  props.deleteProperty("pending_update");
+  var key = uid ? "pending_update:" + uid : "pending_update";
+  var contents = props.getProperty(key);
+  props.deleteProperty(key);
 
   if (!contents) {
     return;
@@ -127,7 +141,7 @@ function processWebhookUpdate() {
     // Re-resolve tenant context for this async execution.
     var chatId = update.message && update.message.chat ? update.message.chat.id : null;
     var t = chatId != null ? findTenantByChatId(chatId) : null;
-    if (!t || t.status !== TENANT_STATUS.ACTIVE) {
+    if (!isTenantUsable(t)) {
       console.warn("[processWebhookUpdate] skipping — no active tenant for chat " + chatId);
       return;
     }
@@ -140,9 +154,29 @@ function processWebhookUpdate() {
   }
 }
 
+// One-shot time triggers stay listed (and count toward the 20-trigger cap)
+// after firing. Delete only the trigger that invoked us so concurrent chains
+// for other users survive; without a uid (manual run) fall back to all
+// triggers for the handler.
+function deleteOwnTrigger(uid, handlerName) {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() !== handlerName) return;
+    if (uid && trigger.getUniqueId() !== uid) return;
+    ScriptApp.deleteTrigger(trigger);
+  });
+}
+
 // Function for time based triggers
 function triggerEmailProcessing() {
   extractTransactions();
+}
+
+// Run once from the script editor: replaces any existing email trigger with
+// a 5-minute one. Each idle run is a single history.list call, well inside
+// the consumer 90 min/day trigger-runtime quota.
+function installEmailTrigger() {
+  deleteOwnTrigger(null, "triggerEmailProcessing");
+  ScriptApp.newTrigger("triggerEmailProcessing").timeBased().everyMinutes(5).create();
 }
 
 // ─── Weekly Summary ─────────────────────────────────────────────────────────────

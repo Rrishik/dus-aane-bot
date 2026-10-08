@@ -468,3 +468,50 @@ describe("markProcessed batch buffer", () => {
     expect(propsStore.getProperty("gmail.processedLabelId")).toBeNull();
   });
 });
+
+describe("extractTransactions overlap guard", () => {
+  function load(props, history) {
+    return loadAppsScript(["TransactionProcessor.js"], ["extractTransactions"], {
+      PropertiesService: { getScriptProperties: () => props },
+      Gmail: { Users: { History: { list: history }, getProfile: () => ({ historyId: "h" }) } },
+      getMerchantResolutionsForTenant: () => []
+    });
+  }
+
+  it("skips while a previous run is still in progress", () => {
+    var props = makePropsStore({ "gmail.lastHistoryId": "1", "gmail.runStartedAt": String(Date.now() - 60000) });
+    var calls = 0;
+    load(props, () => {
+      calls++;
+      return {};
+    }).extractTransactions();
+    expect(calls).toBe(0);
+  });
+
+  it("runs when the stamp is stale, and clears it afterwards", () => {
+    var props = makePropsStore({ "gmail.lastHistoryId": "1", "gmail.runStartedAt": String(Date.now() - 7 * 60000) });
+    var calls = 0;
+    load(props, () => {
+      calls++;
+      return { historyId: "2" };
+    }).extractTransactions();
+    expect(calls).toBe(1);
+    expect(props.getProperty("gmail.runStartedAt")).toBeNull();
+    expect(props.getProperty("gmail.lastHistoryId")).toBe("2");
+  });
+
+  it("clears the stamp even when the run throws", () => {
+    var props = makePropsStore({ "gmail.lastHistoryId": "1" });
+    var stamped = false;
+    var realSet = props.setProperty.bind(props);
+    props.setProperty = (k, v) => {
+      if (k === "gmail.lastHistoryId") throw new Error("props down");
+      if (k === "gmail.runStartedAt") stamped = true;
+      realSet(k, v);
+    };
+    var api = load(props, () => ({ historyId: "2" }));
+    expect(() => api.extractTransactions()).toThrow("props down");
+    expect(stamped).toBe(true);
+    expect(props.getProperty("gmail.runStartedAt")).toBeNull();
+  });
+});

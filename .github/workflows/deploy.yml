@@ -34,7 +34,6 @@ jobs:
           printf "const WORKER_PROXY_URL = \"${{ secrets.WORKER_PROXY_URL }}\";\n\n" >> AConfig.js
           printf "// Google Sheets\n" >> AConfig.js
           printf "const ADMIN_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> AConfig.js
-          printf "const SHEET_NAME = \"${{ secrets.SHEET_NAME }}\";\n" >> AConfig.js
           printf "const TEMPLATE_SHEET_ID = \"${{ secrets.TEMPLATE_SHEET_ID }}\";\n\n" >> AConfig.js
           printf "const GROUP_TEMPLATE_SHEET_ID = \"${{ secrets.GROUP_TEMPLATE_SHEET_ID }}\";\n\n" >> AConfig.js
           printf "// Azure OpenAI\n" >> AConfig.js
@@ -42,9 +41,8 @@ jobs:
           printf "const AZURE_OPENAI_API_KEY = \"${{ secrets.AZURE_OPENAI_API_KEY }}\";\n" >> AConfig.js
           printf "const AZURE_OPENAI_DEPLOYMENT_NAME = \"${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}\";\n" >> AConfig.js
           printf "const AZURE_OPENAI_API_VERSION = \"${{ secrets.AZURE_OPENAI_API_VERSION }}\";\n\n" >> AConfig.js
-          printf "// Gemini\n" >> AConfig.js
-          printf "const GEMINI_BASE_URL = \"${{ secrets.GEMINI_BASE_URL }}\";\n" >> AConfig.js
-          printf "const GEMINI_API_KEY = \"${{ secrets.GEMINI_API_KEY }}\";\n" >> AConfig.js
+          printf "// Webhook auth (Telegram -> Worker -> Apps Script)\n" >> AConfig.js
+          printf "const WEBHOOK_SECRET = \"${{ secrets.WEBHOOK_SECRET }}\";\n" >> AConfig.js
 
       - name: Set up authentication
         env:
@@ -66,5 +64,7 @@ jobs:
           workingDirectory: worker
           secrets: |
             APPS_SCRIPT_URL
+            WEBHOOK_SECRET
         env:
           APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}

@@ -10,6 +10,10 @@ function requireRowForCallback(chatId, emailMessageId) {
   return rowNumber;
 }
 
+function readPersonalRow(rowNumber) {
+  return getSpreadsheet().getSheets()[0].getRange(rowNumber, 1, 1, PERSONAL_COL_COUNT).getValues()[0];
+}
+
 // Method to handle messages sent to the Telegram bot.
 function handleMessage(update) {
   if (update.message) {
@@ -75,10 +79,8 @@ function handleMessage(update) {
           sendTelegramMessage(chatId, "❌ *Unknown command!*\n\nUse /help to see available commands.");
       }
     }
-    // Handle menu button clicks
-    else if (messageText === " Recent Transactions") {
-      showRecentTransactions(chatId, "/recent");
-    } else {
+    // Plain text: reply flows first, then pending-input flows, then SMS paste.
+    else {
       // Reply-to-bot for /ask follow-up: if this message is replying to a
       // question the bot posted via the ask_user tool, resume that convo
       // directly. Active convos are TTL'd (~10min) and single-use, so a
@@ -98,14 +100,14 @@ function handleMessage(update) {
       // Pending 🏷 Tag input (user tapped the Tag pill, we stashed
       // <emailMsgId>|<tgMsgId>; now they're typing the brand name).
       var userId = update.message.from.id;
-      var props = PropertiesService.getScriptProperties();
-      var pendingTagStash = props.getProperty("pending_tag_" + userId);
+      var pendingTagKey = "pending_tag_" + userId;
+      var pendingTagStash = getPendingInput(pendingTagKey);
       if (pendingTagStash) {
-        var stashParts = pendingTagStash.split("|");
+        var stashParts = String(pendingTagStash).split("|");
         var pendingTagMsgId = stashParts[0];
         var pendingTgMsgId = stashParts[1] ? parseInt(stashParts[1], 10) : null;
         if (/^\/cancel\b/i.test(messageText.trim())) {
-          props.deleteProperty("pending_tag_" + userId);
+          clearPendingInput(pendingTagKey);
           sendTelegramMessage(chatId, "↩️ *Tag unchanged.*", { parse_mode: "Markdown" });
           return;
         }
@@ -121,10 +123,12 @@ function handleMessage(update) {
           );
           return;
         }
-        props.deleteProperty("pending_tag_" + userId);
+        clearPendingInput(pendingTagKey);
         applyMerchantTag(chatId, pendingTagMsgId, newTag, pendingTgMsgId);
         return;
       }
+
+      if (update.message.chat.type === "private") handleSmsPaste(chatId, messageText);
     }
   }
 }
@@ -163,17 +167,11 @@ function dispatchGroupCommand(command, update) {
   }
 }
 
-// Shared input cap for tag values. Mirrors TelegramUtils.TAG_MAX_LEN so a typed
-// tag never overflows the button pill (both pieces are deliberately kept the
-// same constant value; duplicated to keep the two files independent).
-var TAG_MAX_LEN = 18;
-
 // Write a user-supplied tag for the merchant on this transaction row.
-//   1. Update the row's MERCHANT column so this card now reads as the tag.
-//   2. Update the MerchantResolution row whose pattern equals the row's
-//      pre-update merchant — so future emails with the same raw payee
-//      string auto-resolve to this tag. If no such row exists (rare —
-//      addNewMerchantIfNeeded runs at save time), append one.
+//   1. Remember it in the user's MyMerchants tab against the row's current
+//      merchant (and its digit-stripped variant, so numbered payees like
+//      "bundl tech 99999" also match) — future transactions auto-tag.
+//   2. Update the row's MERCHANT column so this card now reads as the tag.
 //   3. Refresh the original card's keyboard so the 🏷 pill shows the new
 //      tag in-place (no extra confirmation message).
 function applyMerchantTag(chatId, emailMessageId, newTag, telegramMessageId) {
@@ -182,50 +180,43 @@ function applyMerchantTag(chatId, emailMessageId, newTag, telegramMessageId) {
     sendTelegramMessage(chatId, "❌ *Transaction not found.*", { parse_mode: "Markdown" });
     return;
   }
-  var sheet = getSpreadsheet().getSheets()[0];
-  var currentMerchant = (sheet.getRange(rowNumber, MERCHANT_COLUMN).getValue() || "").toString().trim();
+  var rowData = readPersonalRow(rowNumber);
+  var currentMerchant = (rowData[MERCHANT_COLUMN - 1] || "").toString().trim();
 
-  // Make sure a MerchantResolution row exists for the current merchant,
-  // then point its Resolved column at the new tag. Also generalize the
-  // pattern — strip trailing transaction-id digits so future numbered
-  // variants ("bundl tech 99999") auto-resolve to the same tag too.
-  // addNewMerchantIfNeeded is a no-op if the row already exists;
-  // setMerchantResolution succeeds either way.
+  updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, newTag, currentMerchant);
+  rowData[MERCHANT_COLUMN - 1] = newTag;
+
+  if (telegramMessageId) {
+    editTelegramReplyMarkup(chatId, telegramMessageId, buildKeyboardFromRowData(chatId, emailMessageId, rowData));
+  } else {
+    sendTelegramMessage(chatId, "✅ *Tagged as " + escapeMarkdown(newTag) + ".* Future transactions will auto-tag.", {
+      parse_mode: "Markdown"
+    });
+  }
+
   if (currentMerchant) {
     var pattern = shortenMerchantPattern(currentMerchant);
-    if (pattern && pattern !== currentMerchant) {
-      addNewMerchantIfNeeded(pattern);
-      setMerchantResolution(pattern, newTag);
-    }
-    addNewMerchantIfNeeded(currentMerchant);
-    setMerchantResolution(currentMerchant, newTag);
+    if (pattern && pattern !== currentMerchant) setMyMerchant(pattern, { name: newTag });
+    setMyMerchant(currentMerchant, { name: newTag });
   }
+}
 
-  // Reflect the tag on this row immediately so /recent and /ask see it.
-  updateGoogleSheetCellWithFeedback(rowNumber, MERCHANT_COLUMN, newTag, currentMerchant);
-
-  // Refresh the original card's keyboard so the 🏷 pill now reads as the
-  // new tag. No new confirmation message — the in-place change is the ack.
-  // We can't editMessageText without the card body, and we don't have it
-  // here, so use editMessageReplyMarkup instead (keyboard-only edit).
-  if (telegramMessageId) {
-    var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
-    var newKb = buildKeyboardForRow(
-      chatId,
-      emailMessageId,
-      newTag,
-      rowData[CATEGORY_COLUMN - 1],
-      rowData[GROUP_REF_COLUMN - 1]
-    );
-    editTelegramReplyMarkup(chatId, telegramMessageId, newKb);
-    return;
+// Default keyboard for a txn card given its sheet row:
+//   review rows      → ✅ Save / 🔄 Re-read / ✖ Discard
+//   split rows       → "↩️ Make personal again" undo keyboard
+//   everything else  → Level 0 (group parents + pills)
+function buildKeyboardFromRowData(chatId, emailMessageId, rowData) {
+  var groupRef = rowData[GROUP_REF_COLUMN - 1];
+  if (rowData[STATUS_COLUMN - 1] === TXN_STATUS_REVIEW) {
+    return buildReviewKeyboard(emailMessageId, canRereadRow(rowData[PARSED_BY_COLUMN - 1], groupRef));
   }
-
-  // Fallback (no telegramMessageId stashed): keep the old behavior of
-  // sending a confirmation message. Shouldn't fire in practice.
-  sendTelegramMessage(chatId, "✅ *Tagged as " + escapeMarkdown(newTag) + ".* Future transactions will auto-tag.", {
-    parse_mode: "Markdown"
-  });
+  return buildKeyboardForRow(
+    chatId,
+    emailMessageId,
+    rowData[MERCHANT_COLUMN - 1],
+    rowData[CATEGORY_COLUMN - 1],
+    groupRef
+  );
 }
 
 // Pick the correct default keyboard for a txn row. Post-split rows (those
@@ -363,8 +354,7 @@ function handleCallbackQuery(update) {
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
 
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
+      var rowData = readPersonalRow(rowNumber);
       var catList = getCategoryListForType(rowData[TRANSACTION_TYPE_COLUMN - 1]);
 
       if (isNaN(categoryIndex) || categoryIndex < 0 || categoryIndex >= catList.length) {
@@ -382,22 +372,14 @@ function handleCallbackQuery(update) {
         return;
       }
 
-      // Silently teach the bot: next time this merchant shows up, default to
-      // the same category. No extra prompt — the explicit per-row tap is also
-      // the implicit "this is what I mean for this merchant" signal.
-      if (currentMerchant) setCategoryOverride(currentMerchant, newCategory);
-
       // Swap back to the default keyboard so the 📂 pill now reads the new
-      // category. No "✅ Updated" message — the in-place pill update is the
-      // ack.
-      var newKb = buildKeyboardForRow(
-        chatId,
-        emailMessageId,
-        currentMerchant,
-        newCategory,
-        rowData[GROUP_REF_COLUMN - 1]
-      );
-      editTelegramReplyMarkup(chatId, telegramMessageId, newKb);
+      // category — the in-place pill update is the ack.
+      rowData[CATEGORY_COLUMN - 1] = newCategory;
+      editTelegramReplyMarkup(chatId, telegramMessageId, buildKeyboardFromRowData(chatId, emailMessageId, rowData));
+
+      // Then teach this user's future transactions (after the edit, so the
+      // write doesn't delay the visible update).
+      if (currentMerchant) setMyMerchant(currentMerchant, { category: newCategory });
       return;
     }
 
@@ -412,8 +394,7 @@ function handleCallbackQuery(update) {
       var sheet = getSpreadsheet().getSheets()[0];
       var currentTag = (sheet.getRange(rowNumber, MERCHANT_COLUMN).getValue() || "").toString().trim();
       var userIdTag = update.callback_query.from.id;
-      var propsTag = PropertiesService.getScriptProperties();
-      propsTag.setProperty("pending_tag_" + userIdTag, emailMessageId + "|" + telegramMessageId);
+      setPendingInput("pending_tag_" + userIdTag, emailMessageId + "|" + telegramMessageId);
       var prompt = currentTag
         ? "🏷 *Tag merchant*\nCurrently tagged as *" +
           escapeMarkdown(currentTag) +
@@ -430,47 +411,54 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    // Handle "❓" help-menu open. Swaps the action row to the help menu
-    // (Report + Delete, with a Back).
+    // ⋯ overflow menu. Re-read only for parser-read rows; Delete hidden on
+    // split rows (undo the split first so group balances stay right).
     if (action === "help") {
-      editTelegramReplyMarkup(chatId, telegramMessageId, buildHelpMenuKeyboard(callbackPayload));
+      var helpRow = findRowByColumnValue(MESSAGE_ID_COLUMN, callbackPayload);
+      var helpOpts = {};
+      if (helpRow > 0) {
+        var helpData = readPersonalRow(helpRow);
+        var helpGroupRef = helpData[GROUP_REF_COLUMN - 1];
+        helpOpts = {
+          canReread: canRereadRow(helpData[PARSED_BY_COLUMN - 1], helpGroupRef),
+          canDelete: !helpGroupRef
+        };
+      }
+      editTelegramReplyMarkup(chatId, telegramMessageId, buildHelpMenuKeyboard(callbackPayload, helpOpts));
       return;
     }
 
-    // Handle "← Back" / "← Cancel" from the picker / help / confirm menus.
-    // Re-derives the default keyboard from the row (so any pill changes the
-    // user made via the picker are reflected).
+    // "← Back" / "← Cancel" from the picker / menu / confirm keyboards.
+    // Re-derives the default keyboard from the row so pill changes show.
     if (action === "back") {
       var emailMessageId = callbackPayload;
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
-      var newKb = buildKeyboardForRow(
+      editTelegramReplyMarkup(
         chatId,
-        emailMessageId,
-        rowData[MERCHANT_COLUMN - 1],
-        rowData[CATEGORY_COLUMN - 1],
-        rowData[GROUP_REF_COLUMN - 1]
+        telegramMessageId,
+        buildKeyboardFromRowData(chatId, emailMessageId, readPersonalRow(rowNumber))
       );
-      editTelegramReplyMarkup(chatId, telegramMessageId, newKb);
       return;
     }
 
-    // Handle delete request: swap to a two-step confirm. The actual delete
-    // happens on `delyes` so an accidental tap from the help menu is
-    // recoverable.
+    // Delete request: swap to a two-step confirm; the delete happens on
+    // `delyes` so an accidental tap is recoverable.
     if (action === "del") {
       editTelegramReplyMarkup(chatId, telegramMessageId, buildDeleteConfirmKeyboard(callbackPayload));
       return;
     }
 
-    // Handle delete confirm: delyes_{messageId}. Executes the deletion,
-    // tombstones the card body, drops the keyboard.
     if (action === "delyes") {
       var emailMessageId = callbackPayload;
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
+      var delData = readPersonalRow(rowNumber);
+      if (delData[GROUP_REF_COLUMN - 1]) {
+        sendTelegramMessage(chatId, "↩️ *Make it personal again first, then delete.*", { parse_mode: "Markdown" });
+        editTelegramReplyMarkup(chatId, telegramMessageId, buildKeyboardFromRowData(chatId, emailMessageId, delData));
+        return;
+      }
 
       deleteSheetRow(rowNumber);
 
@@ -481,22 +469,19 @@ function handleCallbackQuery(update) {
       return;
     }
 
-    // Handle "⚠ Report error" — DM the admin with row context so we can
-    // investigate the parser miss, then swap the keyboard to a "reported"
-    // acknowledgement with a Back so the user isn't stuck.
+    // "⚠️ Report error" — DM the admin with row context, log it against the
+    // template, and ack in place with a Back.
     if (action === "report") {
       var emailMessageId = callbackPayload;
       var rowNumber = requireRowForCallback(chatId, emailMessageId);
       if (rowNumber < 0) return;
-      var sheet = getSpreadsheet().getSheets()[0];
-      var rowData = sheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
+      var rowData = readPersonalRow(rowNumber);
       var reportMerchant = rowData[MERCHANT_COLUMN - 1] || "(unknown)";
       var reportAmount = rowData[AMOUNT_COLUMN - 1];
-      var reportCurrency = "INR"; // personal sheet has no currency column today
-      // Deep-link into the bot's inbox. Resolves for the admin (who's signed
-      // into the bot Gmail when investigating); useless for end users, which
-      // is why we no longer store it in the sheet.
-      var reportEmailLink = emailMessageId ? "https://mail.google.com/mail/u/0/#all/" + emailMessageId : "";
+      var reportCurrency = rowData[CURRENCY_COLUMN - 1] || "INR";
+      // Deep-link into the bot's inbox; only resolves for the admin.
+      var isSms = channelForMessageId(emailMessageId) === "sms";
+      var reportEmailLink = !isSms ? "https://mail.google.com/mail/u/0/#all/" + emailMessageId : "";
       var reportFrom = update.callback_query.from || {};
       var reportName = reportFrom.first_name || reportFrom.username || String(chatId);
       var adminBody =
@@ -514,21 +499,39 @@ function handleCallbackQuery(update) {
         " " +
         reportAmount +
         "\n" +
+        "parsed by: " +
+        escapeMarkdown(String(rowData[PARSED_BY_COLUMN - 1] || PARSED_BY_LLM)) +
+        "\n" +
         "msg id: " +
-        emailMessageId +
+        escapeMarkdown(emailMessageId) +
         (reportEmailLink ? "\n" + reportEmailLink : "");
       try {
         sendTelegramMessage(ADMIN_CHAT_ID, adminBody, { parse_mode: "Markdown", disable_web_page_preview: true });
       } catch (e) {
         console.error("[report] admin DM failed:", e && e.message);
       }
-      // Show ack in the help-menu shape (Back returns to default).
       editTelegramReplyMarkup(chatId, telegramMessageId, {
         inline_keyboard: [[{ text: "📩 Reported — thanks!", callback_data: "back_" + emailMessageId }]]
+      });
+      logParserEvent({
+        chatId: chatId,
+        channel: isSms ? "sms" : "email",
+        templateId: parserTemplateIdFrom(rowData[PARSED_BY_COLUMN - 1]) || PARSED_BY_LLM,
+        event: PARSER_EVENT.REPORT,
+        messageId: emailMessageId
       });
       return;
     }
 
+    if (action === "rr" || action === "rra" || action === "rrk") {
+      handleRereadCallback(action, chatId, telegramMessageId, callbackPayload);
+      return;
+    }
+
+    if (action === "rvok" || action === "rvno") {
+      handleReviewCallback(action, chatId, telegramMessageId, callbackPayload);
+      return;
+    }
     // Handle "💬 Follow up" — user wants to continue the /ask conversation
     // attached to this message. We swap the original message's keyboard
     // off (single-use) and send a fresh force_reply prompt; the convo is
@@ -572,8 +575,246 @@ function handleCallbackQuery(update) {
   }
 }
 
-// Function to show transaction summary. Optional limit param: /summary 10
-// Function to show recent transactions
+// ─── Re-read + review cards ──────────────────────────────────────────
+
+var REREAD_CACHE_TTL_SEC = 3600;
+
+function _rereadCacheKey(chatId, emailMessageId) {
+  return "rr:" + chatId + ":" + emailMessageId;
+}
+
+function _cardTextForRow(rowData) {
+  var tenant = getCurrentTenant();
+  var multiEmail = tenant && tenant.emails && tenant.emails.length > 1;
+  return getTransactionMessageAsString(
+    {
+      email_date: rowData[EMAIL_DATE_COLUMN - 1],
+      transaction_date: rowData[TRANSACTION_DATE_COLUMN - 1],
+      merchant: rowData[MERCHANT_COLUMN - 1],
+      amount: rowData[AMOUNT_COLUMN - 1],
+      currency: rowData[CURRENCY_COLUMN - 1],
+      transaction_type: rowData[TRANSACTION_TYPE_COLUMN - 1],
+      status: rowData[STATUS_COLUMN - 1]
+    },
+    multiEmail ? rowData[USER_COLUMN - 1] : null
+  );
+}
+
+// Rewrite the card body (plus an optional extra line) and its keyboard.
+function _editCard(chatId, telegramMessageId, rowData, extraLine, keyboard) {
+  sendTelegramMessage(chatId, _cardTextForRow(rowData) + (extraLine ? "\n" + extraLine : ""), {
+    parse_mode: "Markdown",
+    message_id: telegramMessageId,
+    reply_markup: keyboard
+  });
+}
+
+function _rowExtraction(rowData) {
+  return {
+    amount: Number(rowData[AMOUNT_COLUMN - 1]) || 0,
+    currency: rowData[CURRENCY_COLUMN - 1] || "INR",
+    transaction_type: rowData[TRANSACTION_TYPE_COLUMN - 1],
+    transaction_date: toIsoDate(rowData[TRANSACTION_DATE_COLUMN - 1])
+  };
+}
+
+function _describeChanges(fresh, changed) {
+  var parts = [];
+  if (changed.indexOf("amount") !== -1 || changed.indexOf("currency") !== -1) {
+    parts.push(currencySymbol(fresh.currency) + formatAmount(fresh.amount));
+  }
+  if (changed.indexOf("transaction_date") !== -1) {
+    var p = fresh.transaction_date.split("-");
+    parts.push(Utilities.formatDate(new Date(+p[0], +p[1] - 1, +p[2]), Session.getScriptTimeZone(), "d MMM yyyy"));
+  }
+  if (changed.indexOf("transaction_type") !== -1) parts.push(fresh.transaction_type);
+  return parts.join(" · ");
+}
+
+function _rereadSourceText(emailMessageId, rowData) {
+  if (channelForMessageId(emailMessageId) === "sms") return String(rowData[SOURCE_TEXT_COLUMN - 1] || "");
+  try {
+    var msg = GmailApp.getMessageById(emailMessageId);
+    return msg ? msg.getPlainBody() : "";
+  } catch (e) {
+    console.warn("[reread] email fetch failed: " + e.message);
+    return "";
+  }
+}
+
+// rr  — run the LLM on the original text, show only the fields it reads
+//       differently, and wait for ✅ Use this / ↩ Keep original.
+// rra — apply the cached LLM read.
+// rrk — keep the parser's read.
+// A row can be re-read once; any outcome stamps REREAD_MARKER (or "llm").
+function handleRereadCallback(action, chatId, telegramMessageId, emailMessageId) {
+  var rowNumber = requireRowForCallback(chatId, emailMessageId);
+  if (rowNumber < 0) return;
+  var sheet = getSpreadsheet().getSheets()[0];
+  var rowData = readPersonalRow(rowNumber);
+  var parsedBy = String(rowData[PARSED_BY_COLUMN - 1] || "");
+  var evt = {
+    chatId: chatId,
+    channel: channelForMessageId(emailMessageId),
+    templateId: parserTemplateIdFrom(parsedBy),
+    messageId: emailMessageId
+  };
+  var cache = CacheService.getScriptCache();
+  var cacheKey = _rereadCacheKey(chatId, emailMessageId);
+
+  function restoreKeyboard() {
+    editTelegramReplyMarkup(chatId, telegramMessageId, buildKeyboardFromRowData(chatId, emailMessageId, rowData));
+  }
+  function markReread() {
+    if (parsedBy.indexOf(REREAD_MARKER) !== -1 || parsedBy === PARSED_BY_LLM) return;
+    parsedBy = parsedBy + REREAD_MARKER;
+    sheet.getRange(rowNumber, PARSED_BY_COLUMN).setValue(parsedBy);
+    rowData[PARSED_BY_COLUMN - 1] = parsedBy;
+  }
+
+  if (action === "rr") {
+    if (!canRereadRow(parsedBy, rowData[GROUP_REF_COLUMN - 1])) {
+      sendTelegramMessage(
+        chatId,
+        rowData[GROUP_REF_COLUMN - 1]
+          ? "↩️ *Make it personal again first, then re-read.*"
+          : "ℹ️ *Already re-read.* Use ⚠️ Report error if it's still wrong."
+      );
+      restoreKeyboard();
+      return;
+    }
+    editTelegramReplyMarkup(chatId, telegramMessageId, {
+      inline_keyboard: [[{ text: "⏳ Re-reading…", callback_data: "back_" + emailMessageId }]]
+    });
+    evt.event = PARSER_EVENT.REPARSE_REQUESTED;
+    logParserEvent(evt);
+
+    var source = _rereadSourceText(emailMessageId, rowData);
+    if (!source) {
+      sendTelegramMessage(chatId, "❌ *The original message isn't available any more.*");
+      restoreKeyboard();
+      return;
+    }
+    var llm = extractWithLLM(source, getMerchantResolutionsForTenant(), evt.channel);
+    if (!llm) {
+      sendTelegramMessage(chatId, "❌ *Couldn't re-read right now.* Try again in a bit.");
+      restoreKeyboard();
+      return;
+    }
+    if (llm.not_a_transaction) {
+      cache.put(cacheKey, JSON.stringify({ notTransaction: true }), REREAD_CACHE_TTL_SEC);
+      _editCard(chatId, telegramMessageId, rowData, "🔄 Re-read: not a transaction", {
+        inline_keyboard: [
+          [
+            { text: "🗑️ Delete", callback_data: "del_" + emailMessageId },
+            { text: "↩ Keep original", callback_data: "rrk_" + emailMessageId }
+          ]
+        ]
+      });
+      return;
+    }
+
+    var receivedAt = rowData[EMAIL_DATE_COLUMN - 1] || new Date();
+    var fresh = validateExtraction(llm, source, receivedAt).data;
+    var changed = diffExtractions(_rowExtraction(rowData), fresh);
+    if (changed.length === 0) {
+      markReread();
+      evt.event = PARSER_EVENT.REPARSE_SAME;
+      logParserEvent(evt);
+      _editCard(chatId, telegramMessageId, rowData, "🔄 _Re-read: same result_", {
+        inline_keyboard: [
+          [{ text: "⚠️ Still wrong? Report", callback_data: "report_" + emailMessageId }],
+          [{ text: "← Back", callback_data: "back_" + emailMessageId }]
+        ]
+      });
+      return;
+    }
+    var fields = {};
+    changed.forEach(function (f) {
+      fields[f] = fresh[f];
+    });
+    cache.put(cacheKey, JSON.stringify({ fields: fields, changed: changed }), REREAD_CACHE_TTL_SEC);
+    _editCard(chatId, telegramMessageId, rowData, "🔄 Re-read: " + escapeMarkdown(_describeChanges(fresh, changed)), {
+      inline_keyboard: [
+        [
+          { text: "✅ Use this", callback_data: "rra_" + emailMessageId },
+          { text: "↩ Keep original", callback_data: "rrk_" + emailMessageId }
+        ]
+      ]
+    });
+    return;
+  }
+
+  var pendingRaw = cache.get(cacheKey);
+  cache.remove(cacheKey);
+
+  if (action === "rra") {
+    var pending = pendingRaw ? JSON.parse(pendingRaw) : null;
+    if (!pending || !pending.fields) {
+      sendTelegramMessage(chatId, "⌛ *That re-read expired.* Tap ⋯ → 🔄 Re-read to try again.");
+      restoreKeyboard();
+      return;
+    }
+    var columnFor = {
+      amount: AMOUNT_COLUMN,
+      currency: CURRENCY_COLUMN,
+      transaction_type: TRANSACTION_TYPE_COLUMN,
+      transaction_date: TRANSACTION_DATE_COLUMN
+    };
+    Object.keys(pending.fields).forEach(function (f) {
+      sheet.getRange(rowNumber, columnFor[f]).setValue(pending.fields[f]);
+      rowData[columnFor[f] - 1] = pending.fields[f];
+    });
+    if (pending.fields.transaction_type) {
+      var validCats = getCategoryListForType(pending.fields.transaction_type);
+      if (validCats.indexOf(rowData[CATEGORY_COLUMN - 1]) === -1) {
+        var newCat = guessCategory(rowData[MERCHANT_COLUMN - 1], pending.fields.transaction_type) || "Uncategorized";
+        sheet.getRange(rowNumber, CATEGORY_COLUMN).setValue(newCat);
+        rowData[CATEGORY_COLUMN - 1] = newCat;
+      }
+    }
+    // Accepting the LLM read also confirms a review row.
+    sheet.getRange(rowNumber, PARSED_BY_COLUMN).setValue(PARSED_BY_LLM);
+    sheet.getRange(rowNumber, STATUS_COLUMN).setValue("");
+    rowData[PARSED_BY_COLUMN - 1] = PARSED_BY_LLM;
+    rowData[STATUS_COLUMN - 1] = "";
+    _editCard(chatId, telegramMessageId, rowData, "", buildKeyboardFromRowData(chatId, emailMessageId, rowData));
+
+    evt.event = PARSER_EVENT.REPARSE_ACCEPTED;
+    evt.fieldsChanged = pending.changed || Object.keys(pending.fields);
+    logParserEvent(evt);
+    checkParserAutoDisable(evt.templateId);
+    return;
+  }
+
+  // rrk
+  markReread();
+  _editCard(chatId, telegramMessageId, rowData, "", buildKeyboardFromRowData(chatId, emailMessageId, rowData));
+  evt.event = PARSER_EVENT.REPARSE_KEPT;
+  logParserEvent(evt);
+}
+
+// rvok — confirm a review row (it starts counting in stats/ask).
+// rvno — discard it (row deleted, card tombstoned).
+function handleReviewCallback(action, chatId, telegramMessageId, emailMessageId) {
+  var rowNumber = requireRowForCallback(chatId, emailMessageId);
+  if (rowNumber < 0) return;
+  var rowData = readPersonalRow(rowNumber);
+
+  if (action === "rvno") {
+    deleteSheetRow(rowNumber);
+    sendTelegramMessage(chatId, "✖ *Discarded*", { parse_mode: "Markdown", message_id: telegramMessageId });
+    return;
+  }
+
+  if (rowData[STATUS_COLUMN - 1] === TXN_STATUS_REVIEW) {
+    getSpreadsheet().getSheets()[0].getRange(rowNumber, STATUS_COLUMN).setValue("");
+    rowData[STATUS_COLUMN - 1] = "";
+    markTenantActivity(chatId);
+  }
+  _editCard(chatId, telegramMessageId, rowData, "", buildKeyboardFromRowData(chatId, emailMessageId, rowData));
+}
+
 // Supports: /recent, /recent 10, /recent rishik, /recent 10 rishik
 function showRecentTransactions(chatId, messageText) {
   try {
@@ -633,6 +874,13 @@ function buildRecentTransactionsMessage(limit, userFilter) {
 
   // Skip header row
   data.shift();
+
+  // Unconfirmed review rows don't count anywhere until the user saves them.
+  if (!isGroup) {
+    data = data.filter(function (row) {
+      return row[STATUS_COLUMN - 1] !== TXN_STATUS_REVIEW;
+    });
+  }
 
   // Group sheet stores one row per share-holder. Keep only the first row
   // per Tx ID so /recent lists distinct transactions, not the share ledger.
@@ -775,7 +1023,7 @@ function handleAskCommand(chatId, messageText) {
     // /register-without-address flow. Plain text (no parse_mode) — keeps the
     // prompt bullet-proof against future markdown-special chars in the copy.
     if (!question) {
-      PropertiesService.getScriptProperties().setProperty("pending_ask_" + chatId, "1");
+      setPendingInput("pending_ask_" + chatId, "1");
       sendTelegramMessage(
         chatId,
         "❓ What would you like to know about your spending?\n\n" +
@@ -794,7 +1042,7 @@ function handleAskCommand(chatId, messageText) {
 
     // Direct /ask <question>: clear any stale pending-ask flag so a follow-up
     // plain message isn't accidentally consumed as another question.
-    PropertiesService.getScriptProperties().deleteProperty("pending_ask_" + chatId);
+    clearPendingInput("pending_ask_" + chatId);
     runAskFlow(chatId, question);
   } catch (e) {
     console.error("handleAskCommand failed:", e && e.message, e && e.stack);
@@ -807,10 +1055,9 @@ function handleAskCommand(chatId, messageText) {
 // Consume a plain-text reply when the user is mid-/ask flow. Returns true
 // if the message was consumed (and therefore handleMessage should stop).
 function handleAskQuestionReply(chatId, messageText) {
-  var props = PropertiesService.getScriptProperties();
   var key = "pending_ask_" + chatId;
-  if (!props.getProperty(key)) return false;
-  props.deleteProperty(key);
+  if (!getPendingInput(key)) return false;
+  clearPendingInput(key);
   var question = (messageText || "").trim();
   if (!question) {
     sendTelegramMessage(chatId, "❌ Empty question, /ask cancelled.");

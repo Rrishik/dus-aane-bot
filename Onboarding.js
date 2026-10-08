@@ -10,7 +10,7 @@
 
 function handleStartCommand(chatId, username) {
   var tenant = findTenantByChatId(chatId);
-  if (tenant && tenant.status === TENANT_STATUS.ACTIVE) {
+  if (isTenantUsable(tenant)) {
     handleHelpCommand(chatId, username);
     return;
   }
@@ -36,7 +36,7 @@ function handleStartCommand(chatId, username) {
 function handleRegisterCommand(chatId, username, messageText) {
   var parts = messageText.split(/\s+/);
   if (parts.length < 2) {
-    PropertiesService.getScriptProperties().setProperty("pending_register_" + chatId, "1");
+    setPendingInput("pending_register_" + chatId, "1");
     sendTelegramMessage(
       chatId,
       "📬 What's the Gmail address you'd like to forward bank emails from?\n\n_Reply with just the address, or send_ `/register your.email@gmail.com`.",
@@ -52,10 +52,9 @@ function handleRegisterCommand(chatId, username, messageText) {
  * Returns true if the message was consumed.
  */
 function handleRegisterEmailReply(chatId, username, messageText) {
-  var props = PropertiesService.getScriptProperties();
   var key = "pending_register_" + chatId;
-  if (!props.getProperty(key)) return false;
-  props.deleteProperty(key);
+  if (!getPendingInput(key)) return false;
+  clearPendingInput(key);
   registerEmailForChat(chatId, username, (messageText || "").trim());
   return true;
 }
@@ -80,7 +79,7 @@ function registerEmailForChat(chatId, username, rawEmail) {
   var currentTenant = findTenantByChatId(chatId);
   upsertPendingTenant(chatId, email, username || (currentTenant && currentTenant.name) || "");
 
-  if (currentTenant && currentTenant.status === TENANT_STATUS.ACTIVE) {
+  if (isTenantUsable(currentTenant)) {
     var updated = findTenantByChatId(chatId);
     sendTelegramMessage(
       chatId,
@@ -358,7 +357,7 @@ function activatePendingTenantForEmail(email) {
 
 function gateTenantForCommand(chatId) {
   var tenant = findTenantByChatId(chatId);
-  if (tenant && tenant.status === TENANT_STATUS.ACTIVE) return true;
+  if (isTenantUsable(tenant)) return true;
   sendTelegramMessage(
     chatId,
     tenant && tenant.status === TENANT_STATUS.PENDING

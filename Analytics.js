@@ -12,6 +12,10 @@ function getAllTransactions() {
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
   data.shift();
+  // Review rows are unconfirmed reads — they count only after ✅ Save.
+  data = data.filter(function (row) {
+    return row[STATUS_COLUMN - 1] !== TXN_STATUS_REVIEW;
+  });
 
   var shareByRef = _buildPayerShareMap(data);
 
@@ -108,6 +112,16 @@ function filterByMonth(transactions, year, month) {
   });
 }
 
+// Consumption only: debits minus money that just moves between your own
+// pots (card bill payments, transfers out, investments).
+function isSpendTransaction(t) {
+  return isDebit(t.type) && NON_SPEND_CATEGORIES.indexOf(t.category) === -1;
+}
+
+function isCreditTransaction(t) {
+  return isCredit(t.type);
+}
+
 // ─── Weekly Analytics ────────────────────────────────────────────────
 
 // Rolling 7-day window ending yesterday. Day-of-week independent so the
@@ -127,9 +141,7 @@ function getWeeklyAnalytics(startDate, endDate) {
   var txns = filterByDateRange(all, startDate, endDate);
   if (txns.length === 0) return null;
 
-  var debits = txns.filter(function (t) {
-    return t.type === "Debit";
-  });
+  var debits = txns.filter(isSpendTransaction);
 
   var spentByCurrency = sumByCurrency(debits);
 
@@ -144,9 +156,7 @@ function getWeeklyAnalytics(startDate, endDate) {
   // before startDate, which is exactly the previous rolling window.
   var prev = weekRangeFor(startDate);
   var prevTxns = filterByDateRange(all, prev.start, prev.end);
-  var prevDebits = prevTxns.filter(function (t) {
-    return t.type === "Debit";
-  });
+  var prevDebits = prevTxns.filter(isSpendTransaction);
   var prevSpentByCurrency = sumByCurrency(prevDebits);
 
   var topTransactions = debits
@@ -290,12 +300,8 @@ function getWeeklyTrendsAnalytics(numWeeks) {
 
 // Shared bucket builder for monthly + weekly trends.
 function buildTrendBucket(txns, label) {
-  var debits = txns.filter(function (t) {
-    return t.type === "Debit";
-  });
-  var credits = txns.filter(function (t) {
-    return t.type === "Credit";
-  });
+  var debits = txns.filter(isSpendTransaction);
+  var credits = txns.filter(isCreditTransaction);
 
   var categorySpend = {};
   debits.forEach(function (t) {
@@ -328,7 +334,7 @@ function formatTrendsMessage(buckets, opts) {
   // INR debits with bar chart. Compact "12.3K" form — the bar already
   // conveys magnitude. ₹ is anchored to a fixed column with the amount
   // left-flowing after; trailing pad keeps the closing backtick uniform.
-  msg += "🔴 *Debits (INR):*\n";
+  msg += "🔴 *Spend (INR):*\n";
   var inrAmounts = buckets.map(function (b) {
     return formatAmountCompact(b.debitByCurrency["INR"] || 0);
   });
@@ -351,7 +357,7 @@ function formatTrendsMessage(buckets, opts) {
     });
   });
   if (hasOtherDebits) {
-    msg += "\n🌍 *Other Currency Debits:*\n";
+    msg += "\n🌍 *Other Currency Spend:*\n";
     buckets.forEach(function (b) {
       var others = Object.keys(b.debitByCurrency).filter(function (c) {
         return c !== "INR" && b.debitByCurrency[c] > 0;

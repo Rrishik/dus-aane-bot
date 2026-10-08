@@ -11,7 +11,6 @@ const SYMBOLS = [
   "executeExtractionTool",
   "getBootstrapCutoffDate",
   "isAlreadyProcessed",
-  "handleAIResponse",
   "saveTransaction",
   "processSingleEmail",
   "backfillTransactions",
@@ -127,7 +126,23 @@ function baseStubs(overrides) {
       IGNORE_SUBJECTS: [],
       BANK_FROM_DOMAINS: ["bank.test"],
       GmailApp: { getMessageById: (id) => fakeMessage(id) },
-      getMerchantResolutions: vi.fn(() => [])
+      getMerchantResolutions: vi.fn(() => []),
+      getMerchantResolutionsForTenant: vi.fn(() => []),
+      getCategoryListForType: (t) =>
+        /credit/i.test(String(t || ""))
+          ? ["Salary", "Refund"]
+          : ["Shopping", "Groceries", "Food & Dining", "Healthcare"],
+      getParserMode: vi.fn(() => "shadow"),
+      isParserTemplateDisabled: vi.fn(() => false),
+      logParserEvent: vi.fn(),
+      PARSER_EVENT: {
+        SAVED: "saved",
+        SHADOW_MATCH: "shadow_match",
+        SHADOW_MISMATCH: "shadow_mismatch",
+        SHADOW_NOMATCH: "shadow_nomatch",
+        SHADOW_EXTRA: "shadow_extra"
+      },
+      markTenantActivity: vi.fn()
     },
     overrides || {}
   );
@@ -135,7 +150,7 @@ function baseStubs(overrides) {
 }
 
 function load(stubs) {
-  return loadAppsScript(["TransactionProcessor.js"], SYMBOLS, stubs);
+  return loadAppsScript(["BankTemplates.js", "Parser.js", "TransactionProcessor.js"], SYMBOLS, stubs);
 }
 
 // ── getExtractionSystemPrompt ───────────────────────────────────────────────
@@ -249,14 +264,14 @@ describe("isAlreadyProcessed", () => {
 
 // ── handleAIResponse ────────────────────────────────────────────────────────
 
-describe("handleAIResponse", () => {
-  function call(api, raw, extra) {
-    var msg = fakeMessage("msg-1");
-    return api.handleAIResponse(
-      raw,
-      new Date("2026-05-01T10:00:00Z"),
+describe("processSingleEmail — LLM result handling", () => {
+  var BODY = "Rs 450.00 debited from A/c XX1234 at SWIGGY on 01-05-26.";
+
+  function call(env, api, raw, extra) {
+    env.stubs.callAIWithTools.mockReturnValue({ choices: [{ message: { content: raw } }] });
+    return api.processSingleEmail(
+      fakeMessage("msg-1", { body: (extra && extra.body) || BODY }),
       "a@x.com",
-      msg,
       (extra && extra.silent) || false,
       (extra && extra.resolutions) || []
     );
@@ -265,60 +280,39 @@ describe("handleAIResponse", () => {
   it("strips ```json fences before parsing", () => {
     var env = baseStubs();
     var api = load(env.stubs);
-    var raw = '```json\n{"merchant":"Swiggy","amount":450,"transaction_type":"Debit"}\n```';
-
-    var out = call(api, raw);
+    var out = call(env, api, '```json\n{"merchant":"Swiggy","amount":450,"transaction_type":"Debit"}\n```');
     expect(out.saved).toBe(true);
     expect(env.appended).toHaveLength(1);
   });
 
-  it("not_a_transaction → DMs skip notice and does NOT save", () => {
+  it("not_a_transaction → no save, no 'skipped' DM, still labels the message", () => {
     var env = baseStubs();
     var api = load(env.stubs);
-
-    var out = call(api, '{"not_a_transaction":true,"reason":"OTP code"}');
+    var out = call(env, api, '{"not_a_transaction":true,"reason":"OTP code"}');
     expect(out.saved).toBe(false);
     expect(env.appended).toHaveLength(0);
-    expect(env.sent[0].text).toMatch(/skipped/);
-    expect(env.sent[0].text).toMatch(/OTP code/);
-    // Single-forwarder tenant (personal chat) → no 👤 attribution line;
-    // it'd be the same name on every skip notice and just adds noise.
-    expect(env.sent[0].text).not.toMatch(/By:/);
-  });
-
-  it("not_a_transaction on multi-forwarder tenant → includes 👤 By line", () => {
-    var env = baseStubs({
-      findTenantByChatId: () => ({ chat_id: "111", emails: ["a@x.com", "b@x.com"] })
-    });
-    var api = load(env.stubs);
-
-    var out = call(api, '{"not_a_transaction":true,"reason":"OTP code"}');
-    expect(out.saved).toBe(false);
-    expect(env.sent[0].text).toMatch(/By:.*a/);
-  });
-
-  it("not_a_transaction with silent=true → no Telegram DM, still marks processed", () => {
-    var env = baseStubs();
-    var api = load(env.stubs);
-
-    var out = call(api, '{"not_a_transaction":true}', { silent: true });
-    expect(out.saved).toBe(false);
     expect(env.sent).toEqual([]);
+    expect(env.stubs.Gmail.Users.Messages.modify).toHaveBeenCalled();
   });
 
-  it("success → resolves the merchant + registers raw + saves with full row", () => {
+  it("success → resolves the merchant, stores parser metadata, never pools the raw merchant", () => {
     var env = baseStubs({
       resolveMerchant: vi.fn(() => ({ merchant: "Swiggy", category: "Food & Dining" }))
     });
     var api = load(env.stubs);
-
-    var raw = '{"merchant":"swiggy bangalore","amount":450,"transaction_type":"Debit"}';
-    var out = call(api, raw, { resolutions: [{}] });
+    var out = call(env, api, '{"merchant":"swiggy bangalore","amount":450,"transaction_type":"Debit"}', {
+      resolutions: [{}]
+    });
 
     expect(out.saved).toBe(true);
     expect(env.stubs.resolveMerchant).toHaveBeenCalledWith("swiggy bangalore", [{}]);
-    expect(env.stubs.addNewMerchantIfNeeded).toHaveBeenCalledWith("swiggy bangalore");
-    expect(env.appended[0][2]).toBe("Swiggy"); // resolved merchant
+    expect(env.stubs.addNewMerchantIfNeeded).not.toHaveBeenCalled();
+    var row = env.appended[0];
+    expect(row).toHaveLength(14);
+    expect(row[2]).toBe("Swiggy");
+    expect(row[11]).toBe("llm"); // Parsed By
+    expect(row[12]).toBe(""); // Source Text only stored for SMS
+    expect(row[13]).toBe(""); // Status: confirmed
   });
 
   it("uses resolved category when AI returned Uncategorized", () => {
@@ -326,41 +320,138 @@ describe("handleAIResponse", () => {
       resolveMerchant: vi.fn(() => ({ merchant: "Swiggy", category: "Food & Dining" }))
     });
     var api = load(env.stubs);
-
-    var raw = '{"merchant":"swiggy","amount":450,"category":"Uncategorized","transaction_type":"Debit"}';
-    var out = call(api, raw, { resolutions: [{}] });
-    expect(out.saved).toBe(true);
+    call(env, api, '{"merchant":"swiggy","amount":450,"category":"Uncategorized","transaction_type":"Debit"}', {
+      resolutions: [{}]
+    });
     expect(env.appended[0][4]).toBe("Food & Dining");
   });
 
-  it("keeps AI's explicit category over the resolved default", () => {
+  it("keeps AI's explicit category over a shared default", () => {
     var env = baseStubs({
       resolveMerchant: vi.fn(() => ({ merchant: "Swiggy", category: "Food & Dining" }))
     });
     var api = load(env.stubs);
-
-    var raw = '{"merchant":"swiggy","amount":450,"category":"Groceries","transaction_type":"Debit"}';
-    var out = call(api, raw, { resolutions: [{}] });
-    expect(out.saved).toBe(true);
+    call(env, api, '{"merchant":"swiggy","amount":450,"category":"Groceries","transaction_type":"Debit"}', {
+      resolutions: [{}]
+    });
     expect(env.appended[0][4]).toBe("Groceries");
+  });
+
+  it("the user's own category correction beats the AI's category", () => {
+    var env = baseStubs({
+      resolveMerchant: vi.fn(() => ({ merchant: "Swiggy", category: "Groceries", personalCategory: true }))
+    });
+    var api = load(env.stubs);
+    call(env, api, '{"merchant":"swiggy","amount":450,"category":"Food & Dining","transaction_type":"Debit"}', {
+      resolutions: [{}]
+    });
+    expect(env.appended[0][4]).toBe("Groceries");
+  });
+
+  it("ignores a resolved category that doesn't fit the transaction type", () => {
+    var env = baseStubs({
+      resolveMerchant: vi.fn(() => ({ merchant: "Swiggy", category: "Food & Dining", personalCategory: true }))
+    });
+    var api = load(env.stubs);
+    call(env, api, '{"merchant":"swiggy","amount":450,"category":"Refund","transaction_type":"Credit"}', {
+      resolutions: [{}],
+      body: "Refund of Rs 450.00 from SWIGGY credited on 01-05-26"
+    });
+    expect(env.appended[0][4]).toBe("Refund");
+  });
+
+  it("flags the row for review when the amount isn't in the email", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    call(env, api, '{"merchant":"Swiggy","amount":4500,"transaction_type":"Debit"}');
+    expect(env.appended[0][13]).toBe("review");
+    expect(env.stubs.sendTransactionMessage.mock.calls[0][0].status).toBe("review");
+  });
+
+  it("silent (backfill) saves never use review status — there's no card to confirm from", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    call(env, api, '{"merchant":"Swiggy","amount":4500,"transaction_type":"Debit"}', { silent: true });
+    expect(env.appended[0][13]).toBe("");
+    expect(env.stubs.sendTransactionMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the email date when the AI date is missing or out of window", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    call(env, api, '{"merchant":"Swiggy","amount":450,"transaction_type":"Debit","transaction_date":"N/A"}');
+    expect(env.appended[0][1]).toBe("2026-05-01");
   });
 
   it("returns saved=false when the text doesn't start with {", () => {
     var env = baseStubs();
     var api = load(env.stubs);
-
-    var out = call(api, "Sorry, I cannot extract this.");
-    expect(out.saved).toBe(false);
+    expect(call(env, api, "Sorry, I cannot extract this.").saved).toBe(false);
     expect(env.appended).toEqual([]);
   });
 
   it("returns saved=false when JSON parsing throws", () => {
     var env = baseStubs();
     var api = load(env.stubs);
-
-    var out = call(api, '{"merchant": broken json');
-    expect(out.saved).toBe(false);
+    expect(call(env, api, '{"merchant": broken json').saved).toBe(false);
     expect(env.appended).toEqual([]);
+  });
+});
+
+describe("processSingleEmail — parser modes", () => {
+  var BODY = "Rs 450.00 debited from A/c XX1234 at SWIGGY on 01-05-26. Ref 628012345678";
+  var LLM = '{"merchant":"Swiggy","amount":450,"transaction_type":"Debit","transaction_date":"2026-05-01"}';
+
+  function run(mode, llmRaw) {
+    var env = baseStubs({ getParserMode: () => mode });
+    env.stubs.callAIWithTools.mockReturnValue({ choices: [{ message: { content: llmRaw || LLM } }] });
+    var api = load(env.stubs);
+    var out = api.processSingleEmail(fakeMessage("msg-P", { body: BODY }), "a@x.com", true, []);
+    return { env: env, out: out };
+  }
+
+  it("on: a confident parse saves without calling the LLM", () => {
+    var r = run("on");
+    expect(r.out.saved).toBe(true);
+    expect(r.env.stubs.callAIWithTools).not.toHaveBeenCalled();
+    expect(r.env.appended[0][3]).toBe(450);
+    expect(r.env.appended[0][4]).toBe("Food & Dining"); // keyword guess
+    expect(r.env.appended[0][11]).toBe("generic_v1");
+    expect(r.env.stubs.logParserEvent.mock.calls[0][0].event).toBe("saved");
+  });
+
+  it("on: a disabled template falls back to the LLM", () => {
+    var env = baseStubs({ getParserMode: () => "on", isParserTemplateDisabled: () => true });
+    env.stubs.callAIWithTools.mockReturnValue({ choices: [{ message: { content: LLM } }] });
+    var api = load(env.stubs);
+    api.processSingleEmail(fakeMessage("msg-P", { body: BODY }), "a@x.com", true, []);
+    expect(env.stubs.callAIWithTools).toHaveBeenCalledTimes(1);
+    expect(env.appended[0][11]).toBe("llm");
+  });
+
+  it("shadow: saves the LLM read and logs agreement", () => {
+    var r = run("shadow");
+    expect(r.env.stubs.callAIWithTools).toHaveBeenCalledTimes(1);
+    expect(r.env.appended[0][11]).toBe("llm");
+    var evt = r.env.stubs.logParserEvent.mock.calls[0][0];
+    expect(evt.event).toBe("shadow_match");
+    expect(evt.templateId).toBe("generic_v1");
+  });
+
+  it("shadow: logs which fields disagree", () => {
+    var r = run(
+      "shadow",
+      '{"merchant":"Swiggy","amount":45,"transaction_type":"Credit","transaction_date":"2026-05-01"}'
+    );
+    var evt = r.env.stubs.logParserEvent.mock.calls[0][0];
+    expect(evt.event).toBe("shadow_mismatch");
+    expect(evt.fieldsChanged).toEqual(["amount", "transaction_type"]);
+  });
+
+  it("off: never runs the parser or logs", () => {
+    var r = run("off");
+    expect(r.env.stubs.logParserEvent).not.toHaveBeenCalled();
+    expect(r.env.appended[0][11]).toBe("llm");
   });
 });
 
@@ -373,17 +464,19 @@ describe("saveTransaction", () => {
       new Date("2026-05-01T10:00:00Z"),
       (extra && extra.userEmail) || "alice@x.com",
       "msg-A",
-      (extra && extra.silent) || false
+      (extra && extra.silent) || false,
+      extra && extra.meta
     );
   }
 
-  it("writes all 9 cells with sensible defaults when data is sparse", () => {
+  it("writes all 14 cells with sensible defaults when data is sparse", () => {
     var env = baseStubs();
     var api = load(env.stubs);
 
     call(api, {});
     expect(env.appended).toHaveLength(1);
     var row = env.appended[0];
+    expect(row).toHaveLength(14);
     expect(row[1]).toBe("N/A"); // transaction_date default
     expect(row[2]).toBe("Unknown"); // merchant default
     expect(row[3]).toBe(0); // amount default
@@ -392,6 +485,14 @@ describe("saveTransaction", () => {
     expect(row[6]).toBe("alice"); // userEmail local-part
     expect(row[7]).toBe("msg-A"); // messageId
     expect(row[8]).toBe("INR"); // currency default
+    expect(row.slice(9)).toEqual(["", "", "", "", ""]);
+  });
+
+  it("writes parser metadata into the hidden columns", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    call(api, { amount: 1 }, { meta: { parsedBy: "tpl_v1", sourceText: "SMS", status: "review" } });
+    expect(env.appended[0].slice(11)).toEqual(["tpl_v1", "SMS", "review"]);
   });
 
   it("does NOT pass a displayUser to the notification when tenant has a single forwarder", () => {
@@ -424,7 +525,6 @@ describe("saveTransaction", () => {
     expect(env.appended).toHaveLength(1);
   });
 });
-
 // ── processSingleEmail ─────────────────────────────────────────────────────
 
 describe("processSingleEmail", () => {

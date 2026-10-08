@@ -1056,17 +1056,17 @@ describe("buildTransactionLevel0Keyboard", () => {
     );
   }
 
-  it("zero-group user gets just the pills + ❓ row (no group parents, no legacy Split)", () => {
+  it("zero-group user gets just the pills + ⋯ row (no group parents, no legacy Split)", () => {
     var { SpreadsheetApp } = setupRegistry([
       ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"]
     ]);
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
     var kb = buildTransactionLevel0Keyboard("111", "msg-X", "Swiggy", "Food & Dining");
     expect(kb.inline_keyboard.length).toBe(1);
-    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Swiggy ▾", "📂 Food ▾", "❓"]);
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Swiggy ▾", "📂 Food ▾", "⋯"]);
   });
 
-  it("user in ≥1 group: group parent row prepended, ❓ rides on pills row", () => {
+  it("user in ≥1 group: group parent row prepended, ⋯ rides on pills row", () => {
     var { SpreadsheetApp } = setupRegistry([
       ["111", "Alice", "", "s1", "active", "", "", "", "", 0, "personal", "", "INR"],
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
@@ -1074,10 +1074,10 @@ describe("buildTransactionLevel0Keyboard", () => {
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
     var kb = buildTransactionLevel0Keyboard("111", "msg-X", "Amazon", "Shopping");
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
-    // No standalone action row — ❓ rides on the pills row to stay inline
-    // with other buttons. Layout: [group parents…][🏷, 📂, ❓].
+    // No standalone action row — ⋯ rides on the pills row to stay inline
+    // with other buttons. Layout: [group parents…][🏷, 📂, ⋯].
     var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(pillsRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "❓"]);
+    expect(pillsRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "⋯"]);
   });
 
   it("renders Untagged / Uncategorized fallbacks when row pills are missing", () => {
@@ -1086,7 +1086,7 @@ describe("buildTransactionLevel0Keyboard", () => {
     ]);
     var { buildTransactionLevel0Keyboard } = load({ SpreadsheetApp, ADMIN_SHEET_ID });
     var kb = buildTransactionLevel0Keyboard("111", "msg-X");
-    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Untagged ▾", "📂 Uncategorized ▾", "❓"]);
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Untagged ▾", "📂 Uncategorized ▾", "⋯"]);
   });
 });
 
@@ -1403,11 +1403,11 @@ describe("handleGroupCallback dispatch", () => {
     var edit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(edit.payload.reply_markup);
     // First row should be the group parent button; pills row follows with
-    // ❓ inline. Legacy ✂️ Split is dropped when the user has at least one
+    // ⋯ inline. Legacy ✂️ Split is dropped when the user has at least one
     // group.
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
     var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(pillsRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "❓"]);
+    expect(pillsRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "⋯"]);
   });
 
   it("gbk:1 → returns from Level 2 to Level 1", () => {
@@ -1793,13 +1793,13 @@ describe("handleGroupCallback gsp execution", () => {
     expect(groupSend.payload.text).toContain("Bob");
 
     // DM keyboard was swapped via editMessageText. After gsp: undo on the
-    // top row (wide), pills + ❓ inline on the bottom row.
+    // top row (wide), pills + ⋯ inline on the bottom row.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1);
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Make personal again");
     expect(kb.inline_keyboard[0][0].callback_data).toBe("gun:msg-X");
     expect(kb.inline_keyboard[0].length).toBe(1);
-    expect(kb.inline_keyboard[1].map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "❓"]);
+    expect(kb.inline_keyboard[1].map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "⋯"]);
   });
 
   it("rejects re-split when GROUP_REF is already set, makes no writes", () => {
@@ -2036,14 +2036,14 @@ describe("handleGroupCallback gun execution (undo)", () => {
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_REF_COLUMN).getValue()).toBe("");
     expect(fix.personalSheet.getRange(2, PERSONAL_COL_STUBS.GROUP_MESSAGE_ID_COLUMN).getValue()).toBe("");
 
-    // DM keyboard restored to Level 0 (parent rows + pills row with ❓ inline).
+    // DM keyboard restored to Level 0 (parent rows + pills row with ⋯ inline).
     // Legacy ✂️ Split is dropped because the user is in at least one group.
     var dmEdit = sent.find((s) => s.url.indexOf("/editMessageText") !== -1 && s.payload.chat_id === 111);
     expect(dmEdit).toBeTruthy();
     var kb = JSON.parse(dmEdit.payload.reply_markup);
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
     var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(pillsRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "❓"]);
+    expect(pillsRow.map((b) => b.text.slice(0, 2))).toEqual(["🏷", "📂", "⋯"]);
   });
 
   it("rejects when GROUP_REF is empty (row was never split)", () => {

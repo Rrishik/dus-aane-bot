@@ -25,18 +25,22 @@ describe("resolveMerchant", () => {
   });
 
   it("returns rawName when no resolution matches", () => {
-    expect(resolveMerchant("Unknown Vendor", RESOLUTIONS)).toEqual({ merchant: "Unknown Vendor", category: "" });
+    expect(resolveMerchant("Unknown Vendor", RESOLUTIONS)).toEqual({
+      merchant: "Unknown Vendor",
+      category: "",
+      personalCategory: false
+    });
   });
 
   it("substring-matches case-insensitively", () => {
-    expect(resolveMerchant("FLIPKART_MWS_MERCH 12345", RESOLUTIONS)).toEqual({
+    expect(resolveMerchant("FLIPKART_MWS_MERCH 12345", RESOLUTIONS)).toMatchObject({
       merchant: "Flipkart",
       category: "Shopping"
     });
   });
 
   it("returns first matching resolution (order matters)", () => {
-    expect(resolveMerchant("payment to swiggy bowl", RESOLUTIONS)).toEqual({
+    expect(resolveMerchant("payment to swiggy bowl", RESOLUTIONS)).toMatchObject({
       merchant: "Swiggy",
       category: "Food & Dining"
     });
@@ -44,11 +48,23 @@ describe("resolveMerchant", () => {
 
   it("returns rawName when resolved is empty string but pattern matches", () => {
     var noResolved = [{ pattern: "abc", resolved: "", category: "Shopping" }];
-    expect(resolveMerchant("ABC corp", noResolved)).toEqual({ merchant: "ABC corp", category: "Shopping" });
+    expect(resolveMerchant("ABC corp", noResolved)).toMatchObject({ merchant: "ABC corp", category: "Shopping" });
   });
 
   it("returns empty category when resolution has none", () => {
-    expect(resolveMerchant("amzn pay", RESOLUTIONS)).toEqual({ merchant: "Amazon", category: "" });
+    expect(resolveMerchant("amzn pay", RESOLUTIONS)).toMatchObject({ merchant: "Amazon", category: "" });
+  });
+
+  it("resolves name and category independently — a category-only row doesn't mask a later name", () => {
+    var rows = [
+      { pattern: "swiggy", resolved: "", category: "Groceries", personalCategory: true },
+      { pattern: "swiggy_mws", resolved: "Swiggy", category: "Food & Dining" }
+    ];
+    expect(resolveMerchant("SWIGGY_MWS_MERCH", rows)).toEqual({
+      merchant: "Swiggy",
+      category: "Groceries",
+      personalCategory: true
+    });
   });
 
   it("returns input unchanged on falsy rawName", () => {
@@ -56,7 +72,6 @@ describe("resolveMerchant", () => {
     expect(resolveMerchant(null, RESOLUTIONS)).toEqual({ merchant: null, category: "" });
   });
 });
-
 describe("lookupMerchantCategory", () => {
   it("returns null when no match", () => {
     expect(lookupMerchantCategory("Nope", RESOLUTIONS)).toBe(null);

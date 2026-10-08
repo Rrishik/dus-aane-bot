@@ -38,6 +38,22 @@ const MESSAGE_ID_COLUMN = 8; // Column H
 const CURRENCY_COLUMN = 9; // Column I
 const GROUP_REF_COLUMN = 10; // Column J — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
 const GROUP_MESSAGE_ID_COLUMN = 11; // Column K — Telegram message id of the group's split notification, else empty
+const PARSED_BY_COLUMN = 12; // Column L — parser template id or "llm"; "|rr" suffix once Re-read was used
+const SOURCE_TEXT_COLUMN = 13; // Column M — raw pasted SMS text (SMS rows only; emails are re-fetched by id)
+const STATUS_COLUMN = 14; // Column N — "" = confirmed, "review" = awaiting the user's ✅ Save
+const PERSONAL_COL_COUNT = 14;
+
+const TXN_STATUS_REVIEW = "review";
+const PARSED_BY_LLM = "llm";
+const REREAD_MARKER = "|rr";
+
+// Message-id prefix for pasted SMS rows. No ":" or "_" — callback_data uses
+// both as separators.
+const SMS_ID_PREFIX = "sms-";
+
+// Debit categories that move money without being consumption. Counting them
+// as spend double-counts (a card bill repays purchases already recorded).
+const NON_SPEND_CATEGORIES = ["CC Bill Payment", "Transfer Out", "Investment"];
 
 // --- Group-sheet schema (β: one row per share) ---
 // Group sheets have a different column layout than personal sheets — they
@@ -61,6 +77,9 @@ const G_COL_COUNT = 12;
 // Hard cap on group size. Telegram supports far more, but the split UI fans out
 // quadratically with members and the small-flat-share use case rarely exceeds 4.
 const MAX_GROUP_MEMBERS = 4;
+
+// Merchant tag length cap — keeps the 🏷 pill from wrapping on narrow phones.
+const TAG_MAX_LEN = 18;
 
 // Category options for the picker
 const CATEGORIES = [
@@ -314,11 +333,6 @@ const FILTER_OTP_SUBJECTS = [
   '"verification code"',
   '"login code"'
 ];
-
-// Gmail categories to exclude (marketing, notifications, groups).
-// Currently empty — bank transaction mail has historically been mis-categorized
-// as Promotions, so we rely on sender/subject filters instead.
-const IGNORE_CATEGORIES = [];
 
 // Gmail search query: process any email that arrives in the bot inbox.
 // The bot account exists only for this bot, so every inbox message is a

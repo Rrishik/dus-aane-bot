@@ -64,6 +64,10 @@ function isDebit(txnType) {
   return (txnType || "").toString().trim().toLowerCase() === "debit";
 }
 
+function isCredit(txnType) {
+  return (txnType || "").toString().trim().toLowerCase() === "credit";
+}
+
 // Find the row number where a column has a specific value. Returns -1 if not found.
 //
 // Callback handlers (split/delete/edit/category) almost always target a
@@ -133,35 +137,52 @@ function appendRowToGoogleSheet(row_data) {
   }
 }
 
-// Utility to ensure headers are present in the Google Sheet
+var PERSONAL_HEADERS = [
+  "Email Date",
+  "Transaction Date",
+  "Merchant",
+  "Amount",
+  "Category",
+  "Transaction Type",
+  "User",
+  "Message ID",
+  "Currency",
+  "Group Ref",
+  "Group Message ID",
+  "Parsed By",
+  "Source Text",
+  "Status"
+];
+
+// Sheets already checked this execution, so per-message callers pay the
+// getLastRow/getLastColumn round-trip once.
+var _headersEnsuredFor = {};
+
+// Writes the header row on an empty sheet, or tops up columns added since the
+// sheet was created. Plumbing columns (dedupe id, group linkage, parser
+// metadata) are hidden; hideColumns failures are non-critical.
 function ensureSheetHeaders() {
+  var sheetId = getTenantSheetId();
+  if (_headersEnsuredFor[sheetId]) return;
   var sheet = getSpreadsheet().getSheets()[0];
   if (sheet.getLastRow() === 0) {
-    appendRowToGoogleSheet([
-      "Email Date",
-      "Transaction Date",
-      "Merchant",
-      "Amount",
-      "Category",
-      "Transaction Type",
-      "User",
-      "Message ID",
-      "Currency",
-      "Group Ref",
-      "Group Message ID"
-    ]);
-    // Hide plumbing columns the user never benefits from seeing: the Gmail
-    // dedupe id and the group-linkage fields. Idempotent in Apps Script —
-    // hiding an already-hidden column is a no-op — but we only call this on
-    // first provisioning anyway (the if-empty branch above).
+    appendRowToGoogleSheet(PERSONAL_HEADERS);
     try {
       sheet.hideColumns(MESSAGE_ID_COLUMN);
-      sheet.hideColumns(GROUP_REF_COLUMN, 2); // GROUP_REF + GROUP_MESSAGE_ID
-    } catch (_) {
-      // hideColumns isn't critical — swallow if the sandbox/test mock
-      // doesn't implement it.
+      sheet.hideColumns(GROUP_REF_COLUMN, PERSONAL_COL_COUNT - GROUP_REF_COLUMN + 1);
+    } catch (_) {}
+  } else {
+    var lastCol = sheet.getLastColumn();
+    if (lastCol < PERSONAL_HEADERS.length) {
+      var missing = PERSONAL_HEADERS.slice(lastCol);
+      sheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing]);
+      try {
+        var firstHidden = Math.max(lastCol + 1, PARSED_BY_COLUMN);
+        sheet.hideColumns(firstHidden, PERSONAL_COL_COUNT - firstHidden + 1);
+      } catch (_) {}
     }
   }
+  _headersEnsuredFor[sheetId] = true;
 }
 
 // Delete a row from the first sheet by row number
@@ -174,12 +195,11 @@ function deleteSheetRow(row_number) {
 // Maps raw merchant patterns to clean names.
 // Categories are stored in a separate CategoryOverrides tab (resolved merchant → category).
 //
-// Both tabs live on the ADMIN sheet, not per-tenant. Merchant patterns are
-// universal — every bank sends the same raw strings to every tenant — so
-// sharing the mapping means new tenants inherit a pre-trained bot on day 1.
-// Per-transaction overrides (the ✏️ Category button) still write to the
-// tenant's main sheet row, not to CategoryOverrides, so a tenant customising
-// their own categorisation doesn't affect anyone else.
+// Both tabs live on the ADMIN sheet, not per-tenant, and are curated by the
+// admin. Merchant patterns are universal — every bank sends the same raw
+// strings to every tenant — so new tenants inherit a pre-trained bot on day 1.
+// User taps (🏷 Tag, 📂 Category) write to the tenant's own MyMerchants tab
+// instead (see below), which takes precedence during resolution.
 
 var RESOLUTION_TAB = "MerchantResolution";
 var OVERRIDES_TAB = "CategoryOverrides";
@@ -252,20 +272,30 @@ function getMerchantResolutions() {
     });
 }
 
-// Resolve a raw merchant name using the resolution table (case-insensitive substring match).
-// Returns { merchant: resolvedName, category: defaultCategory } or { merchant: rawName, category: "" }
+// Resolve a raw merchant name using the resolution table (case-insensitive
+// substring match). Name and category are resolved independently — the first
+// matching entry with a name supplies the name, the first with a category
+// supplies the category — so a category-only personal row doesn't mask a
+// shared name mapping. Returns { merchant, category, personalCategory };
+// personalCategory marks a category from the user's own corrections, which
+// outranks the LLM's guess.
 function resolveMerchant(rawName, resolutions) {
   if (!rawName || !resolutions || resolutions.length === 0) return { merchant: rawName, category: "" };
   var lower = rawName.toLowerCase();
+  var nameHit = null;
+  var catHit = null;
   for (var i = 0; i < resolutions.length; i++) {
-    if (lower.indexOf(resolutions[i].pattern) !== -1) {
-      return {
-        merchant: resolutions[i].resolved || rawName,
-        category: resolutions[i].category || ""
-      };
-    }
+    var r = resolutions[i];
+    if (lower.indexOf(r.pattern) === -1) continue;
+    if (!nameHit && r.resolved) nameHit = r;
+    if (!catHit && r.category) catHit = r;
+    if (nameHit && catHit) break;
   }
-  return { merchant: rawName, category: "" };
+  return {
+    merchant: nameHit ? nameHit.resolved : rawName,
+    category: catHit ? catHit.category : "",
+    personalCategory: !!(catHit && catHit.personalCategory)
+  };
 }
 
 // Lookup merchant category from resolutions by resolved name (exact, case-insensitive).
@@ -351,6 +381,91 @@ function setCategoryOverride(merchant, category) {
   }
   tab.appendRow([merchant, category]);
   return { success: true, message: "Override added" };
+}
+
+// --- Per-user merchant memory (MyMerchants tab in the tenant's own sheet) ---
+// 🏷 Tag and 📂 Category taps write here, not to the shared admin tabs, so one
+// user's corrections (and their UPI payee names) never leak to other users.
+// Columns: Pattern (case-insensitive) | Name | Category.
+
+var MY_MERCHANTS_TAB = "MyMerchants";
+
+function getOrCreateMyMerchantsSheet() {
+  var ss = getSpreadsheet();
+  var tab = ss.getSheetByName(MY_MERCHANTS_TAB);
+  if (!tab) {
+    tab = ss.insertSheet(MY_MERCHANTS_TAB);
+    tab.appendRow(["Pattern", "Name", "Category"]);
+  }
+  return tab;
+}
+
+function getMyMerchants() {
+  var tab = getSpreadsheet().getSheetByName(MY_MERCHANTS_TAB);
+  if (!tab || tab.getLastRow() <= 1) return [];
+  return tab
+    .getRange(2, 1, tab.getLastRow() - 1, 3)
+    .getValues()
+    .filter(function (r) {
+      return r[0];
+    })
+    .map(function (r) {
+      return {
+        pattern: r[0].toString().trim().toLowerCase(),
+        name: (r[1] || "").toString().trim(),
+        category: (r[2] || "").toString().trim()
+      };
+    });
+}
+
+// Upsert one MyMerchants row. `fields` may carry `name` and/or `category`;
+// omitted fields keep their current value.
+function setMyMerchant(pattern, fields) {
+  if (!pattern) return { success: false, message: "Empty pattern" };
+  var tab = getOrCreateMyMerchantsSheet();
+  var rowNum = _findRowByCol1Lower(tab, pattern.toString().trim().toLowerCase());
+  if (rowNum === -1) {
+    tab.appendRow([pattern.toString().trim(), fields.name || "", fields.category || ""]);
+    return { success: true, message: "Added" };
+  }
+  if (fields.name !== undefined) tab.getRange(rowNum, 2).setValue(fields.name);
+  if (fields.category !== undefined) tab.getRange(rowNum, 3).setValue(fields.category);
+  return { success: true, message: "Updated" };
+}
+
+// Personal entries first (so they win the first-match in resolveMerchant),
+// then the shared table. A personal category for a merchant name also
+// applies to shared entries that resolve to that name.
+function getMerchantResolutionsForTenant() {
+  var mine = [];
+  try {
+    mine = getMyMerchants();
+  } catch (e) {
+    console.warn("[getMerchantResolutionsForTenant] MyMerchants read failed: " + e.message);
+  }
+  var shared = getMerchantResolutions();
+  var catByName = {};
+  mine.forEach(function (m) {
+    if (m.category) catByName[m.pattern] = m.category;
+  });
+
+  function withPersonalCategory(entry, ownCategory) {
+    var key = (entry.resolved || entry.pattern).toLowerCase();
+    var personal = ownCategory || catByName[key] || "";
+    if (personal) {
+      entry.category = personal;
+      entry.personalCategory = true;
+    }
+    return entry;
+  }
+
+  var personalEntries = mine.map(function (m) {
+    return withPersonalCategory({ pattern: m.pattern, resolved: m.name, category: "" }, m.category);
+  });
+  var sharedEntries = shared.map(function (s) {
+    return withPersonalCategory({ pattern: s.pattern, resolved: s.resolved, category: s.category }, "");
+  });
+  return personalEntries.concat(sharedEntries);
 }
 
 // One-time script: seed MerchantResolution with all unique merchants from the main sheet.

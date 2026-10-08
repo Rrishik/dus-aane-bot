@@ -19,10 +19,12 @@ const SYMBOLS = [
   "getTelegramChatMemberName",
   "getTelegramBotUserId",
   "sendRequest",
-  "buildReplyMarkup",
   "buildCategoryKeyboard",
   "buildHelpMenuKeyboard",
   "buildDeleteConfirmKeyboard",
+  "buildReviewKeyboard",
+  "canRereadRow",
+  "getWebhookSecret",
   "getTransactionMessageAsString",
   "pillLabel",
   "sendTransactionMessage",
@@ -136,6 +138,16 @@ describe("simple Telegram wrappers", () => {
     expect(payload.url).toBe("https://proxy/");
     expect(payload.allowed_updates).toContain("my_chat_member");
     expect(payload.allowed_updates).toContain("chat_member");
+    expect(payload.secret_token).toBeUndefined();
+  });
+
+  it("setTelegramWebhook registers WEBHOOK_SECRET as Telegram's secret_token when configured", () => {
+    var env = baseStubs({ WEBHOOK_SECRET: "s3cret" });
+    var api = load(env.stubs);
+    api.setTelegramWebhook();
+
+    expect(payloadOf(env.stubs.UrlFetchApp.fetch.mock.calls[1]).secret_token).toBe("s3cret");
+    expect(api.getWebhookSecret()).toBe("s3cret");
   });
 
   it("setTelegramCommands registers separate command lists for private vs group scopes", () => {
@@ -470,14 +482,6 @@ describe("sendRequest retry + tolerance logic", () => {
 // ── Keyboards + message composition ────────────────────────────────────────
 
 describe("keyboard builders", () => {
-  it("buildReplyMarkup wraps inline_keyboard", () => {
-    var env = baseStubs();
-    var api = load(env.stubs);
-    expect(api.buildReplyMarkup([[{ text: "x", callback_data: "y" }]])).toEqual({
-      inline_keyboard: [[{ text: "x", callback_data: "y" }]]
-    });
-  });
-
   it("buildCategoryKeyboard lays categories into rows of 3 + a Back row", () => {
     var env = baseStubs();
     var api = load(env.stubs);
@@ -505,14 +509,45 @@ describe("keyboard builders", () => {
     expect(kb.inline_keyboard[0][0].text).toMatch(/🛍️ Shopping/);
   });
 
-  it("buildHelpMenuKeyboard exposes Report, Delete, and Back callbacks scoped to the messageId", () => {
+  it("buildHelpMenuKeyboard defaults to Report + Delete + Back scoped to the messageId", () => {
     var env = baseStubs();
     var api = load(env.stubs);
     var kb = api.buildHelpMenuKeyboard("M9");
-    var flat = kb.inline_keyboard.flat();
-    expect(flat.find((b) => b.callback_data === "report_M9")).toBeTruthy();
-    expect(flat.find((b) => b.callback_data === "del_M9")).toBeTruthy();
-    expect(flat.find((b) => b.callback_data === "back_M9")).toBeTruthy();
+    expect(kb.inline_keyboard.map((r) => r.map((b) => b.callback_data))).toEqual([
+      ["report_M9", "del_M9"],
+      ["back_M9"]
+    ]);
+  });
+
+  it("buildHelpMenuKeyboard swaps Report for Re-read and can hide Delete", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    var kb = api.buildHelpMenuKeyboard("M9", { canReread: true, canDelete: false });
+    expect(kb.inline_keyboard[0].map((b) => b.callback_data)).toEqual(["rr_M9"]);
+  });
+
+  it("buildReviewKeyboard offers Save / Re-read / Discard (Re-read optional)", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    expect(api.buildReviewKeyboard("M1", true).inline_keyboard[0].map((b) => b.callback_data)).toEqual([
+      "rvok_M1",
+      "rr_M1",
+      "rvno_M1"
+    ]);
+    expect(api.buildReviewKeyboard("M1", false).inline_keyboard[0].map((b) => b.callback_data)).toEqual([
+      "rvok_M1",
+      "rvno_M1"
+    ]);
+  });
+
+  it("canRereadRow: only parser-read, not yet re-read, not split", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    expect(api.canRereadRow("generic_v1", "")).toBe(true);
+    expect(api.canRereadRow("generic_v1|rr", "")).toBe(false);
+    expect(api.canRereadRow("llm", "")).toBe(false);
+    expect(api.canRereadRow("", "")).toBe(false); // legacy rows were LLM-read
+    expect(api.canRereadRow("generic_v1", "-100:tx")).toBe(false);
   });
 
   it("buildDeleteConfirmKeyboard offers delyes_ + back_ buttons", () => {
@@ -594,6 +629,19 @@ describe("getTransactionMessageAsString", () => {
     );
     expect(msg).toMatch(/👤 alice/);
   });
+
+  it("adds a ⚠️ Check this line (with the note) on review cards", () => {
+    var env = baseStubs();
+    var api = load(env.stubs);
+    var base = { email_date: new Date("2026-05-01T10:00:00Z"), merchant: "M", amount: 1, transaction_type: "Debit" };
+    expect(api.getTransactionMessageAsString(base)).not.toMatch(/Check this/);
+    expect(api.getTransactionMessageAsString(Object.assign({ status: "review" }, base))).toMatch(
+      /⚠️ \*Check this\* — not counted until you save it/
+    );
+    expect(
+      api.getTransactionMessageAsString(Object.assign({ status: "review", reviewNote: "looks like a duplicate" }, base))
+    ).toMatch(/looks like a duplicate/);
+  });
 });
 
 describe("pillLabel + sendTransactionMessage", () => {
@@ -627,30 +675,47 @@ describe("pillLabel + sendTransactionMessage", () => {
     expect(p.reply_markup).toBeUndefined();
   });
 
-  it("sendTransactionMessage with messageId builds tag/cat/help row + prepends group rows above pills", () => {
-    var env = baseStubs({
-      buildGroupParentButtonRows: () => [
-        [{ text: "Split to Roomies", callback_data: "gsplit_M1_g1" }],
-        [{ text: "Split to Travel", callback_data: "gsplit_M1_g2" }]
-      ]
-    });
+  it("sendTransactionMessage uses the Level 0 keyboard for normal cards", () => {
+    var level0 = { inline_keyboard: [[{ text: "L0", callback_data: "x" }]] };
+    var env = baseStubs({ buildTransactionLevel0Keyboard: vi.fn(() => level0) });
     var api = load(env.stubs);
 
     api.sendTransactionMessage(
-      { email_date: new Date("2026-05-01T10:00:00Z"), merchant: "M", amount: 1, transaction_type: "Debit" },
+      {
+        email_date: new Date("2026-05-01T10:00:00Z"),
+        merchant: "M",
+        category: "Shopping",
+        amount: 1,
+        transaction_type: "Debit"
+      },
       "M1",
       null
     );
 
+    expect(env.stubs.buildTransactionLevel0Keyboard).toHaveBeenCalledWith("111", "M1", "M", "Shopping");
     var p = payloadOf(env.stubs.UrlFetchApp.fetch.mock.calls[0]);
-    var kb = JSON.parse(p.reply_markup).inline_keyboard;
-    // Group rows pushed to the top, pills + ❓ row last.
-    expect(kb).toHaveLength(3);
-    expect(kb[0][0].callback_data).toBe("gsplit_M1_g1");
-    expect(kb[1][0].callback_data).toBe("gsplit_M1_g2");
-    var pills = kb[2];
-    expect(pills[0].callback_data).toBe("tag_M1");
-    expect(pills[1].callback_data).toBe("editcat_M1");
-    expect(pills[2].callback_data).toBe("help_M1");
+    expect(JSON.parse(p.reply_markup)).toEqual(level0);
+  });
+
+  it("sendTransactionMessage uses the review keyboard for review cards", () => {
+    var env = baseStubs({ buildTransactionLevel0Keyboard: vi.fn() });
+    var api = load(env.stubs);
+
+    api.sendTransactionMessage(
+      {
+        email_date: new Date("2026-05-01T10:00:00Z"),
+        merchant: "M",
+        amount: 1,
+        transaction_type: "Debit",
+        status: "review"
+      },
+      "M1",
+      null,
+      { parsedBy: "generic_v1" }
+    );
+
+    expect(env.stubs.buildTransactionLevel0Keyboard).not.toHaveBeenCalled();
+    var kb = JSON.parse(payloadOf(env.stubs.UrlFetchApp.fetch.mock.calls[0]).reply_markup);
+    expect(kb.inline_keyboard[0].map((b) => b.callback_data)).toEqual(["rvok_M1", "rr_M1", "rvno_M1"]);
   });
 });

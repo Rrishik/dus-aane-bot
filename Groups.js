@@ -107,7 +107,7 @@ function handleGroupStartCommand(update) {
 
   var classified = classifyGroupAdmins(admins, botUserId, function (uid) {
     var t = findTenantByChatId(uid);
-    return t && t.status === TENANT_STATUS.ACTIVE && t.chat_type === TENANT_CHAT_TYPE.PERSONAL ? t : null;
+    return isTenantUsable(t) && t.chat_type === TENANT_CHAT_TYPE.PERSONAL ? t : null;
   });
 
   if (!classified.botPresent) {
@@ -428,7 +428,7 @@ function handleChatMemberChange(update) {
     }
 
     var personal = findTenantByChatId(userChatId);
-    if (personal && personal.status === TENANT_STATUS.ACTIVE && personal.chat_type === TENANT_CHAT_TYPE.PERSONAL) {
+    if (isTenantUsable(personal) && personal.chat_type === TENANT_CHAT_TYPE.PERSONAL) {
       addGroupMember(ev.chat.id, userChatId);
       try {
         sendTelegramMessage(ev.chat.id, "👋 *" + escapeMarkdown(displayName) + "* joined the splits.", {
@@ -927,32 +927,30 @@ function buildSplitLevel2Keyboard(group, callerChatId, emailMessageId) {
 // fallbacks rather than triggering an extra sheet read here.
 function buildTransactionLevel0Keyboard(callerChatId, emailMessageId, merchant, category) {
   var rows = buildGroupParentButtonRows(callerChatId, emailMessageId);
-  var tagPill = "🏷 " + pillLabel(merchant, "Untagged") + " ▾";
-  var catPill = "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾";
-  rows.push([
-    { text: tagPill, callback_data: "tag_" + emailMessageId },
-    { text: catPill, callback_data: "editcat_" + emailMessageId },
-    { text: "❓", callback_data: "help_" + emailMessageId }
-  ]);
+  rows.push(buildPillsRow(emailMessageId, merchant, category));
   return { inline_keyboard: rows };
 }
 
+// 🏷 tag pill, 📂 category pill, ⋯ overflow. ⋯ stays the last button in the
+// last row on every txn-card keyboard so it's always in the same spot.
+function buildPillsRow(emailMessageId, merchant, category) {
+  return [
+    { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
+    {
+      text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
+      callback_data: "editcat_" + emailMessageId
+    },
+    { text: "⋯", callback_data: "help_" + emailMessageId }
+  ];
+}
+
 // Keyboard shown on the DM card after a personal txn has been split or
-// settled. Undo gets a full-width top row; pills + ❓ overflow share the
-// bottom row. Keeps ❓ as the last item in the last row across every
-// txn-card surface so users can always reach it in the same spot.
+// settled. Undo gets a full-width top row; pills + ⋯ share the bottom row.
 function buildPostSplitDMKeyboard(emailMessageId, merchant, category) {
   return {
     inline_keyboard: [
       [{ text: "↩️ Make personal again", callback_data: encodeGroupCallback("gun", [emailMessageId]) }],
-      [
-        { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + emailMessageId },
-        {
-          text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾",
-          callback_data: "editcat_" + emailMessageId
-        },
-        { text: "❓", callback_data: "help_" + emailMessageId }
-      ]
+      buildPillsRow(emailMessageId, merchant, category)
     ]
   };
 }
@@ -1188,8 +1186,6 @@ function _recordGroupSplitLocked(args) {
   if (rowNumber < 0) {
     return { ok: false, error: "Transaction not found.", message: "❌ *Transaction not found.*" };
   }
-  // Read the row at the full column width directly. getRowData() only reaches
-  // CURRENCY_COLUMN (col 9) so it can't see GROUP_REF / GROUP_MESSAGE_ID.
   var personalSheet = getSpreadsheet().getSheets()[0];
   var rowData = personalSheet.getRange(rowNumber, 1, 1, GROUP_MESSAGE_ID_COLUMN).getValues()[0];
   // Re-split guard. Caller must undo before splitting again.

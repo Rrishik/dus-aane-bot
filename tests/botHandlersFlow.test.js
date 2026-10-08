@@ -151,14 +151,14 @@ const SYMBOLS = [
 ];
 
 function load(stubs) {
-  return loadAppsScript(["BotHandlers.js"], SYMBOLS, stubs);
+  return loadAppsScript(["PendingInput.js", "BotHandlers.js"], SYMBOLS, stubs);
 }
 
 // ── buildRecentTransactionsMessage ──────────────────────────────────────────
 
 describe("buildRecentTransactionsMessage", () => {
   function personalRow(opts) {
-    var r = new Array(11).fill("");
+    var r = new Array(14).fill("");
     r[PERSONAL_COLS.EMAIL_DATE_COLUMN - 1] = opts.emailDate || new Date("2026-05-01T10:00:00Z");
     r[PERSONAL_COLS.TRANSACTION_DATE_COLUMN - 1] = opts.txDate || "";
     r[PERSONAL_COLS.MERCHANT_COLUMN - 1] = opts.merchant || "Swiggy";
@@ -167,6 +167,7 @@ describe("buildRecentTransactionsMessage", () => {
     r[PERSONAL_COLS.TRANSACTION_TYPE_COLUMN - 1] = opts.type || "Debit";
     r[PERSONAL_COLS.USER_COLUMN - 1] = opts.user || "alice";
     r[PERSONAL_COLS.CURRENCY_COLUMN - 1] = opts.currency || "INR";
+    r[13] = opts.status || "";
     return r;
   }
 
@@ -210,6 +211,26 @@ describe("buildRecentTransactionsMessage", () => {
     expect(out.text).toMatch(/Food & Dining/);
     // Personal chats: no 👤 user-tag on the date row.
     expect(out.text).not.toMatch(/👤/);
+  });
+
+  it("hides unconfirmed review rows", () => {
+    var env = baseStubs({
+      getSpreadsheet: () => ({
+        getSheets: () => [
+          makeSheet(
+            ["h"],
+            [
+              personalRow({ merchant: "Kept", amount: 1 }),
+              personalRow({ merchant: "Pending", amount: 2, status: "review" })
+            ]
+          )
+        ]
+      })
+    });
+    var api = load(env.stubs);
+    var out = api.buildRecentTransactionsMessage(5, null);
+    expect(out.text).toMatch(/Kept/);
+    expect(out.text).not.toMatch(/Pending/);
   });
 
   it("renders credit transactions with the green emoji", () => {
@@ -460,7 +481,7 @@ describe("handleAskCommand", () => {
     var api = load(env.stubs);
     api.handleAskCommand("1", "/ask");
 
-    expect(env.props.store.pending_ask_1).toBe("1");
+    expect(JSON.parse(env.props.store.pending_ask_1).v).toBe("1");
     expect(env.sent[0].opts.reply_markup.force_reply).toBe(true);
     expect(env.stubs.runAskLoop).not.toHaveBeenCalled();
   });
@@ -499,7 +520,7 @@ describe("handleAskQuestionReply", () => {
 
   it("consumes the flag and runs the loop when a question is supplied", () => {
     var env = baseStubs();
-    env.props.store.pending_ask_1 = "1";
+    env.props.store.pending_ask_1 = JSON.stringify({ v: "1", t: Date.now() });
     var api = load(env.stubs);
 
     expect(api.handleAskQuestionReply("1", "  what now?  ")).toBe(true);
@@ -509,13 +530,31 @@ describe("handleAskQuestionReply", () => {
 
   it("consumes the flag but DMs 'empty question' when the message is blank", () => {
     var env = baseStubs();
-    env.props.store.pending_ask_1 = "1";
+    env.props.store.pending_ask_1 = JSON.stringify({ v: "1", t: Date.now() });
     var api = load(env.stubs);
 
     expect(api.handleAskQuestionReply("1", "   ")).toBe(true);
     expect(env.props.store.pending_ask_1).toBeUndefined();
     expect(env.stubs.runAskLoop).not.toHaveBeenCalled();
     expect(env.sent[0].text).toMatch(/Empty question/);
+  });
+
+  it("ignores (and deletes) an expired flag so a later message isn't swallowed", () => {
+    var env = baseStubs();
+    env.props.store.pending_ask_1 = JSON.stringify({ v: "1", t: Date.now() - 11 * 60 * 1000 });
+    var api = load(env.stubs);
+
+    expect(api.handleAskQuestionReply("1", "Rs 450 debited at Swiggy")).toBe(false);
+    expect(env.props.store.pending_ask_1).toBeUndefined();
+    expect(env.stubs.runAskLoop).not.toHaveBeenCalled();
+  });
+
+  it("treats a legacy plain '1' flag as expired", () => {
+    var env = baseStubs();
+    env.props.store.pending_ask_1 = "1";
+    var api = load(env.stubs);
+    expect(api.handleAskQuestionReply("1", "hello")).toBe(false);
+    expect(env.props.store.pending_ask_1).toBeUndefined();
   });
 });
 

@@ -10,9 +10,8 @@
 //     `continueBackfill`) — self-reschedules every 5 minutes via time-based
 //     triggers so a long backfill stays under the 6-min execution cap.
 //
-// Tenant context: `startChunkedBackfill` stashes the tenant chat_id in script
-// properties so the async `continueBackfill` re-resolves the right tenant on
-// each chunk.
+// Tenant context: each chunk re-resolves the tenant from the per-chat state
+// (see "Per-user backfill state" below).
 
 // Backfill duration unit alias map (module-scope so it isn't rebuilt per call,
 // and so tests can inspect it).
@@ -91,10 +90,51 @@ function parseBackfillDuration(messageText, now) {
   return { ok: true, startDate: startDate, endDate: endDate };
 }
 
-// Method to handle the /backfill command
+// ─── Per-user backfill state ─────────────────────────────────────────
+// One JSON property per chat (`backfill:<chatId>`) so two users can backfill
+// at once. Each self-scheduled chunk trigger is mapped back to its chat via
+// `backfill_trigger:<triggerUid>`.
+var BACKFILL_STATE_PREFIX = "backfill:";
+var BACKFILL_TRIGGER_PREFIX = "backfill_trigger:";
+var BACKFILL_ACK_PREFIX = "backfill_ack:";
+// A state untouched this long belongs to a crashed chain; a new /backfill
+// may replace it.
+var BACKFILL_STALE_MS = 30 * 60 * 1000;
+
+function _loadBackfillState(chatId) {
+  var raw = PropertiesService.getScriptProperties().getProperty(BACKFILL_STATE_PREFIX + chatId);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+function _saveBackfillState(chatId, state) {
+  state.updatedAt = Date.now();
+  PropertiesService.getScriptProperties().setProperty(BACKFILL_STATE_PREFIX + chatId, JSON.stringify(state));
+}
+
+function _clearBackfillState(chatId) {
+  PropertiesService.getScriptProperties().deleteProperty(BACKFILL_STATE_PREFIX + chatId);
+}
+
+// Remove the "⏳ Backfill started..." ack doPost posted before deferring.
+function _deleteBackfillAck(chatId) {
+  var props = PropertiesService.getScriptProperties();
+  var ackMsgId = props.getProperty(BACKFILL_ACK_PREFIX + chatId);
+  if (!ackMsgId) return;
+  props.deleteProperty(BACKFILL_ACK_PREFIX + chatId);
+  try {
+    deleteTelegramMessage(chatId, parseInt(ackMsgId, 10));
+  } catch (_) {}
+}
+
 function handleBackfillCommand(chatId, messageText) {
   var parsed = parseBackfillDuration(messageText);
   if (!parsed.ok) {
+    _deleteBackfillAck(chatId);
     if (parsed.error === "unknown_unit") {
       sendTelegramMessage(chatId, "❌ *Unknown unit!* Use `min`, `hour`, `day`, `week`, or `month`.");
     } else if (parsed.error === "invalid_dates") {
@@ -107,6 +147,12 @@ function handleBackfillCommand(chatId, messageText) {
     } else {
       sendTelegramMessage(chatId, BACKFILL_USAGE_MSG);
     }
+    return;
+  }
+  var running = _loadBackfillState(chatId);
+  if (running && Date.now() - (running.updatedAt || 0) < BACKFILL_STALE_MS) {
+    _deleteBackfillAck(chatId);
+    sendTelegramMessage(chatId, "⏳ *A backfill is already running.* I'll post the summary when it finishes.");
     return;
   }
   startChunkedBackfill(parsed.startDate, parsed.endDate);
@@ -125,15 +171,15 @@ function startChunkedBackfill(startDate, endDate) {
     endDate.setHours(23, 59, 59, 999);
   }
   var tz = Session.getScriptTimeZone();
-  var props = PropertiesService.getScriptProperties();
-  props.setProperty("backfill_start", Utilities.formatDate(startDate, tz, "yyyy-MM-dd'T'HH:mm:ss"));
-  props.setProperty("backfill_end", Utilities.formatDate(endDate, tz, "yyyy-MM-dd'T'HH:mm:ss"));
-  props.setProperty("backfill_total_saved", "0");
-  props.setProperty("backfill_total_dupes", "0");
-  props.setProperty("backfill_total_failed", "0");
-  props.setProperty("backfill_chunk", "1");
-  // Persist tenant chat_id so the async continueBackfill can restore context.
-  props.setProperty("backfill_tenant_chat_id", String(getTenantChatId()));
+  var chatId = String(getTenantChatId());
+  _saveBackfillState(chatId, {
+    start: Utilities.formatDate(startDate, tz, "yyyy-MM-dd'T'HH:mm:ss"),
+    end: Utilities.formatDate(endDate, tz, "yyyy-MM-dd'T'HH:mm:ss"),
+    saved: 0,
+    dupes: 0,
+    failed: 0,
+    chunk: 1
+  });
 
   // Pick format based on whether the range is sub-day (minute/hour) or multi-day.
   var spanMs = endDate.getTime() - startDate.getTime();
@@ -141,7 +187,7 @@ function startChunkedBackfill(startDate, endDate) {
   var humanSpan = formatDurationMs(spanMs);
 
   sendTelegramMessage(
-    getTenantChatId(),
+    chatId,
     "⏳ *Backfill started* _(" +
       humanSpan +
       ")_\n" +
@@ -149,107 +195,73 @@ function startChunkedBackfill(startDate, endDate) {
       " → " +
       Utilities.formatDate(endDate, tz, fmt)
   );
+  _deleteBackfillAck(chatId);
 
-  // Delete the initial ack message from doPost
-  var ackMsgId = props.getProperty("backfill_ack_msg_id");
-  var ackChatId = props.getProperty("backfill_ack_chat_id");
-  if (ackMsgId && ackChatId) {
-    deleteTelegramMessage(ackChatId, parseInt(ackMsgId, 10));
-    props.deleteProperty("backfill_ack_msg_id");
-    props.deleteProperty("backfill_ack_chat_id");
-  }
-
-  continueBackfill();
+  continueBackfill(null, chatId);
 }
 
 // Time-based chunking: processes until ~5 min elapsed, then self-schedules
 var BACKFILL_TIME_LIMIT_MS = 5 * 60 * 1000; // 5 minutes
 
-function continueBackfill() {
-  // Clean up trigger that invoked this
-  ScriptApp.getProjectTriggers().forEach(function (trigger) {
-    if (trigger.getHandlerFunction() === "continueBackfill") {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-
+// Called inline by startChunkedBackfill (chatId given) or by a chunk
+// trigger (event object; chat resolved from the trigger uid).
+function continueBackfill(e, directChatId) {
   var props = PropertiesService.getScriptProperties();
-  // Restore tenant context stashed by startChunkedBackfill.
-  var savedChatId = props.getProperty("backfill_tenant_chat_id");
-  if (savedChatId) {
-    var t = findTenantByChatId(savedChatId);
-    if (!t || t.status !== TENANT_STATUS.ACTIVE) {
-      console.warn("[continueBackfill] tenant gone or inactive for chat " + savedChatId + "; aborting backfill");
-      // Clean up so a stale backfill doesn't linger.
-      props.deleteProperty("backfill_start");
-      props.deleteProperty("backfill_end");
-      props.deleteProperty("backfill_total_saved");
-      props.deleteProperty("backfill_total_dupes");
-      props.deleteProperty("backfill_total_failed");
-      props.deleteProperty("backfill_chunk");
-      props.deleteProperty("backfill_tenant_chat_id");
-      return;
-    }
-    setCurrentTenant(t);
+  var chatId = directChatId || null;
+  if (!chatId) {
+    var uid = e && e.triggerUid;
+    deleteOwnTrigger(uid, "continueBackfill");
+    if (!uid) return;
+    chatId = props.getProperty(BACKFILL_TRIGGER_PREFIX + uid);
+    props.deleteProperty(BACKFILL_TRIGGER_PREFIX + uid);
+    if (!chatId) return;
   }
-  var startStr = props.getProperty("backfill_start");
-  var endStr = props.getProperty("backfill_end");
 
-  if (!startStr || !endStr) return;
+  var t = findTenantByChatId(chatId);
+  if (!isTenantUsable(t)) {
+    console.warn("[continueBackfill] tenant gone or inactive for chat " + chatId + "; aborting backfill");
+    _clearBackfillState(chatId);
+    return;
+  }
+  setCurrentTenant(t);
 
-  var start = new Date(startStr);
-  var end = new Date(endStr);
+  var state = _loadBackfillState(chatId);
+  if (!state) return;
 
-  var chunk = parseInt(props.getProperty("backfill_chunk") || "1", 10);
-
-  // No skipCount needed: fetchAndFilterMessages excludes label:processed-by-bot
-  // server-side, so each chunk's fetch already omits everything we processed
-  // in prior chunks (the batchModify at the end of each chunk applies the label).
-  var result = backfillTransactions(start, end, BACKFILL_TIME_LIMIT_MS);
-
-  // Accumulate totals
-  var totalSaved = parseInt(props.getProperty("backfill_total_saved") || "0", 10) + result.savedCount;
-  var totalDupes = parseInt(props.getProperty("backfill_total_dupes") || "0", 10) + result.duplicateCount;
-  var totalFailed = parseInt(props.getProperty("backfill_total_failed") || "0", 10) + result.failedCount;
-
-  props.setProperty("backfill_total_saved", totalSaved.toString());
-  props.setProperty("backfill_total_dupes", totalDupes.toString());
-  props.setProperty("backfill_total_failed", totalFailed.toString());
+  // No skip count needed: fetchAndFilterMessages excludes label:processed-by-bot
+  // server-side, so each chunk's fetch omits everything prior chunks handled.
+  var result = backfillTransactions(new Date(state.start), new Date(state.end), BACKFILL_TIME_LIMIT_MS);
+  state.saved += result.savedCount;
+  state.dupes += result.duplicateCount;
+  state.failed += result.failedCount;
 
   if (result.timedOut) {
-    // Send progress update
-    props.setProperty("backfill_chunk", (chunk + 1).toString());
     sendTelegramMessage(
-      getTenantChatId(),
+      chatId,
       "⏳ *Backfill chunk " +
-        chunk +
+        state.chunk +
         " done*\n" +
         "💾 Saved so far: " +
-        totalSaved +
+        state.saved +
         "\n🔁 Dupes: " +
-        totalDupes +
+        state.dupes +
         "\n⏭ Continuing..."
     );
-    ScriptApp.newTrigger("continueBackfill").timeBased().after(10000).create();
-  } else {
-    // All done — send final summary
-    var summary = "✅ *Backfill Complete!*\n\n";
-    summary += "📧 *Emails processed:* " + result.totalEmails + "\n";
-    summary += "💾 *Transactions saved:* " + totalSaved + "\n";
-    if (totalDupes > 0) summary += "🔁 *Duplicates skipped:* " + totalDupes + "\n";
-    if (totalFailed > 0) summary += "❌ *Failed:* " + totalFailed + "\n";
-    if (chunk > 1) summary += "📦 *Chunks:* " + chunk + "\n";
-    summary += "\n_Run_ `/sheet` _to inspect the rows._";
-
-    sendTelegramMessage(getTenantChatId(), summary, { parse_mode: "Markdown" });
-
-    // Clean up props
-    props.deleteProperty("backfill_start");
-    props.deleteProperty("backfill_end");
-    props.deleteProperty("backfill_total_saved");
-    props.deleteProperty("backfill_total_dupes");
-    props.deleteProperty("backfill_total_failed");
-    props.deleteProperty("backfill_chunk");
-    props.deleteProperty("backfill_tenant_chat_id");
+    state.chunk++;
+    _saveBackfillState(chatId, state);
+    var trigger = ScriptApp.newTrigger("continueBackfill").timeBased().after(10000).create();
+    props.setProperty(BACKFILL_TRIGGER_PREFIX + trigger.getUniqueId(), chatId);
+    return;
   }
+
+  var summary = "✅ *Backfill Complete!*\n\n";
+  summary += "📧 *Emails processed:* " + result.totalEmails + "\n";
+  summary += "💾 *Transactions saved:* " + state.saved + "\n";
+  if (state.dupes > 0) summary += "🔁 *Duplicates skipped:* " + state.dupes + "\n";
+  if (state.failed > 0) summary += "❌ *Failed:* " + state.failed + "\n";
+  if (state.chunk > 1) summary += "📦 *Chunks:* " + state.chunk + "\n";
+  summary += "\n_Run_ `/sheet` _to inspect the rows._";
+
+  sendTelegramMessage(chatId, summary, { parse_mode: "Markdown" });
+  _clearBackfillState(chatId);
 }

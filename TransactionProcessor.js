@@ -181,6 +181,26 @@ function bootstrapHistoryState() {
  */
 function extractTransactions() {
   var props = PropertiesService.getScriptProperties();
+  // A 5-minute trigger can fire while a slow run (big backlog, LLM latency)
+  // is still going; two runs on the same history range would race past the
+  // sheet dedup. A stale stamp (crashed run) expires after the 6-min cap.
+  var runningSince = Number(props.getProperty(EMAIL_RUN_LOCK_PROP) || 0);
+  if (runningSince && Date.now() - runningSince < EMAIL_RUN_LOCK_TTL_MS) {
+    console.log("[extractTransactions] previous run still in progress; skipping");
+    return;
+  }
+  props.setProperty(EMAIL_RUN_LOCK_PROP, String(Date.now()));
+  try {
+    _extractTransactionsLocked(props);
+  } finally {
+    props.deleteProperty(EMAIL_RUN_LOCK_PROP);
+  }
+}
+
+var EMAIL_RUN_LOCK_PROP = "gmail.runStartedAt";
+var EMAIL_RUN_LOCK_TTL_MS = 6 * 60 * 1000;
+
+function _extractTransactionsLocked(props) {
   var lastHistoryId = props.getProperty("gmail.lastHistoryId");
   var messagesToProcess;
   var newHistoryIdToSave = null;
@@ -226,7 +246,7 @@ function extractTransactions() {
     }
   }
 
-  var resolutions = getMerchantResolutions();
+  var resolutionsByTenant = {};
   var skipped = 0;
 
   messagesToProcess.forEach((entry) => {
@@ -252,22 +272,17 @@ function extractTransactions() {
     setCurrentTenant(tenant);
     try {
       ensureSheetHeaders();
-      var result = processSingleEmail(message, userEmail, false, resolutions);
+      if (!resolutionsByTenant[tenant.chat_id]) {
+        resolutionsByTenant[tenant.chat_id] = getMerchantResolutionsForTenant();
+      }
+      var result = processSingleEmail(message, userEmail, false, resolutionsByTenant[tenant.chat_id]);
       if (result && result.saved) {
-        // Track activity: bump last_forward_at and undo any prior dormancy.
-        // Only on real saves — duplicates and parse failures don't count.
-        try {
-          stampLastForward(tenant.chat_id);
-          reactivateIfDormant(tenant.chat_id);
-        } catch (e) {
-          console.error("[extractTransactions] activity stamp failed:", e.message);
-        }
+        // Only real saves count as activity — duplicates and parse failures don't.
+        markTenantActivity(tenant.chat_id);
       }
     } finally {
       setCurrentTenant(null);
     }
-
-    Utilities.sleep(500);
   });
 
   if (skipped > 0) {
@@ -562,16 +577,109 @@ function markProcessed(message) {
 }
 
 /**
- * Processes a single email message: calls the AI provider with tool calling, parses response, saves to sheet.
- * Returns { saved: true/false, duplicate: true/false, data: parsed transaction or null }.
+ * Runs the extraction LLM (with the get_merchant_category tool) on one email
+ * body or SMS. Returns the parsed JSON object — a transaction or
+ * { not_a_transaction, reason } — or null when the call or JSON parse fails.
+ */
+function extractWithLLM(sourceText, resolutions, channel) {
+  var messages = [
+    { role: "system", content: getExtractionSystemPrompt() },
+    {
+      role: "user",
+      content: "Extract transaction details from this " + (channel === "sms" ? "SMS" : "email") + ":\n\n" + sourceText
+    }
+  ];
+
+  // Max 2 iterations: initial + one tool response.
+  for (var iter = 0; iter < 2; iter++) {
+    var apiResponse = callAIWithTools(messages, EXTRACTION_TOOLS, 300);
+    if (!apiResponse) return null;
+    var msg = apiResponse.choices[0].message;
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      messages.push(msg);
+      for (var t = 0; t < msg.tool_calls.length; t++) {
+        var tc = msg.tool_calls[t];
+        var args = JSON.parse(tc.function.arguments);
+        messages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: executeExtractionTool(tc.function.name, args, resolutions)
+        });
+      }
+      continue;
+    }
+    return msg.content ? parseLLMJson(msg.content) : null;
+  }
+  return null;
+}
+
+function parseLLMJson(rawText) {
+  var clean = String(rawText || "")
+    .replace(/```json|```/g, "")
+    .trim();
+  if (clean.charAt(0) !== "{") return null;
+  try {
+    return JSON.parse(clean);
+  } catch (e) {
+    console.error("[parseLLMJson] JSON parse failed:", e.message);
+    return null;
+  }
+}
+
+function _parserCanAutoSave(parsed) {
+  return (
+    !!parsed &&
+    parsed.kind === "transaction" &&
+    parsed.confidence >= PARSER_AUTO_SAVE_CONFIDENCE &&
+    !isParserTemplateDisabled(parsed.templateId)
+  );
+}
+
+function _safeParse(text, channel, receivedAt) {
+  try {
+    return parseTransactionText(text, { channel: channel, receivedAt: receivedAt });
+  } catch (e) {
+    console.error("[parseTransactionText] " + e.message);
+    return null;
+  }
+}
+
+// Shadow mode: the LLM result is what gets saved; this only records whether
+// the parser would have agreed.
+function logShadowComparison(parsed, llm, sourceText, receivedAt, messageId) {
+  if (!llm) return;
+  var llmTxn = !llm.not_a_transaction;
+  var parserTxn = !!parsed && parsed.kind === "transaction";
+  if (!llmTxn && !parserTxn) return;
+  var evt = { chatId: getTenantChatId(), channel: "email", messageId: messageId };
+  if (parserTxn && llmTxn) {
+    var changed = diffExtractions(
+      validateExtraction(parsed, null, receivedAt).data,
+      validateExtraction(llm, sourceText, receivedAt).data
+    );
+    evt.templateId = parsed.templateId;
+    evt.event = changed.length ? PARSER_EVENT.SHADOW_MISMATCH : PARSER_EVENT.SHADOW_MATCH;
+    evt.fieldsChanged = changed;
+  } else if (parserTxn) {
+    evt.templateId = parsed.templateId;
+    evt.event = PARSER_EVENT.SHADOW_EXTRA;
+  } else {
+    evt.templateId = parsed && parsed.kind === "ignored" ? "ignored:" + parsed.reason : "(none)";
+    evt.event = PARSER_EVENT.SHADOW_NOMATCH;
+  }
+  logParserEvent(evt);
+}
+
+/**
+ * Processes a single email: parser and/or LLM per `parser.mode`, then
+ * validate + save + notify. Returns { saved, duplicate, data }.
  */
 function processSingleEmail(message, userEmail, silent, resolutions) {
   var messageId = message.getId();
 
-  // Dedup first — before the body/raw fetches — so already-saved messages
-  // (whose `processed-by-bot` label add failed in a prior run and slipped past
-  // the search-level filter) cost only a cache+sheet lookup, not a Gmail body
-  // round-trip.
+  // Dedup first — before the body fetch — so already-saved messages (whose
+  // label add failed in a prior run) cost only a cache+sheet lookup.
   if (isAlreadyProcessed(messageId)) {
     markProcessed(message); // re-apply the label so we filter at source next time
     return { saved: false, duplicate: true, data: null };
@@ -579,39 +687,45 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
 
   var emailText = message.getPlainBody();
   var emailDate = message.getDate();
+  var ctx = {
+    sourceText: emailText,
+    receivedAt: emailDate,
+    userEmail: userEmail,
+    messageId: messageId,
+    silent: silent,
+    resolutions: resolutions
+  };
 
   try {
-    var messages = [
-      { role: "system", content: getExtractionSystemPrompt() },
-      { role: "user", content: "Extract transaction details from this email:\n\n" + emailText }
-    ];
+    var mode = getParserMode();
+    var parsed = mode === "off" ? null : _safeParse(emailText, "email", emailDate);
 
-    // Tool-calling loop (max 2 iterations: initial + one tool response)
-    var maxIterations = 2;
-    for (var iter = 0; iter < maxIterations; iter++) {
-      var apiResponse = callAIWithTools(messages, EXTRACTION_TOOLS, 300);
-      if (!apiResponse) break;
-
-      var choice = apiResponse.choices[0];
-      var msg = choice.message;
-
-      // If the model made a tool call, execute it and continue
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        messages.push(msg);
-        for (var t = 0; t < msg.tool_calls.length; t++) {
-          var tc = msg.tool_calls[t];
-          var args = JSON.parse(tc.function.arguments);
-          var toolResult = executeExtractionTool(tc.function.name, args, resolutions);
-          messages.push({ role: "tool", tool_call_id: tc.id, content: toolResult });
-        }
-        continue;
-      }
-
-      // No tool call \u2014 we have the final response
-      if (msg.content) {
-        return handleAIResponse(msg.content, emailDate, userEmail, message, silent, resolutions);
-      }
+    if (mode === "on" && _parserCanAutoSave(parsed)) {
+      ctx.parsedBy = parsed.templateId;
+      var saved = saveExtractedTransaction(parsed, ctx);
+      logParserEvent({
+        chatId: getTenantChatId(),
+        channel: "email",
+        templateId: parsed.templateId,
+        event: PARSER_EVENT.SAVED,
+        messageId: messageId
+      });
+      markProcessed(message);
+      return { saved: true, duplicate: false, data: saved.data };
     }
+
+    var llm = extractWithLLM(emailText, resolutions, "email");
+    if (mode === "shadow") logShadowComparison(parsed, llm, emailText, emailDate, messageId);
+    if (!llm) return { saved: false, duplicate: false, data: null };
+
+    if (llm.not_a_transaction) {
+      markProcessed(message);
+      return { saved: false, duplicate: false, data: null };
+    }
+    ctx.parsedBy = PARSED_BY_LLM;
+    var result = saveExtractedTransaction(llm, ctx);
+    markProcessed(message);
+    return { saved: true, duplicate: false, data: result.data };
   } catch (e) {
     console.error("[processSingleEmail] Error:", e.message);
   }
@@ -619,91 +733,85 @@ function processSingleEmail(message, userEmail, silent, resolutions) {
 }
 
 /**
- * Handles the raw text response from the AI provider, attempts JSON parsing, and saves data.
+ * Shared tail for every extraction source (email parser, email LLM, SMS).
+ * Validates, resolves merchant + category, picks review vs confirmed, saves.
+ *
+ * ctx: { sourceText, receivedAt, userEmail, messageId, silent, resolutions,
+ *        parsedBy, storeSourceText, forceReview, reviewNote }
+ * Returns { data, status }.
  */
-function handleAIResponse(rawText, emailDate, userEmail, message, silent, resolutions) {
-  var messageId = message.getId();
-  var cleanText = rawText;
+function saveExtractedTransaction(extracted, ctx) {
+  var v = validateExtraction(extracted, ctx.sourceText, ctx.receivedAt);
+  var data = v.data;
+  data.category = String((extracted && extracted.category) || "").trim();
 
-  // Clean markdown code blocks
-  if (cleanText.startsWith("```json")) {
-    cleanText = cleanText.replace(/```json|```/g, "").trim();
-  }
-
-  try {
-    if (cleanText.trim().startsWith("{")) {
-      var data = JSON.parse(cleanText);
-      // Skip non-transaction emails but notify via Telegram
-      if (data.not_a_transaction) {
-        if (!silent) {
-          var reason = data.reason || "Not a transaction";
-          // Mirror saveTransaction: only attribute by forwarder when the
-          // tenant has more than one (groups). In a personal chat the line
-          // is always the same name and just adds noise.
-          var skipTenant = findTenantByChatId(getTenantChatId());
-          var skipMsg = "ℹ️ *New email detected but skipped*\n";
-          if (skipTenant && skipTenant.emails && skipTenant.emails.length > 1) {
-            var user = (userEmail || "").split("@")[0] || "unknown";
-            skipMsg += "👤 *By:* " + escapeMarkdown(user) + "\n";
-          }
-          skipMsg += "Reason: " + reason;
-          sendTelegramMessage(getTenantChatId(), skipMsg, { parse_mode: "Markdown" });
-        }
-        markProcessed(message);
-        return { saved: false, duplicate: false, data: null };
-      }
-      // Resolve merchant name before saving
-      var rawMerchant = data.merchant;
-      if (data.merchant && resolutions) {
-        var resolved = resolveMerchant(data.merchant, resolutions);
-        data.merchant = resolved.merchant;
-        // If tool call didn't set category but resolution has a default, use it
-        if (resolved.category && (!data.category || data.category === "Uncategorized")) {
-          data.category = resolved.category;
-        }
-      }
-      // Register the raw extracted merchant in MerchantResolution so the user
-      // can later 🏷️ Tag it without having to type the pattern themselves.
-      if (rawMerchant) addNewMerchantIfNeeded(rawMerchant);
-      saveTransaction(data, emailDate, userEmail, messageId, silent);
-      markProcessed(message);
-      return { saved: true, duplicate: false, data: data };
-    } else {
-      // AI response was not valid JSON
+  var categories = getCategoryListForType(data.transaction_type);
+  if (data.merchant && ctx.resolutions) {
+    var resolved = resolveMerchant(data.merchant, ctx.resolutions);
+    data.merchant = resolved.merchant;
+    var fits = resolved.category && categories.indexOf(resolved.category) !== -1;
+    // The user's own correction always wins; shared defaults only fill gaps.
+    if (fits && (resolved.personalCategory || !data.category || data.category === "Uncategorized")) {
+      data.category = resolved.category;
     }
-  } catch (e) {
-    console.error("[handleAIResponse] JSON parse failed:", e.message);
   }
-  return { saved: false, duplicate: false, data: null };
+  if (!data.category || categories.indexOf(data.category) === -1) {
+    data.category = guessCategory(data.merchant, data.transaction_type);
+  }
+
+  // Review needs a card to confirm from; silent (backfill) saves have none,
+  // so they keep the pre-review behaviour and save as confirmed.
+  var status = !ctx.silent && (v.needsReview || ctx.forceReview) ? TXN_STATUS_REVIEW : "";
+  saveTransaction(data, ctx.receivedAt, ctx.userEmail, ctx.messageId, ctx.silent, {
+    parsedBy: ctx.parsedBy || "",
+    sourceText: ctx.storeSourceText ? ctx.sourceText : "",
+    status: status,
+    reviewNote: ctx.reviewNote || ""
+  });
+  return { data: data, status: status };
 }
 
 /**
- * Saves the transaction structure to the sheet and sends a notification.
+ * Appends the row and (unless silent) sends the transaction card.
+ * extra: { parsedBy, sourceText, status, reviewNote }
  */
-function saveTransaction(data, emailDate, userEmail, messageId, silent) {
+function saveTransaction(data, emailDate, userEmail, messageId, silent, extra) {
+  extra = extra || {};
   var transactionDate = data.transaction_date || "N/A";
   var merchant = data.merchant || "Unknown";
   var amount = data.amount || 0;
   var category = data.category || "Uncategorized";
   var type = data.transaction_type || "Unknown";
   var currency = data.currency || "INR";
-  var user = userEmail.split("@")[0];
+  var user = String(userEmail || "").split("@")[0];
 
-  appendRowToGoogleSheet([emailDate, transactionDate, merchant, amount, category, type, user, messageId, currency]);
+  appendRowToGoogleSheet([
+    emailDate,
+    transactionDate,
+    merchant,
+    amount,
+    category,
+    type,
+    user,
+    messageId,
+    currency,
+    "",
+    "",
+    extra.parsedBy || "",
+    extra.sourceText || "",
+    extra.status || ""
+  ]);
 
   if (!silent) {
     data.email_date = emailDate;
-    // Only show the 👤 line in the chat notification when the tenant actually
-    // has more than one forwarder email — otherwise it's the same name on
-    // every message and just clutters the card. The sheet column is still
-    // populated above so multi-forwarder attribution remains available there.
+    data.status = extra.status || "";
+    data.reviewNote = extra.reviewNote || "";
+    // The 👤 line only helps tenants with more than one forwarder email.
     var tenant = findTenantByChatId(getTenantChatId());
     var displayUser = tenant && tenant.emails && tenant.emails.length > 1 ? user : null;
-    sendTransactionMessage(data, messageId, displayUser);
+    sendTransactionMessage(data, messageId, displayUser, { parsedBy: extra.parsedBy || "" });
   }
 }
-
-/**
 /**
  * Backfill transactions for a date range with time-based execution limit.
  * Returns { savedCount, duplicateCount, failedCount, totalEmails, timedOut }
@@ -733,7 +841,7 @@ function backfillTransactions(startDate, endDate, timeLimitMs) {
     });
   }
 
-  var resolutions = getMerchantResolutions();
+  var resolutions = getMerchantResolutionsForTenant();
   var savedCount = 0;
   var duplicateCount = 0;
   var failedCount = 0;

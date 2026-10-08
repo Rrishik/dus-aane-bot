@@ -72,8 +72,34 @@ function sameChatId(a, b) {
   return String(a) === String(b);
 }
 
-// One-execution cache (rehydrated each script run).
+// Dormant only means "stopped forwarding, nudges exhausted" — the tenant must
+// still be able to use the bot, and its next forward reactivates it.
+function isTenantUsable(tenant) {
+  return !!tenant && (tenant.status === TENANT_STATUS.ACTIVE || tenant.status === TENANT_STATUS.DORMANT);
+}
+
+// One-execution cache (rehydrated each script run), backed by a short-lived
+// CacheService copy so webhook taps skip the admin-sheet read. Every write in
+// this file calls invalidateTenantCache(); manual edits to the Tenants tab
+// take up to TENANT_CACHE_TTL_SEC to show.
+//
+// The cached payload carries the version it was read under, and writes bump
+// the version. A reader that loaded the sheet just before a concurrent write
+// can then never re-publish stale rows: its payload's version no longer
+// matches and is ignored.
 var _tenantCache = null;
+var TENANT_CACHE_KEY = "tenants:v1";
+var TENANT_CACHE_VERSION_KEY = "tenants:version";
+var TENANT_CACHE_TTL_SEC = 300;
+var TENANT_CACHE_VERSION_TTL_SEC = 21600;
+
+function _tenantScriptCache() {
+  try {
+    return CacheService.getScriptCache();
+  } catch (_) {
+    return null;
+  }
+}
 
 function _adminSpreadsheet() {
   // Registry lives on the admin sheet. Use a direct openById (not getSpreadsheet())
@@ -163,6 +189,25 @@ function _rowToTenant(row) {
 
 function loadTenants() {
   if (_tenantCache) return _tenantCache;
+  var cache = _tenantScriptCache();
+  var version = null;
+  if (cache) {
+    try {
+      version = cache.get(TENANT_CACHE_VERSION_KEY);
+      if (!version) {
+        version = _newTenantCacheVersion();
+        cache.put(TENANT_CACHE_VERSION_KEY, version, TENANT_CACHE_VERSION_TTL_SEC);
+      }
+      var cached = cache.get(TENANT_CACHE_KEY);
+      if (cached) {
+        var payload = JSON.parse(cached);
+        if (payload && payload.version === version) {
+          _tenantCache = payload.rows.map(_rowToTenant);
+          return _tenantCache;
+        }
+      }
+    } catch (_) {}
+  }
   var tab = _getOrCreateTenantsTab();
   var last = tab.getLastRow();
   if (last < 2) {
@@ -174,11 +219,27 @@ function loadTenants() {
   var width = Math.min(TENANT_COL_COUNT, tab.getLastColumn());
   var data = tab.getRange(2, 1, last - 1, width).getValues();
   _tenantCache = data.map(_rowToTenant);
+  if (cache && version) {
+    try {
+      cache.put(TENANT_CACHE_KEY, JSON.stringify({ version: version, rows: data }), TENANT_CACHE_TTL_SEC);
+    } catch (_) {}
+  }
   return _tenantCache;
+}
+
+function _newTenantCacheVersion() {
+  return String(Date.now()) + ":" + Math.random().toString(36).slice(2);
 }
 
 function invalidateTenantCache() {
   _tenantCache = null;
+  var cache = _tenantScriptCache();
+  if (cache) {
+    try {
+      cache.put(TENANT_CACHE_VERSION_KEY, _newTenantCacheVersion(), TENANT_CACHE_VERSION_TTL_SEC);
+      cache.remove(TENANT_CACHE_KEY);
+    } catch (_) {}
+  }
 }
 
 function findTenantByChatId(chatId) {
@@ -200,7 +261,7 @@ function findTenantByEmail(email) {
   // would be posted in the group chat instead of the member's DM.
   for (var i = 0; i < list.length; i++) {
     if (
-      list[i].status === TENANT_STATUS.ACTIVE &&
+      isTenantUsable(list[i]) &&
       list[i].chat_type === TENANT_CHAT_TYPE.PERSONAL &&
       list[i].emails.indexOf(lc) !== -1
     ) {

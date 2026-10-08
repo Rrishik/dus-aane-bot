@@ -2,8 +2,16 @@ function deleteWebhook() {
   sendRequest(BOT_DELETE_WEBHOOK_URL, "post", {});
 }
 
+// Shared secret for the Telegram → Worker → Apps Script hops. Optional in
+// AConfig.js so a config without it still loads; when unset, webhook auth is
+// off (logged on every doPost).
+function getWebhookSecret() {
+  return typeof WEBHOOK_SECRET !== "undefined" && WEBHOOK_SECRET ? String(WEBHOOK_SECRET) : "";
+}
+
 // Webhook setup — points Telegram at the Cloudflare Worker proxy that
-// forwards to Apps Script. Run once.
+// forwards to Apps Script. Run once, and again whenever WEBHOOK_SECRET
+// changes (Telegram then sends it as X-Telegram-Bot-Api-Secret-Token).
 function setTelegramWebhook() {
   deleteWebhook();
   var payload = {
@@ -13,6 +21,8 @@ function setTelegramWebhook() {
     // reliably when the bot is a group admin (enforced at /start).
     allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "chat_member"]
   };
+  var secret = getWebhookSecret();
+  if (secret) payload.secret_token = secret;
 
   sendRequest(BOT_SET_WEBHOOK_URL, "post", payload);
 }
@@ -318,10 +328,6 @@ function sendRequest(url, method, payload) {
   throw new Error("API request failed unexpectedly after all retries for URL: " + url);
 }
 
-function buildReplyMarkup(buttons) {
-  return { inline_keyboard: buttons };
-}
-
 function buildCategoryKeyboard(emailMessageId, categories, prefix) {
   var list = categories || CATEGORIES;
   var pfx = prefix || "cat";
@@ -342,19 +348,39 @@ function buildCategoryKeyboard(emailMessageId, categories, prefix) {
   return { inline_keyboard: rows };
 }
 
-// Help/overflow menu — shown when the ❓ button on a txn card is tapped.
-// Hosts the low-frequency destructive actions (Delete, Report error) so the
-// default action row stays focused on the common ops (Split / toggle / pills).
-function buildHelpMenuKeyboard(emailMessageId) {
+// Overflow menu — opened by the ⋯ button on a txn card. Hosts the
+// low-frequency actions so the default row stays focused on the pills.
+//   opts.canReread — parser-read, not yet re-read, not split
+//   opts.canDelete — false for split rows (undo the split first)
+// Re-read replaces Report error: rows the LLM already read, or that were
+// already re-read, get Report instead.
+function buildHelpMenuKeyboard(emailMessageId, opts) {
+  opts = opts || {};
+  var canDelete = opts.canDelete !== false;
+  var first = opts.canReread
+    ? { text: "🔄 Re-read", callback_data: "rr_" + emailMessageId }
+    : { text: "⚠️ Report error", callback_data: "report_" + emailMessageId };
+  var row = [first];
+  if (canDelete) row.push({ text: "🗑️ Delete", callback_data: "del_" + emailMessageId });
   return {
-    inline_keyboard: [
-      [
-        { text: "⚠️ Report error", callback_data: "report_" + emailMessageId },
-        { text: "🗑️ Delete", callback_data: "del_" + emailMessageId }
-      ],
-      [{ text: "← Back", callback_data: "back_" + emailMessageId }]
-    ]
+    inline_keyboard: [row, [{ text: "← Back", callback_data: "back_" + emailMessageId }]]
   };
+}
+
+// Card for a row awaiting confirmation (low-confidence parse, failed
+// validation, or a suspected duplicate). Nothing counts until ✅ Save.
+function buildReviewKeyboard(emailMessageId, canReread) {
+  var row = [{ text: "✅ Save", callback_data: "rvok_" + emailMessageId }];
+  if (canReread) row.push({ text: "🔄 Re-read", callback_data: "rr_" + emailMessageId });
+  row.push({ text: "✖ Discard", callback_data: "rvno_" + emailMessageId });
+  return { inline_keyboard: [row] };
+}
+
+// True when the row was read by a parser template that hasn't been re-read
+// yet. Legacy rows (blank Parsed By) were all LLM-read.
+function canRereadRow(parsedBy, groupRef) {
+  var p = String(parsedBy || "");
+  return !!p && p !== PARSED_BY_LLM && p.indexOf(REREAD_MARKER) === -1 && !groupRef;
 }
 
 // Two-step delete confirm. Tapped from the help menu; either commits the
@@ -383,10 +409,9 @@ function escapeMarkdown(text) {
 }
 
 // ─── Transaction notification card ─────────────────────────────────────────────
-// 2-line body, 4 buttons in a fixed 2x2 grid. Tag + Category render as status
-// pills with a ▾ glyph — current value lives on the affordance to change it,
-// so the body stays minimal and there's no conditional rendering for "new
-// merchant" / "empty merchant" cases (every card looks the same).
+// 2-line body (plus a ⚠️ line on review cards). Tag + Category render as
+// status pills with a ▾ glyph — the current value lives on the affordance to
+// change it, so every card has the same shape.
 function getTransactionMessageAsString(transaction_details, user) {
   var rawDate = transaction_details.email_date || transaction_details.transaction_date;
   var date = escapeMarkdown(
@@ -406,12 +431,13 @@ function getTransactionMessageAsString(transaction_details, user) {
 
   var lines = [header, "🗓 " + date];
   if (user) lines.push("👤 " + escapeMarkdown(user));
+  if (transaction_details.status === TXN_STATUS_REVIEW) {
+    lines.push(
+      "⚠️ *Check this* — " + escapeMarkdown(transaction_details.reviewNote || "not counted until you save it")
+    );
+  }
   return lines.join("\n");
 }
-
-// Tag input cap. Keep in lockstep with the BotHandlers validation —
-// buttons never wrap on narrow phones if labels stay within this budget.
-var TAG_MAX_LEN = 18;
 
 // Trim long tag/category labels for button display. Inputs are already capped
 // at TAG_MAX_LEN, but defensively guard pre-existing CategoryOverrides values
@@ -423,34 +449,20 @@ function pillLabel(value, fallback) {
   return v;
 }
 
-function sendTransactionMessage(transaction_details, messageId, user) {
-  var message = getTransactionMessageAsString(transaction_details, user);
-
-  var options = {
-    parse_mode: "Markdown"
-  };
-
+// opts.parsedBy decides whether a review card offers 🔄 Re-read.
+function sendTransactionMessage(transaction_details, messageId, user, opts) {
+  opts = opts || {};
+  var options = { parse_mode: "Markdown" };
   if (messageId) {
-    var tagPill = "🏷 " + pillLabel(transaction_details.merchant, "Untagged") + " ▾";
-    var catPill = "📂 " + pillLabel(shortCategoryName(transaction_details.category), "Uncategorized") + " ▾";
-
-    // Pills row carries the ❓ overflow. Group-split parent buttons (one row
-    // per group the user belongs to) stack above the pills so the per-group
-    // action is the most prominent option. Users in zero groups see only
-    // pills + overflow — no split UI applies until they join a group.
-    var rows = [
-      [
-        { text: tagPill, callback_data: "tag_" + messageId },
-        { text: catPill, callback_data: "editcat_" + messageId },
-        { text: "❓", callback_data: "help_" + messageId }
-      ]
-    ];
-    var groupRows = buildGroupParentButtonRows(getTenantChatId(), messageId);
-    for (var gi = 0; gi < groupRows.length; gi++) {
-      rows.unshift(groupRows[groupRows.length - 1 - gi]);
-    }
-    options.reply_markup = buildReplyMarkup(rows);
+    options.reply_markup =
+      transaction_details.status === TXN_STATUS_REVIEW
+        ? buildReviewKeyboard(messageId, canRereadRow(opts.parsedBy, ""))
+        : buildTransactionLevel0Keyboard(
+            getTenantChatId(),
+            messageId,
+            transaction_details.merchant,
+            transaction_details.category
+          );
   }
-
-  sendTelegramMessage(getTenantChatId(), message, options);
+  sendTelegramMessage(getTenantChatId(), getTransactionMessageAsString(transaction_details, user), options);
 }

@@ -48,7 +48,7 @@ function baseStubs(overrides) {
       // Mutation helpers — stubbed; tests override per-case.
       findRowByColumnValue: vi.fn(() => -1),
       updateGoogleSheetCellWithFeedback: vi.fn(() => ({ success: true })),
-      setCategoryOverride: vi.fn(),
+      setMyMerchant: vi.fn(),
       findGroupsForMember: vi.fn(() => []),
       findTenantByChatId: vi.fn(() => null),
       recordGroupSplit: vi.fn(() => ({ ok: true }))
@@ -153,7 +153,7 @@ describe("runAskLoop — ask_user suspend", () => {
   });
 
   it("when ask_user is one of several tool calls, executes siblings and then suspends", () => {
-    var executor = vi.fn(() => ({ ok: true }));
+    var executor = vi.fn(() => []);
     var env = baseStubs({
       aggregateByField: executor, // search uses this; just need any deterministic stub
       callAIWithTools: vi.fn(() => ({
@@ -382,7 +382,7 @@ describe("executeAskTool — update_transaction", () => {
     expect(res.error).toMatch(/Nothing to update/);
   });
 
-  it("updates category, calls setCategoryOverride, and returns change diff", () => {
+  it("updates category, teaches MyMerchants, and returns change diff", () => {
     var env = baseStubs({ findRowByColumnValue: vi.fn(() => 7) });
     var api = load(env.stubs);
     var res = api.executeAskTool(
@@ -397,7 +397,7 @@ describe("executeAskTool — update_transaction", () => {
       changes: [{ field: "category", from: "Food", to: "Groceries" }]
     });
     expect(env.stubs.updateGoogleSheetCellWithFeedback).toHaveBeenCalledWith(7, 5, "Groceries", "Food");
-    expect(env.stubs.setCategoryOverride).toHaveBeenCalledWith("Swiggy", "Groceries");
+    expect(env.stubs.setMyMerchant).toHaveBeenCalledWith("Swiggy", { category: "Groceries" });
   });
 
   it("updates merchant + transaction_type together", () => {
@@ -416,8 +416,8 @@ describe("executeAskTool — update_transaction", () => {
     ]);
     // Two cell updates fired — one for merchant col, one for type col.
     expect(env.stubs.updateGoogleSheetCellWithFeedback).toHaveBeenCalledTimes(2);
-    // setCategoryOverride must NOT fire when no category change happened.
-    expect(env.stubs.setCategoryOverride).not.toHaveBeenCalled();
+    // setMyMerchant must NOT fire when no category change happened.
+    expect(env.stubs.setMyMerchant).not.toHaveBeenCalled();
   });
 
   it("propagates sheet write failures", () => {

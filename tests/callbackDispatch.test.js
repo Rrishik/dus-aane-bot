@@ -150,7 +150,7 @@ describe("handleCallbackQuery → group-callback routing", () => {
 });
 
 // ── In-place txn-card flow ──────────────────────────────────────────────────
-// Covers the keyboard-only flows wired in the ❓ overflow + picker redesign:
+// Covers the keyboard-only flows wired in the ⋯ overflow + picker redesign:
 // editcat / cat / help / report / del / delyes / back / tag. These flows
 // edit the card in place via editMessageReplyMarkup; they do NOT post new
 // messages (except `tag`, which has to use force_reply, and `report`, which
@@ -167,7 +167,10 @@ const PERSONAL_HEADER = [
   "Message ID",
   "Currency",
   "Group Ref",
-  "Group Message ID"
+  "Group Message ID",
+  "Parsed By",
+  "Source Text",
+  "Status"
 ];
 
 function setupFlowFixture(txn, extraTenants) {
@@ -187,14 +190,27 @@ function setupFlowFixture(txn, extraTenants) {
     txn.messageId,
     txn.currency || "INR",
     txn.groupRef || "",
-    txn.groupMessageId || ""
+    txn.groupMessageId || "",
+    txn.parsedBy || "",
+    txn.sourceText || "",
+    txn.status || ""
   ]);
   return { SpreadsheetApp: SpreadsheetApp, personal: personal };
 }
 
 function flowLoad(SpreadsheetApp, sent, extraStubs) {
   return loadAppsScript(
-    ["TelegramUtils.js", "GoogleSheetUtils.js", "TenantRegistry.js", "Analytics.js", "Groups.js", "BotHandlers.js"],
+    [
+      "TelegramUtils.js",
+      "GoogleSheetUtils.js",
+      "TenantRegistry.js",
+      "Analytics.js",
+      "Groups.js",
+      "Parser.js",
+      "ParserTelemetry.js",
+      "PendingInput.js",
+      "BotHandlers.js"
+    ],
     ["handleCallbackQuery", "setCurrentTenant"],
     Object.assign(
       {
@@ -209,7 +225,22 @@ function flowLoad(SpreadsheetApp, sent, extraStubs) {
         CREDIT_CATEGORIES: ["Salary", "Refund"],
         CATEGORY_EMOJIS: { Shopping: "🛍", Groceries: "🥦", "Food & Dining": "🍕" },
         UrlFetchApp: makeFetch(sent),
-        Utilities: { sleep: () => {}, getUuid: () => "uuid-1" },
+        Utilities: { sleep: () => {}, getUuid: () => "uuid-1", formatDate: (d) => "FMT(" + d.getDate() + ")" },
+        Session: { getScriptTimeZone: () => "Asia/Kolkata" },
+        CacheService: (function () {
+          var c = {};
+          return {
+            getScriptCache: () => ({
+              get: (k) => (k in c ? c[k] : null),
+              put: (k, v) => {
+                c[k] = String(v);
+              },
+              remove: (k) => {
+                delete c[k];
+              }
+            })
+          };
+        })(),
         PropertiesService: (function () {
           var store = {};
           return {
@@ -230,6 +261,10 @@ function flowLoad(SpreadsheetApp, sent, extraStubs) {
         AMOUNT_COLUMN: 4,
         CATEGORY_COLUMN: 5,
         TRANSACTION_TYPE_COLUMN: 6,
+        EMAIL_DATE_COLUMN: 1,
+        TRANSACTION_DATE_COLUMN: 2,
+        USER_COLUMN: 7,
+        CURRENCY_COLUMN: 9,
         GROUP_REF_COLUMN: 10,
         GROUP_MESSAGE_ID_COLUMN: 11,
         Logger: { log: () => {} }
@@ -381,12 +416,12 @@ describe("handleCallbackQuery → in-place txn-card flow", () => {
     var edit = sent.find((s) => s.url.indexOf("/editMessageReplyMarkup") !== -1);
     expect(edit).toBeTruthy();
     var kb = JSON.parse(edit.payload.reply_markup);
-    // Personal user not in any group: just one pills+❓ row, no parent rows.
+    // Personal user not in any group: just one pills+⋯ row, no parent rows.
     expect(kb.inline_keyboard).toHaveLength(1);
-    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "❓"]);
+    expect(kb.inline_keyboard[0].map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "⋯"]);
   });
 
-  it("back → personal row when user has ≥1 group: prepends group parent row, ❓ rides on pills", () => {
+  it("back → personal row when user has ≥1 group: prepends group parent row, ⋯ rides on pills", () => {
     var sent = [];
     var fix = setupFlowFixture({ messageId: "msg-X", merchant: "Amazon", category: "Shopping" }, [
       ["-100", "Pad", "", "g1", "active", "", "admin=111", "", "", 0, "group", "111,222", "INR"]
@@ -401,10 +436,10 @@ describe("handleCallbackQuery → in-place txn-card flow", () => {
     var kb = JSON.parse(edit.payload.reply_markup);
     // First row is the group parent button.
     expect(kb.inline_keyboard[0][0].text).toContain("Split with Pad");
-    // No standalone action row — ❓ sits inline on the pills row to keep
+    // No standalone action row — ⋯ sits inline on the pills row to keep
     // the keyboard compact.
     var pillsRow = kb.inline_keyboard[kb.inline_keyboard.length - 1];
-    expect(pillsRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "❓"]);
+    expect(pillsRow.map((b) => b.text)).toEqual(["🏷 Amazon ▾", "📂 Shopping ▾", "⋯"]);
   });
 
   it("back → rebuilds post-split keyboard when the row has a GROUP_REF", () => {
@@ -450,10 +485,163 @@ describe("handleCallbackQuery → in-place txn-card flow", () => {
 
     mod.handleCallbackQuery(cb("tag_msg-X", 42));
 
-    expect(store["pending_tag_111"]).toBe("msg-X|42");
+    expect(JSON.parse(store["pending_tag_111"]).v).toBe("msg-X|42");
     var prompt = sent.find((s) => s.url.indexOf("/sendMessage") !== -1);
     expect(prompt).toBeTruthy();
     var rm = JSON.parse(prompt.payload.reply_markup);
     expect(rm.force_reply).toBe(true);
+  });
+});
+
+// ── Re-read, review cards, split guards ─────────────────────────────────────
+
+describe("handleCallbackQuery → Re-read + review + split guards", () => {
+  function cb(data) {
+    return {
+      callback_query: {
+        id: "cb1",
+        from: { id: 111 },
+        data: data,
+        message: { chat: { id: 111 }, message_id: 42, text: "txn body" }
+      }
+    };
+  }
+  function setup(txn, extraStubs) {
+    var sent = [];
+    var fix = setupFlowFixture(Object.assign({ messageId: "msg-X" }, txn));
+    var mod = flowLoad(fix.SpreadsheetApp, sent, extraStubs);
+    mod.setCurrentTenant({ chat_id: "111", sheet_id: "s1", name: "Alice", status: "active", emails: ["a@x.com"] });
+    return { sent: sent, fix: fix, mod: mod };
+  }
+  function lastKeyboard(sent) {
+    var edits = sent.filter((s) => s.payload.reply_markup);
+    return JSON.parse(edits[edits.length - 1].payload.reply_markup);
+  }
+  function events(fix) {
+    var tab = fix.SpreadsheetApp.openById(ADMIN_SHEET_ID).getSheetByName("ParserEvents");
+    return tab ? tab.data.slice(1).map((r) => r[4]) : [];
+  }
+  var llmSays = (obj) => vi.fn(() => obj);
+
+  it("⋯ menu offers Re-read (not Report) for parser-read rows", () => {
+    var t = setup({ parsedBy: "generic_v1" });
+    t.mod.handleCallbackQuery(cb("help_msg-X"));
+    var row = lastKeyboard(t.sent).inline_keyboard[0];
+    expect(row.map((b) => b.callback_data)).toEqual(["rr_msg-X", "del_msg-X"]);
+  });
+
+  it("⋯ menu keeps Report for LLM / legacy rows and hides Delete on split rows", () => {
+    var t = setup({ parsedBy: "", groupRef: "-100:tx-1" });
+    t.mod.handleCallbackQuery(cb("help_msg-X"));
+    var row = lastKeyboard(t.sent).inline_keyboard[0];
+    expect(row.map((b) => b.callback_data)).toEqual(["report_msg-X"]);
+  });
+
+  it("delyes refuses to delete a split row", () => {
+    var t = setup({ groupRef: "-100:tx-1" });
+    t.mod.handleCallbackQuery(cb("delyes_msg-X"));
+    expect(t.fix.personal.getLastRow()).toBe(2);
+    expect(t.sent.some((s) => /Make it personal again first/.test(s.payload.text || ""))).toBe(true);
+  });
+
+  it("report uses the row's currency and logs a report event", () => {
+    var t = setup({ currency: "USD", amount: 12, parsedBy: "generic_v1|rr" });
+    t.mod.handleCallbackQuery(cb("report_msg-X"));
+    var adminDm = t.sent.find((s) => String(s.payload.chat_id) === "999");
+    expect(adminDm.payload.text).toContain("USD 12");
+    expect(events(t.fix)).toEqual(["report"]);
+  });
+
+  it("rr → shows only changed fields; rra applies them and confirms the row", () => {
+    var t = setup(
+      { parsedBy: "generic_v1", sourceText: "x", amount: 450, txDate: "2026-05-01", status: "review" },
+      {
+        extractWithLLM: llmSays({
+          amount: 4500,
+          transaction_type: "Debit",
+          currency: "INR",
+          transaction_date: "2026-05-01"
+        }),
+        GmailApp: { getMessageById: () => ({ getPlainBody: () => "Rs 4,500 debited on 01-05-26" }) }
+      }
+    );
+    t.mod.handleCallbackQuery(cb("rr_msg-X"));
+    var diffEdit = t.sent.filter((s) => s.url.indexOf("/editMessageText") !== -1).pop();
+    expect(diffEdit.payload.text).toContain("Re-read: ₹4500");
+    expect(JSON.parse(diffEdit.payload.reply_markup).inline_keyboard[0].map((b) => b.callback_data)).toEqual([
+      "rra_msg-X",
+      "rrk_msg-X"
+    ]);
+    expect(t.fix.personal.getRange(2, 4).getValue()).toBe(450); // not applied yet
+
+    t.mod.handleCallbackQuery(cb("rra_msg-X"));
+    expect(t.fix.personal.getRange(2, 4).getValue()).toBe(4500);
+    expect(t.fix.personal.getRange(2, 12).getValue()).toBe("llm");
+    expect(t.fix.personal.getRange(2, 14).getValue()).toBe("");
+    expect(events(t.fix)).toEqual(["reparse_requested", "reparse_accepted"]);
+  });
+
+  it("rr with the same result marks the row re-read and offers Report", () => {
+    var t = setup(
+      { parsedBy: "generic_v1", amount: 450, txDate: "2026-05-01" },
+      {
+        extractWithLLM: llmSays({
+          amount: 450,
+          transaction_type: "Debit",
+          currency: "INR",
+          transaction_date: "2026-05-01"
+        }),
+        GmailApp: { getMessageById: () => ({ getPlainBody: () => "Rs 450 debited on 01-05-26" }) }
+      }
+    );
+    t.mod.handleCallbackQuery(cb("rr_msg-X"));
+    expect(t.fix.personal.getRange(2, 12).getValue()).toBe("generic_v1|rr");
+    expect(lastKeyboard(t.sent).inline_keyboard[0][0].callback_data).toBe("report_msg-X");
+    expect(events(t.fix)).toEqual(["reparse_requested", "reparse_same"]);
+  });
+
+  it("rrk keeps the parser read and blocks a second Re-read", () => {
+    var t = setup({ parsedBy: "generic_v1" });
+    t.mod.handleCallbackQuery(cb("rrk_msg-X"));
+    expect(t.fix.personal.getRange(2, 12).getValue()).toBe("generic_v1|rr");
+    t.mod.handleCallbackQuery(cb("help_msg-X"));
+    expect(lastKeyboard(t.sent).inline_keyboard[0][0].callback_data).toBe("report_msg-X");
+  });
+
+  it("rr on a split row is refused", () => {
+    var llm = vi.fn();
+    var t = setup({ parsedBy: "generic_v1", groupRef: "-100:tx-1" }, { extractWithLLM: llm });
+    t.mod.handleCallbackQuery(cb("rr_msg-X"));
+    expect(llm).not.toHaveBeenCalled();
+    expect(t.sent.some((s) => /Make it personal again first/.test(s.payload.text || ""))).toBe(true);
+  });
+
+  it("rvok confirms a review row; rvno discards it", () => {
+    var t = setup({ status: "review", parsedBy: "generic_v1" }, { markTenantActivity: vi.fn() });
+    t.mod.handleCallbackQuery(cb("rvok_msg-X"));
+    expect(t.fix.personal.getRange(2, 14).getValue()).toBe("");
+    expect(lastKeyboard(t.sent).inline_keyboard[0].map((b) => b.text)).toContain("⋯");
+
+    var t2 = setup({ status: "review" });
+    t2.mod.handleCallbackQuery(cb("rvno_msg-X"));
+    expect(t2.fix.personal.getLastRow()).toBe(1);
+  });
+
+  it("back on a review row restores the review keyboard", () => {
+    var t = setup({ status: "review", parsedBy: "generic_v1" });
+    t.mod.handleCallbackQuery(cb("back_msg-X"));
+    expect(lastKeyboard(t.sent).inline_keyboard[0].map((b) => b.callback_data)).toEqual([
+      "rvok_msg-X",
+      "rr_msg-X",
+      "rvno_msg-X"
+    ]);
+  });
+
+  it("cat pick teaches the user's MyMerchants tab, not the shared overrides", () => {
+    var t = setup({ merchant: "Swiggy" });
+    t.mod.handleCallbackQuery(cb("cat_msg-X_1"));
+    var mine = t.fix.SpreadsheetApp.openById("s1").getSheetByName("MyMerchants");
+    expect(mine.data[1]).toEqual(["Swiggy", "", "Groceries"]);
+    expect(t.fix.SpreadsheetApp.openById(ADMIN_SHEET_ID).getSheetByName("CategoryOverrides")).toBeNull();
   });
 });
