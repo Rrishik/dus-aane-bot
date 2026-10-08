@@ -1,0 +1,48 @@
+name: Diagnose
+
+# Manual, read-only. Prints counts and URL shapes only (public logs).
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: Look back this many hours
+        default: "3"
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Worker URL and Telegram webhook
+        env:
+          WORKER_PROXY_URL: ${{ secrets.WORKER_PROXY_URL }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          node --input-type=module -e '
+            const u = new URL(process.env.WORKER_PROXY_URL);
+            console.log("WORKER_PROXY_URL path:", u.pathname === "/" ? "/ (root)" : "non-root (" + u.pathname.split("/").filter(Boolean).length + " segment(s))");
+            console.log("WORKER_PROXY_URL query string:", u.search ? "yes" : "no");
+            const r = await (await fetch("https://api.telegram.org/bot" + process.env.BOT_TOKEN + "/getWebhookInfo")).json();
+            const w = r.result || {};
+            console.log("webhook points at WORKER_PROXY_URL:", w.url === process.env.WORKER_PROXY_URL);
+            console.log("pending updates:", w.pending_update_count, "| last error:", w.last_error_message || "none",
+              w.last_error_date ? "(" + new Date(w.last_error_date * 1000).toISOString() + ")" : "");
+            console.log("allowed updates:", (w.allowed_updates || []).join(","));'
+
+      - name: D1 activity
+        working-directory: worker
+        run: |
+          since="(CAST(strftime('%s','now') AS INTEGER) * 1000 - ${{ inputs.hours }} * 3600000)"
+          q() { npx --yes wrangler@4.81.1 d1 execute dus-aane-bot --remote --json --command "$1" 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{const r=JSON.parse(s.slice(s.indexOf("[")));console.log(JSON.stringify(r.flatMap((x)=>x.results)))})'; }
+          echo "transactions created:";      q "SELECT status, COUNT(*) AS n FROM transactions WHERE created_at > $since GROUP BY 1"
+          echo "sources ingested:";          q "SELECT source, parsed_by IS NOT NULL AS parsed, COUNT(*) AS n FROM transaction_sources s JOIN transactions t ON t.id = s.transaction_id WHERE t.updated_at > $since GROUP BY 1, 2"
+          echo "parser events:";             q "SELECT channel, event, COUNT(*) AS n FROM parser_events WHERE ts > $since GROUP BY 1, 2"
+          echo "latest email source (min ago):"; q "SELECT (CAST(strftime('%s','now') AS INTEGER) * 1000 - MAX(received_at)) / 60000 AS minutes_ago FROM transaction_sources WHERE source = 'email'"
+          echo "tenants by status:";         q "SELECT kind, status, COUNT(*) AS n FROM tenants GROUP BY 1, 2"
