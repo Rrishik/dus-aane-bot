@@ -1,0 +1,560 @@
+// Deterministic transaction parser for bank emails and pasted SMS.
+//
+// Plain JS only (no Apps Script services) so it unit-tests directly and can
+// move to the Worker unchanged. Pipeline:
+//   normalize → reject OTP / declined / reminders → bank templates
+//   (BankTemplates.js) → generic rules → confidence score.
+// validateExtraction() is shared with the LLM path so every source passes the
+// same checks before a row is written.
+
+var PARSER_AUTO_SAVE_CONFIDENCE = 0.8;
+var PARSER_REVIEW_CONFIDENCE = 0.5;
+var PARSER_TEMPLATE_CONFIDENCE = 0.97;
+var PARSER_GENERIC_ID = "generic_v1";
+var PARSER_MAX_AMOUNT = 10000000;
+var PARSER_DATE_PAST_DAYS = 90;
+var PARSER_MAX_TEXT_LEN = 6000;
+
+var _P_CUR = "(Rs\\.?|INR|₹|US\\$|\\$|USD|EUR|€|GBP|£|AED|SGD|AUD|CAD|JPY|CHF|HKD|NZD|THB|SAR|ZAR)";
+var _P_NUM = "(\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d{1,2})?|\\d+(?:\\.\\d{1,2})?)";
+var _P_DEBIT_VERBS = "debited|spent|paid|sent|charged|withdrawn|purchased|deducted";
+var _P_CREDIT_VERBS = "credited|received|refunded|deposited|reversed";
+var _P_VERBS = _P_DEBIT_VERBS + "|" + _P_CREDIT_VERBS;
+
+// Verb-anchored amounts: the verb next to the amount decides the direction,
+// which handles messages that mention both sides ("debited …; X credited").
+var _P_VERB_AMOUNT_PATTERNS = [
+  new RegExp("\\b(" + _P_VERBS + ")\\s+(?:with|by|for|of)?\\s*:?\\s*" + _P_CUR + "\\s*" + _P_NUM, "i"),
+  new RegExp("\\b(" + _P_VERBS + ")\\s+(?:by|for|with)\\s+()" + _P_NUM + "\\b(?![,.]?\\d)", "i"),
+  new RegExp(_P_CUR + "\\s*" + _P_NUM + "\\s+(?:has been|have been|was|is|got)?\\s*(" + _P_VERBS + ")\\b", "i"),
+  new RegExp("\\b(refund|cashback|reversal)\\s+of\\s+" + _P_CUR + "\\s*" + _P_NUM, "i")
+];
+var _P_TXN_OF_PATTERN = new RegExp(
+  "\\b(?:transaction|txn|purchase|payment|spend)\\s+(?:of|for)\\s+" + _P_CUR + "\\s*" + _P_NUM,
+  "i"
+);
+var _P_ANY_AMOUNT = new RegExp(_P_CUR + "\\s*" + _P_NUM, "gi");
+var _P_BALANCE_CONTEXT = /\b(?:bal|balance|limit|avl|avbl|available|outstanding|due)\b[^\d]{0,15}$/i;
+
+var _P_OTP =
+  /\b(?:otp|one[- ]time password|verification code|login code)\b[^\n]{0,60}?\b\d{4,8}\b|\b\d{4,8}\b[^\n]{0,30}?\b(?:is (?:your|the) )(?:otp|one[- ]time password)\b/i;
+var _P_DECLINED =
+  /\b(?:declined|failed|unsuccessful|insufficient (?:funds|balance)|could not be (?:processed|completed)|was not (?:processed|successful))\b/i;
+var _P_FUTURE =
+  /\bwill be (?:debited|charged|deducted|auto-?debited)\b|\b(?:is|are) due\b|\bdue (?:date|on|by)\b|\bpayment reminder\b|\bminimum (?:amount )?due\b/i;
+var _P_PROMO =
+  /\b(?:offer|discount|coupon|apply now|limited time|shop now|sale ends|pre-?approved|congratulations|you are eligible)\b/i;
+
+var _P_DEBIT_KEYWORDS = /\b(?:debit(?:ed)?|spent|paid|sent|purchase|withdrawn|charged|deducted)\b/i;
+var _P_CREDIT_KEYWORDS = /\b(?:credit(?:ed)?(?!\s*card)|received|refund(?:ed)?|deposited|cashback)\b/i;
+
+var _P_FOOTER_MARKERS =
+  /(?:this is (?:a )?(?:system|computer|auto)[- ]generated|please do not reply|do not reply to this|disclaimer|to unsubscribe|for any (?:queries|query|assistance|clarification)|warm regards|regards,|never share your)/i;
+
+var _P_ACCOUNT =
+  /\b(?:a\/c|acct|account|card)\b(?:\s*(?:no\.?|number|ending(?:\s+(?:in|with))?))?\s*[:.]?\s*[xX*]*\s*(\d{3,4})\b/i;
+var _P_REFERENCE_PATTERNS = [
+  /\b(?:upi\s*ref(?:erence)?|ref(?:erence)?|refno|rrn|utr)(?:\s*(?:no|number))?\.?(?:\s+is)?\s*[:#-]?\s*([A-Z0-9]{8,})\b/i,
+  /\bUPI\/P2[AM]\/(\d{8,})/i,
+  /\bUPI[:\s]+(\d{8,})\b/i
+];
+
+var _P_MERCHANT_PATTERNS = [
+  /\bto VPA\s+\S+@\S+\s+([A-Za-z][A-Za-z0-9 &.'-]{1,40}?)\s+on\b/i,
+  /\bto VPA\s+([\w.-]+@[\w.-]+)/i,
+  /\bUPI\/P2[AM]\/\d+\/([^\/]+?)(?=\/|\s+Not\b|\s+Avl|\s*$)/i,
+  /;\s*([A-Za-z][A-Za-z0-9 &.'-]{1,40}?)\s+credited\b/i,
+  /\b(?:trf to|transfer to|transferred to|paid to|sent to)\s+([A-Za-z][A-Za-z0-9 &.'@-]{1,40}?)(?=\s+(?:on|ref|refno|upi|via|for)\b|[.;,]|$)/i,
+  /\bTo\s+([A-Za-z][A-Za-z0-9 &.'@-]{1,40}?)\s+On\s+\d/i,
+  /\b(?:at|@)\s+([A-Za-z0-9][A-Za-z0-9 &.'*_\/-]{1,40}?)(?=\s+(?:on|via|using|for|ref)\b|\.\s|\.?$|[;,]|\s+Avl|\s+Avbl)/i,
+  // Case-sensitive: ICICI-style "… on 07-Oct-26 on ZOMATO." — uppercase start
+  // keeps "on your card" and dates out.
+  /\bon\s+([A-Z][A-Z0-9 &.'*_-]{1,40}?)(?=\.\s|\.?$|[;,]|\s+Avl|\s+Avbl)/,
+  /\b(?:from|by)\s+(?:(?:NEFT|IMPS|RTGS|UPI)\s+)?(?:from\s+)?([A-Za-z][A-Za-z0-9 &.'-]{1,60}?)(?=\s+(?:has|have|on|via|ref)\b|[.;,]|$)/i
+];
+var _P_MERCHANT_REJECT =
+  /^(?:a\/?c|ac|acct|account|card|your|you|the|us|bank|hdfc|icici|axis|sbi|kotak|idfc|indusind|yes|hsbc|citi|amex|vpa|upi|neft|imps|rtgs|date|customer)\b/i;
+var _P_MERCHANT_REJECT_ANYWHERE = /\b(?:has been|credited|debited|ending|a\/c)\b/i;
+
+var _P_MONTHS = {
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12
+};
+var _P_MON = "(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*";
+
+var _P_CATEGORY_KEYWORDS = [
+  ["Food & Dining", /swiggy|zomato|restaurant|cafe|coffee|domino|pizza|eatsure|starbucks|kfc|mcdonald|burger/i],
+  ["Groceries", /blinkit|zepto|bigbasket|instamart|grocer|supermarket|dmart|jiomart/i],
+  ["Shopping", /amazon|flipkart|myntra|ajio|meesho|nykaa|croma|decathlon/i],
+  ["Travel", /uber|\bola\b|rapido|irctc|makemytrip|goibibo|indigo|air india|vistara|redbus|cleartrip|\bmetro\b/i],
+  ["Fuel", /petrol|fuel|hpcl|bpcl|indian oil|iocl|\bshell\b/i],
+  ["Subscriptions", /netflix|spotify|prime video|hotstar|youtube|apple\.com|google play|icloud|openai|chatgpt/i],
+  ["Entertainment", /bookmyshow|\bpvr\b|inox|cinema/i],
+  [
+    "Bills & Utilities",
+    /electricity|bescom|airtel|\bjio\b|vodafone|broadband|fibernet|tata power|water bill|gas bill/i
+  ],
+  ["Healthcare", /pharm|apollo|medplus|1mg|hospital|clinic|practo/i],
+  ["Education", /udemy|coursera|school|college|university/i],
+  ["Investment", /zerodha|groww|upstox|mutual fund|kuvera/i]
+];
+var _P_CREDIT_CATEGORY_KEYWORDS = [
+  ["Salary", /salary/i],
+  ["Refund", /refund|reversal|reversed/i],
+  ["Cashback", /cashback/i],
+  ["Interest/Dividend", /interest|dividend/i]
+];
+
+function normalizeTransactionText(text) {
+  var t = String(text || "");
+  t = t.replace(/-{3,}\s*Forwarded message\s*-{3,}[\s\S]*?(?:\n\s*\n|$)/i, "\n");
+  t = t
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#8377;|&#x20b9;/gi, "₹")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&rsquo;/gi, "'")
+    .replace(/[\u00a0\u200b\u200c\u200d\ufeff]/g, " ");
+  t = t.replace(/\s+/g, " ").trim();
+  if (t.length > PARSER_MAX_TEXT_LEN) t = t.substring(0, PARSER_MAX_TEXT_LEN);
+  // Cut legal / marketing footers, but only after the first amount so a
+  // footer-looking phrase near the top can't drop the body.
+  var firstAmount = t.search(new RegExp(_P_CUR + "\\s*" + _P_NUM, "i"));
+  if (firstAmount >= 0) {
+    var tail = t.substring(firstAmount);
+    var cut = tail.search(_P_FOOTER_MARKERS);
+    if (cut > 0) t = t.substring(0, firstAmount + cut).trim();
+  }
+  return t;
+}
+
+function looksLikeTransactionText(text) {
+  var t = normalizeTransactionText(text);
+  if (new RegExp(_P_CUR + "\\s*" + _P_NUM, "i").test(t)) return true;
+  return _P_VERB_AMOUNT_PATTERNS[1].test(t);
+}
+
+// Split a paste that may hold several SMS: blank lines first; a single chunk
+// is split per line only when every line has its own transaction verb +
+// amount (a balance/limit line on its own is part of the SMS above it).
+function splitSmsPaste(text) {
+  var chunks = String(text || "")
+    .split(/\n\s*\n/)
+    .map(function (c) {
+      return c.trim();
+    })
+    .filter(function (c) {
+      return c.length > 0;
+    });
+  var out = [];
+  function hasVerbAmount(line) {
+    return _P_VERB_AMOUNT_PATTERNS.some(function (re) {
+      return re.test(line);
+    });
+  }
+  chunks.forEach(function (chunk) {
+    var lines = chunk
+      .split(/\n/)
+      .map(function (l) {
+        return l.trim();
+      })
+      .filter(function (l) {
+        return l.length > 0;
+      });
+    if (lines.length > 1 && lines.every(hasVerbAmount)) out = out.concat(lines);
+    else out.push(chunk);
+  });
+  return out;
+}
+
+function _parserCurrency(token) {
+  var t = String(token || "")
+    .trim()
+    .toUpperCase();
+  if (!t || t === "RS" || t === "RS." || t === "₹" || t === "INR") return "INR";
+  if (t === "$" || t === "US$") return "USD";
+  if (t === "€") return "EUR";
+  if (t === "£") return "GBP";
+  return t;
+}
+
+function _parserAmount(token) {
+  var n = parseFloat(String(token || "").replace(/,/g, ""));
+  return isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+}
+
+function _isoDate(y, m, d) {
+  var dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return "";
+  return y + "-" + (m < 10 ? "0" : "") + m + "-" + (d < 10 ? "0" : "") + d;
+}
+
+function _isoFromDate(date) {
+  var d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) d = new Date();
+  return _isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+// Sheet cell (Date or "YYYY-MM-DD…" string) → "YYYY-MM-DD", or "" if unreadable.
+function toIsoDate(value) {
+  if (value instanceof Date) return isNaN(value.getTime()) ? "" : _isoFromDate(value);
+  var m = String(value || "")
+    .trim()
+    .match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  return m ? _isoDate(+m[1], +m[2], +m[3]) : "";
+}
+
+function _dayNumber(iso) {
+  var p = iso.split("-");
+  return Date.UTC(+p[0], +p[1] - 1, +p[2]) / 86400000;
+}
+
+function _withinDateWindow(iso, receivedAt) {
+  if (!iso) return false;
+  if (!receivedAt) return true;
+  var diff = _dayNumber(iso) - _dayNumber(_isoFromDate(receivedAt));
+  return diff <= 1 && diff >= -PARSER_DATE_PAST_DAYS;
+}
+
+function _fullYear(y) {
+  var n = parseInt(y, 10);
+  return n < 100 ? 2000 + n : n;
+}
+
+// All date-looking substrings, in text order, as ISO candidates. Numeric
+// d/m/y is read day-first (Indian banks); month-first is a fallback.
+function _dateCandidates(text) {
+  var found = [];
+  function add(index, isos) {
+    found.push({ index: index, isos: isos.filter(Boolean) });
+  }
+  var m;
+  var reIso = /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g;
+  while ((m = reIso.exec(text))) add(m.index, [_isoDate(+m[1], +m[2], +m[3])]);
+  var reNum = /\b(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4}|\d{2})\b/g;
+  while ((m = reNum.exec(text))) {
+    var y = _fullYear(m[3]);
+    add(m.index, [_isoDate(y, +m[2], +m[1]), _isoDate(y, +m[1], +m[2])]);
+  }
+  var reDayMon = new RegExp("\\b(\\d{1,2})(?:st|nd|rd|th)?[-\\s]?" + _P_MON + "[-\\s,]*(\\d{4}|\\d{2})\\b", "gi");
+  while ((m = reDayMon.exec(text))) {
+    add(m.index, [_isoDate(_fullYear(m[3]), _P_MONTHS[m[2].substring(0, 3).toLowerCase()], +m[1])]);
+  }
+  var reMonDay = new RegExp("\\b" + _P_MON + "\\s+(\\d{1,2}),?\\s+(\\d{4})\\b", "gi");
+  while ((m = reMonDay.exec(text))) {
+    add(m.index, [_isoDate(+m[3], _P_MONTHS[m[1].substring(0, 3).toLowerCase()], +m[2])]);
+  }
+  return found.sort(function (a, b) {
+    return a.index - b.index;
+  });
+}
+
+function _findDate(text, receivedAt) {
+  var candidates = _dateCandidates(text);
+  for (var i = 0; i < candidates.length; i++) {
+    for (var j = 0; j < candidates[i].isos.length; j++) {
+      if (_withinDateWindow(candidates[i].isos[j], receivedAt)) return candidates[i].isos[j];
+    }
+  }
+  return "";
+}
+
+function _cleanMerchant(raw) {
+  var m = String(raw || "")
+    .replace(/^(?:NEFT|IMPS|RTGS|UPI)\s+from\s+/i, "")
+    .replace(/\s+(?:ref|refno|upi|via|on)$/i, "")
+    .replace(/[\s.,;:*-]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!m || m.length < 2 || m.length > 60) return "";
+  if (/^\d[\d\s\/-]*$/.test(m)) return "";
+  if (_P_MERCHANT_REJECT.test(m) || _P_MERCHANT_REJECT_ANYWHERE.test(m)) return "";
+  if (m === m.toUpperCase() && /[A-Z]/.test(m)) {
+    m = m.toLowerCase().replace(/(^|[\s&\/-])([a-z])/g, function (_, sep, c) {
+      return sep + c.toUpperCase();
+    });
+  }
+  return m;
+}
+
+function _findMerchant(text) {
+  for (var i = 0; i < _P_MERCHANT_PATTERNS.length; i++) {
+    var hit = text.match(_P_MERCHANT_PATTERNS[i]);
+    if (!hit) continue;
+    var cleaned = _cleanMerchant(hit[1]);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
+function _findReference(text) {
+  for (var i = 0; i < _P_REFERENCE_PATTERNS.length; i++) {
+    var hit = text.match(_P_REFERENCE_PATTERNS[i]);
+    if (hit) return hit[1];
+  }
+  return "";
+}
+
+function _directionForVerb(verb) {
+  return new RegExp("^(?:" + _P_CREDIT_VERBS + "|refund|cashback|reversal)$", "i").test(verb) ? "Credit" : "Debit";
+}
+
+function _keywordDirection(text) {
+  var debit = _P_DEBIT_KEYWORDS.test(text);
+  var credit = _P_CREDIT_KEYWORDS.test(text);
+  if (debit === credit) return "";
+  return debit ? "Debit" : "Credit";
+}
+
+// Locate the transaction amount. Returns { amount, currency, direction,
+// anchor: "verb" | "txn_of" | "loose" } or null.
+function _findAmount(text) {
+  var best = null;
+  for (var i = 0; i < _P_VERB_AMOUNT_PATTERNS.length; i++) {
+    var m = _P_VERB_AMOUNT_PATTERNS[i].exec(text);
+    if (!m || (best && best.index <= m.index)) continue;
+    // Pattern 3 is CUR NUM VERB; the others are VERB CUR NUM.
+    var verb = i === 2 ? m[3] : m[1];
+    var cur = i === 2 ? m[1] : m[2];
+    var num = i === 2 ? m[2] : m[3];
+    best = {
+      index: m.index,
+      amount: _parserAmount(num),
+      currency: _parserCurrency(cur),
+      direction: _directionForVerb(verb),
+      anchor: "verb"
+    };
+  }
+  if (best) return best;
+
+  var txnOf = _P_TXN_OF_PATTERN.exec(text);
+  if (txnOf) {
+    return {
+      amount: _parserAmount(txnOf[2]),
+      currency: _parserCurrency(txnOf[1]),
+      direction: _keywordDirection(text),
+      anchor: "txn_of"
+    };
+  }
+
+  _P_ANY_AMOUNT.lastIndex = 0;
+  var any;
+  while ((any = _P_ANY_AMOUNT.exec(text))) {
+    if (_P_BALANCE_CONTEXT.test(text.substring(Math.max(0, any.index - 25), any.index))) continue;
+    return {
+      amount: _parserAmount(any[2]),
+      currency: _parserCurrency(any[1]),
+      direction: _keywordDirection(text),
+      anchor: "loose"
+    };
+  }
+  return null;
+}
+
+function _templateList() {
+  return typeof BANK_TEMPLATES !== "undefined" ? BANK_TEMPLATES : [];
+}
+
+function _matchTemplate(text, channel, receivedAt) {
+  var templates = _templateList();
+  for (var i = 0; i < templates.length; i++) {
+    var tpl = templates[i];
+    if (tpl.channel !== "both" && tpl.channel !== channel) continue;
+    var m = tpl.pattern.exec(text);
+    if (!m || !m.groups) continue;
+    var g = m.groups;
+    var amount = _parserAmount(g.amount);
+    if (!(amount > 0)) continue;
+    var date = g.date ? _findDate(g.date, receivedAt) : _findDate(text, receivedAt);
+    return {
+      kind: "transaction",
+      amount: amount,
+      currency: _parserCurrency(g.cur),
+      transaction_type: tpl.direction,
+      transaction_date: date,
+      merchant: _cleanMerchant(g.merchant) || "",
+      accountLast4: g.account || "",
+      reference: g.reference || "",
+      confidence: date ? PARSER_TEMPLATE_CONFIDENCE : PARSER_AUTO_SAVE_CONFIDENCE - 0.05,
+      templateId: tpl.id,
+      hasDate: !!date
+    };
+  }
+  return null;
+}
+
+// Parse one email body or SMS.
+//   opts: { channel: "email" | "sms", receivedAt: Date }
+// Returns { kind: "transaction", amount, currency, transaction_type,
+// transaction_date, merchant, accountLast4, reference, confidence,
+// templateId, hasDate } | { kind: "ignored", reason } | null (no read).
+function parseTransactionText(text, opts) {
+  opts = opts || {};
+  var channel = opts.channel || "email";
+  var t = normalizeTransactionText(text);
+  if (!t) return null;
+
+  var tpl = _matchTemplate(t, channel, opts.receivedAt);
+  if (tpl) return tpl;
+
+  // Rejections only apply without a verb-anchored amount: real alerts often
+  // end with "Never share your OTP… call 1930" or a promo line.
+  var found = _findAmount(t);
+  if (!found || found.anchor !== "verb") {
+    if (_P_OTP.test(t)) return { kind: "ignored", reason: "otp" };
+    if (_P_DECLINED.test(t)) return { kind: "ignored", reason: "declined" };
+    if (_P_FUTURE.test(t)) return { kind: "ignored", reason: "reminder" };
+    if (_P_PROMO.test(t)) return { kind: "ignored", reason: "promo" };
+  }
+  if (!found || !found.direction || !(found.amount > 0) || found.amount > PARSER_MAX_AMOUNT) return null;
+
+  var date = _findDate(t, opts.receivedAt);
+  var merchant = _findMerchant(t);
+  var accountHit = t.match(_P_ACCOUNT);
+  var reference = _findReference(t);
+
+  var confidence = found.anchor === "verb" ? 0.55 : found.anchor === "txn_of" ? 0.45 : 0.3;
+  confidence += found.anchor === "verb" ? 0.15 : 0.1;
+  if (date) confidence += 0.1;
+  if (merchant) confidence += 0.1;
+  if (accountHit) confidence += 0.05;
+  if (reference) confidence += 0.05;
+
+  return {
+    kind: "transaction",
+    amount: found.amount,
+    currency: found.currency,
+    transaction_type: found.direction,
+    transaction_date: date,
+    merchant: merchant,
+    accountLast4: accountHit ? accountHit[1] : "",
+    reference: reference,
+    confidence: Math.min(0.99, Math.round(confidence * 100) / 100),
+    templateId: PARSER_GENERIC_ID,
+    hasDate: !!date
+  };
+}
+
+function _amountInText(amount, text) {
+  var nums = normalizeTransactionText(text).match(/\d[\d,]*(?:\.\d+)?/g) || [];
+  for (var i = 0; i < nums.length; i++) {
+    if (Math.abs(_parserAmount(nums[i]) - amount) < 0.005) return true;
+  }
+  return false;
+}
+
+// Shared post-extraction checks for parser and LLM output. Never throws.
+// Returns { data, issues: string[], needsReview }. `data` keeps the
+// LLM-shaped fields (transaction_date, merchant, amount, currency, category,
+// transaction_type) with fixes applied: out-of-window or missing dates fall
+// back to receivedAt, unknown currencies to INR.
+function validateExtraction(data, sourceText, receivedAt) {
+  data = data || {};
+  var out = {};
+  for (var k in data) {
+    if (Object.prototype.hasOwnProperty.call(data, k)) out[k] = data[k];
+  }
+  var issues = [];
+
+  var amount = _parserAmount(data.amount);
+  if (!(amount > 0)) {
+    issues.push("amount_invalid");
+    out.amount = 0;
+  } else {
+    out.amount = amount;
+    // The cap is currency-blind (VND/IDR/KRW spends exceed it), so it only
+    // asks for a look — the amount itself is kept.
+    if (amount > PARSER_MAX_AMOUNT) issues.push("amount_large");
+    if (sourceText && !_amountInText(amount, sourceText)) issues.push("amount_not_in_text");
+  }
+
+  var type = String(data.transaction_type || "")
+    .trim()
+    .toLowerCase();
+  if (type === "debit" || type === "credit") {
+    out.transaction_type = type === "debit" ? "Debit" : "Credit";
+  } else {
+    issues.push("type_unknown");
+    out.transaction_type = "Debit";
+  }
+
+  var currency = String(data.currency || "INR")
+    .trim()
+    .toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    issues.push("currency_defaulted");
+    currency = "INR";
+  }
+  out.currency = currency;
+
+  var iso = "";
+  var rawDate = String(data.transaction_date || "").trim();
+  var isoMatch = rawDate.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) iso = _isoDate(+isoMatch[1], +isoMatch[2], +isoMatch[3]);
+  if (!_withinDateWindow(iso, receivedAt)) {
+    issues.push("date_fallback");
+    iso = _isoFromDate(receivedAt || new Date());
+  }
+  out.transaction_date = iso;
+
+  out.merchant = String(data.merchant || "")
+    .trim()
+    .substring(0, 60);
+
+  var needsReview =
+    issues.indexOf("amount_invalid") !== -1 ||
+    issues.indexOf("amount_large") !== -1 ||
+    issues.indexOf("amount_not_in_text") !== -1 ||
+    issues.indexOf("type_unknown") !== -1;
+  return { data: out, issues: issues, needsReview: needsReview };
+}
+
+// Keyword category guess for parser-read rows (no LLM to categorise them).
+// Matches on the merchant only — bank boilerplate in the body is too noisy.
+function guessCategory(merchant, transactionType) {
+  var m = String(merchant || "");
+  if (!m) return "";
+  var list = String(transactionType).toLowerCase() === "credit" ? _P_CREDIT_CATEGORY_KEYWORDS : _P_CATEGORY_KEYWORDS;
+  for (var i = 0; i < list.length; i++) {
+    if (list[i][1].test(m)) return list[i][0];
+  }
+  return "";
+}
+
+// Fields compared between two reads (shadow mode, Re-read). Merchant is left
+// out: the parser keeps the bank's raw string, the LLM cleans it up, so they
+// differ without either being wrong.
+var PARSER_COMPARED_FIELDS = ["amount", "currency", "transaction_type", "transaction_date"];
+
+function diffExtractions(a, b) {
+  var changed = [];
+  PARSER_COMPARED_FIELDS.forEach(function (f) {
+    var av = a ? a[f] : "";
+    var bv = b ? b[f] : "";
+    if (f === "amount") {
+      if (Math.abs((Number(av) || 0) - (Number(bv) || 0)) >= 0.01) changed.push(f);
+    } else if (
+      String(av || "")
+        .trim()
+        .toLowerCase() !==
+      String(bv || "")
+        .trim()
+        .toLowerCase()
+    ) {
+      changed.push(f);
+    }
+  });
+  return changed;
+}
