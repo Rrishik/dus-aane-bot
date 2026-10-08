@@ -10,6 +10,7 @@ export function createContext(env, overrides = {}) {
     env,
     db: overrides.db || env.DB,
     now: overrides.now || (() => Date.now()),
+    fetch: overrides.fetch || ((...args) => fetch(...args)),
     adminChatId: env.ADMIN_CHAT_ID ? String(env.ADMIN_CHAT_ID) : null,
     get tg() {
       if (!tg) tg = createTelegram({ token: env.BOT_TOKEN });

@@ -47,12 +47,25 @@ export function fakeLlm(replies = []) {
   };
 }
 
-export function testContext({ now = NOW, llmReplies, env = {} } = {}) {
+export function testContext({ now = NOW, llmReplies, env = {}, appsScript } = {}) {
   const db = createTestD1();
   const tg = fakeTelegram();
   const llm = fakeLlm(llmReplies);
   let clock = now;
-  const ctx = createContext({ ADMIN_CHAT_ID: "999", ...env }, { db, tg, llm, now: () => clock });
+  // Records Worker → Apps Script calls; `appsScript(action, payload)` decides the reply.
+  const asCalls = [];
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    const payload = JSON.parse(body.payload);
+    asCalls.push({ url, action: body.action, payload, body });
+    const reply = appsScript ? await appsScript(body.action, payload) : { ok: true };
+    return new Response(JSON.stringify(reply), { status: reply && reply.status ? reply.status : 200 });
+  };
+  const ctx = createContext(
+    { ADMIN_CHAT_ID: "999", APPS_SCRIPT_URL: "https://script.example/exec", INTERNAL_SECRET: "int", ...env },
+    { db, tg, llm, now: () => clock, fetch: fetchImpl }
+  );
+  ctx.asCalls = asCalls;
   ctx.advance = (ms) => {
     clock += ms;
   };

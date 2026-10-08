@@ -85,7 +85,7 @@ describe("POST /ingest/email", () => {
   const EMAIL = "Rs.250.00 has been debited from account **1234 to VPA swiggy@ybl SWIGGY on 07-10-26.";
 
   it("routes by forwarder, saves, and labels-OK with 200", async () => {
-    const ctx = testContext({ env: { INGEST_SECRET: "ing" }, llmReplies: [llmTxn()] });
+    const ctx = testContext({ env: { INTERNAL_SECRET: "ing" }, llmReplies: [llmTxn()] });
     await seedTenant(ctx, "111", { email: "alice@x.com" });
     const res = await post(ctx, { messageId: "g1", forwarder: "Alice@x.com", receivedAt: NOW, text: EMAIL });
     expect(res.status).toBe(200);
@@ -93,7 +93,7 @@ describe("POST /ingest/email", () => {
   });
 
   it("401 on a bad signature, 400 on a malformed body, no_tenant for strangers", async () => {
-    const ctx = testContext({ env: { INGEST_SECRET: "ing" } });
+    const ctx = testContext({ env: { INTERNAL_SECRET: "ing" } });
     expect((await post(ctx, { messageId: "g1" }, "wrong")).status).toBe(401);
     expect((await post(ctx, { messageId: "g1" })).status).toBe(400);
     const res = await post(ctx, { messageId: "g1", forwarder: "nobody@x.com", text: EMAIL });
@@ -101,14 +101,14 @@ describe("POST /ingest/email", () => {
   });
 
   it("503 when the LLM is down so the poller retries", async () => {
-    const ctx = testContext({ env: { INGEST_SECRET: "ing" }, llmReplies: [new Error("down")] });
+    const ctx = testContext({ env: { INTERNAL_SECRET: "ing" }, llmReplies: [new Error("down")] });
     await seedTenant(ctx, "111", { email: "alice@x.com" });
     const res = await post(ctx, { messageId: "g1", forwarder: "alice@x.com", text: EMAIL });
     expect(res.status).toBe(503);
   });
 
   it("a pending tenant's first forward activates them and consumes group invites", async () => {
-    const ctx = testContext({ env: { INGEST_SECRET: "ing" }, llmReplies: [llmTxn()] });
+    const ctx = testContext({ env: { INTERNAL_SECRET: "ing" }, llmReplies: [llmTxn()] });
     await seedTenant(ctx, "222");
     await seedGroup(ctx, "-100", ["222"], "Flat");
     await registerEmail(ctx.db, "111", "alice@x.com", "Alice", NOW);

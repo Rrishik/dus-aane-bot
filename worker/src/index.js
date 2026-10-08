@@ -1,6 +1,8 @@
 import { proxyToAppsScript } from "./proxy.js";
 import { createContext } from "./app/context.js";
 import { handleIngestEmail } from "./app/ingestRoute.js";
+import { handleBackfillProgress } from "./app/backfill.js";
+import { handleUpdate } from "./app/webhook.js";
 
 // GET /healthz reports whether the D1 binding answers.
 export async function healthz(env) {
@@ -27,10 +29,29 @@ export default {
     if (request.method === "GET" && url.pathname === "/healthz") return healthz(env);
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
 
-    if (url.pathname === "/ingest/email") {
+    if (url.pathname === "/ingest/email" || url.pathname === "/internal/backfill") {
       if (!isNative(env)) return Response.json({ error: "native mode is off" }, { status: 409 });
-      return handleIngestEmail(createContext(env), request);
+      const app = createContext(env);
+      return url.pathname === "/ingest/email" ? handleIngestEmail(app, request) : handleBackfillProgress(app, request);
     }
-    return proxyToAppsScript(request, env, ctx);
+    if (!isNative(env)) return proxyToAppsScript(request, env, ctx);
+    return handleTelegramWebhook(request, env, ctx);
   }
 };
+
+// Native Telegram webhook: verify Telegram's secret header, ack at once and
+// process in the background (a slow ack makes Telegram retry).
+export async function handleTelegramWebhook(request, env, ctx) {
+  const secret = env.WEBHOOK_SECRET || "";
+  if (secret && request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== secret) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  let update;
+  try {
+    update = await request.json();
+  } catch (_) {
+    return new Response("OK", { status: 200 });
+  }
+  ctx.waitUntil(handleUpdate(createContext(env), update));
+  return new Response("OK", { status: 200 });
+}

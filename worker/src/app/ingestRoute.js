@@ -1,5 +1,5 @@
 // POST /ingest/email — Apps Script's Gmail poller hands each new forwarded
-// email to the Worker. HMAC-signed (INGEST_SECRET). Replies:
+// email to the Worker. HMAC-signed (INTERNAL_SECRET). Replies:
 //   200 { status }  — handled (saved/review/linked/duplicate/ignored/no_tenant);
 //                     the poller labels the message processed
 //   400             — malformed body (labelled too: retrying won't help)
@@ -10,7 +10,7 @@ import { tenantForForward } from "./onboarding.js";
 import { ingest } from "./ingest.js";
 
 export async function handleIngestEmail(ctx, request) {
-  const auth = await verifySignedRequest(request, ctx.env.INGEST_SECRET, ctx.now());
+  const auth = await verifySignedRequest(request, ctx.env.INTERNAL_SECRET, ctx.now());
   if (!auth.ok) return Response.json({ error: auth.reason }, { status: 401 });
 
   let body;
