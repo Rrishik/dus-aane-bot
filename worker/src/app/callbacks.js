@@ -6,6 +6,7 @@ import { monthlyTrends, weeklyTrends, formatTrendsMessage } from "./analytics.js
 import { isUsable, gateText } from "./onboarding.js";
 import { handleCardAction } from "./cardActions.js";
 import { isGroupCallback, handleGroupCallback } from "./groups.js";
+import { handleAskFollowUp } from "./ask.js";
 
 const statsBackRow = [{ text: "🔙 Back", callback_data: "stats_back" }];
 
@@ -75,6 +76,7 @@ export async function handleCallback(ctx, cb) {
   const payload = sep < 0 ? "" : data.slice(sep + 1);
 
   if (action === "stats") return handleStatsCallback(ctx, chatId, messageId, payload);
+  if (action === "askfu") return handleAskFollowUp(ctx, chatId, messageId);
   if (data === "premium_info") {
     await ctx.tg.sendMessage(chatId, "💎 *Premium coming soon* — we'll let you know when it's ready.");
     return;

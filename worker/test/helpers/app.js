@@ -11,8 +11,10 @@ export function fakeTelegram() {
   const record =
     (method, result = () => true) =>
     async (...args) => {
-      calls.push({ method, args });
-      return result(...args);
+      const call = { method, args };
+      calls.push(call);
+      call.result = await result(...args);
+      return call.result;
     };
   return {
     calls,
@@ -38,7 +40,7 @@ export function fakeLlm(replies = []) {
   return {
     calls,
     async chat({ messages }) {
-      calls.push(messages);
+      calls.push(messages.slice());
       const r = replies.shift();
       if (r instanceof Error) throw r;
       if (r === undefined) throw new Error("fakeLlm: no scripted reply");

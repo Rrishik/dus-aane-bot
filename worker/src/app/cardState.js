@@ -46,3 +46,14 @@ export function renderCard(state, extraLine) {
 export function defaultKeyboard(state) {
   return keyboardFor(state.txn, state);
 }
+
+// Re-render a transaction's DM card after a change made elsewhere (/ask).
+export async function refreshCardMessage(ctx, tenantId, txnId) {
+  const state = await loadCardState(ctx, tenantId, txnId);
+  if (!state || !state.txn.card_message_id) return;
+  try {
+    await ctx.tg.editMessageText(String(tenantId), state.txn.card_message_id, renderCard(state), {
+      reply_markup: defaultKeyboard(state)
+    });
+  } catch (_) {}
+}

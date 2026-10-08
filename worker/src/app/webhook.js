@@ -14,6 +14,7 @@ import { handleBackfill } from "./backfill.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
 import { handleTagReply, handleCancel } from "./cardActions.js";
+import { handleAsk, handleAskResume, handlePendingAsk } from "./ask.js";
 import { isUsable, gateText } from "./onboarding.js";
 import {
   handleGroupStart,
@@ -36,7 +37,8 @@ const PERSONAL_COMMANDS = {
   "/recent": (ctx, m) => handleRecent(ctx, m.chatId, m.text),
   "/stats": (ctx, m) => handleStats(ctx, m.chatId),
   "/backfill": (ctx, m) => handleBackfill(ctx, m.chatId, m.text),
-  "/cancel": (ctx, m) => handleCancel(ctx, m)
+  "/cancel": (ctx, m) => handleCancel(ctx, m),
+  "/ask": (ctx, m) => handleAsk(ctx, m)
 };
 
 const GROUP_COMMANDS = {
@@ -48,8 +50,8 @@ const GROUP_COMMANDS = {
   "/settle": handleGroupSettle
 };
 
-// Plain-text reply flows that run before SMS paste (ask resume / pending ask in 7c).
-const PLAIN_TEXT_STEPS = [(ctx, m) => handleTagReply(ctx, m)];
+// Plain-text flows that run before SMS paste: /ask replies, 🏷 tag, bare /ask.
+const PLAIN_TEXT_STEPS = [handleAskResume, handleTagReply, handlePendingAsk];
 
 export function commandOf(text) {
   return String(text || "")

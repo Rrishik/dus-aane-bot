@@ -74,7 +74,12 @@ export async function runToolLoop(
     let suspended = null;
     for (const call of calls) {
       if (suspendOn.includes(call.function.name)) {
-        suspended = suspended || call;
+        if (!suspended) {
+          suspended = call;
+          continue;
+        }
+        // Every tool call needs a reply before the next turn.
+        history.push({ role: "tool", tool_call_id: call.id, content: '{"error":"Only one question at a time."}' });
         continue;
       }
       let result;

@@ -164,6 +164,18 @@ describe("runToolLoop", () => {
     expect(out.messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: "c1" });
   });
 
+  it("answers extra ask_user calls so the resumed history stays valid", async () => {
+    const { llm } = llmWith([
+      choice({
+        role: "assistant",
+        tool_calls: [toolCall("c1", "ask_user", '{"question":"A?"}'), toolCall("c2", "ask_user", '{"question":"B?"}')]
+      })
+    ]);
+    const out = await runToolLoop(llm, { messages: [], tools: [], executeTool: vi.fn(), suspendOn: ["ask_user"] });
+    expect(out).toMatchObject({ kind: "suspend", args: { question: "A?" } });
+    expect(out.messages.at(-1)).toMatchObject({ role: "tool", tool_call_id: "c2" });
+  });
+
   it("tolerates malformed arguments and tool exceptions; stops at maxIterations", async () => {
     const loop = () => choice({ role: "assistant", tool_calls: [toolCall("c", "t", "{not json")] });
     const { llm } = llmWith([loop(), loop()]);

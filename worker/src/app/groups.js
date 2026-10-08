@@ -44,7 +44,7 @@ async function activeGroup(ctx, groupId) {
 }
 
 // Display name: tenant name, else Telegram first name/username, else id.
-async function memberName(ctx, groupId, id, cache = {}) {
+export async function memberName(ctx, groupId, id, cache = {}) {
   if (cache[id]) return cache[id];
   const t = await getTenant(ctx.db, id);
   let name = t && t.name;

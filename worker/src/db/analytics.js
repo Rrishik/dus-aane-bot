@@ -18,7 +18,7 @@ export async function listEffectiveTransactions(db, tenantId, { from, to } = {})
       "SELECT t.*, CASE " +
         "WHEN st.id IS NOT NULL THEN 0 " +
         "WHEN s.id IS NOT NULL THEN COALESCE(sh.amount_minor, 0) " +
-        "ELSE t.amount_minor END AS effective_minor " +
+        "ELSE t.amount_minor END AS effective_minor, s.id AS split_id, st.id AS settlement_id " +
         "FROM transactions t " +
         "LEFT JOIN splits s ON s.transaction_id = t.id " +
         "LEFT JOIN split_shares sh ON sh.split_id = s.id AND sh.holder_id = t.tenant_id " +
