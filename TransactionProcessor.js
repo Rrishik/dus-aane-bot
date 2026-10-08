@@ -246,6 +246,14 @@ function _extractTransactionsLocked(props) {
     }
   }
 
+  // D1 mode: the Worker routes, dedups and saves.
+  if (isNativeMode()) {
+    var stats = ingestBatchViaWorker(messagesToProcess);
+    console.log("[extractTransactions] worker " + JSON.stringify(stats));
+    if (newHistoryIdToSave) props.setProperty("gmail.lastHistoryId", newHistoryIdToSave);
+    return;
+  }
+
   var resolutionsByTenant = {};
   var skipped = 0;
 

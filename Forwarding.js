@@ -60,9 +60,9 @@ function _getVerifySecret() {
  *
  * Format choice: base64-web-safe of HMAC-SHA256, no padding. ~43 chars.
  */
-function signVerifyToken(chatId, issuedAtMs) {
+function signVerifyToken(chatId, issuedAtMs, emailsCsv) {
   var secret = _getVerifySecret();
-  var payload = String(chatId) + "." + String(issuedAtMs);
+  var payload = String(chatId) + "." + String(issuedAtMs) + (emailsCsv ? "." + emailsCsv : "");
   var raw = Utilities.computeHmacSha256Signature(payload, secret);
   return Utilities.base64EncodeWebSafe(raw).replace(/=+$/, "");
 }
@@ -85,31 +85,34 @@ function _constantTimeEquals(a, b) {
  * Verify a token returned from the email link. Returns true iff the signature
  * matches AND the issued-at timestamp is within VERIFY_TOKEN_TTL_MS.
  */
-function verifyVerifyToken(chatId, issuedAtMs, sig, nowMs) {
+function verifyVerifyToken(chatId, issuedAtMs, sig, nowMs, emailsCsv) {
   if (!chatId || !issuedAtMs || !sig) return false;
   var iat = Number(issuedAtMs);
   if (!isFinite(iat)) return false;
   var now = nowMs == null ? Date.now() : nowMs;
   if (now - iat > VERIFY_TOKEN_TTL_MS) return false;
   if (iat - now > 60 * 1000) return false; // small future-skew tolerance
-  var expected = signVerifyToken(chatId, iat);
+  var expected = signVerifyToken(chatId, iat, emailsCsv);
   return _constantTimeEquals(expected, String(sig));
 }
 
 /**
  * Build the signed verify URL embedded in the setup email's "Verify
  * forwarding address" button. webAppUrl should be the published /exec URL
- * of this Apps Script project.
+ * of this Apps Script project. `emails` (optional) are signed into the link
+ * so the click can scope the inbox scan without a tenant lookup.
  */
-function buildVerifyForwardingUrl(webAppUrl, chatId, nowMs) {
+function buildVerifyForwardingUrl(webAppUrl, chatId, nowMs, emails) {
   var iat = nowMs == null ? Date.now() : nowMs;
-  var sig = signVerifyToken(chatId, iat);
+  var emailsCsv = emails && emails.length ? emails.join(",") : "";
+  var sig = signVerifyToken(chatId, iat, emailsCsv);
   var qs =
     "action=verify_forwarding" +
     "&t=" +
     encodeURIComponent(String(chatId)) +
     "&iat=" +
     encodeURIComponent(String(iat)) +
+    (emailsCsv ? "&e=" + encodeURIComponent(emailsCsv) : "") +
     "&sig=" +
     encodeURIComponent(sig);
   // Append `?` or `&` correctly — published Apps Script URLs already have no
@@ -229,7 +232,8 @@ function handleVerifyForwardingClick(params) {
   var chatId = params.t;
   var iat = params.iat;
   var sig = params.sig;
-  if (!verifyVerifyToken(chatId, iat, sig)) {
+  var emailsCsv = params.e || "";
+  if (!verifyVerifyToken(chatId, iat, sig, null, emailsCsv)) {
     return _verifyResponseHtml({
       ok: false,
       title: "Link expired or invalid",
@@ -243,9 +247,9 @@ function handleVerifyForwardingClick(params) {
     // or has no emails on file, fall back to the unfiltered scan — the
     // user is mid-onboarding and any vf URL that arrived after they hit
     // /setup is overwhelmingly likely to be theirs.
-    var tenantEmails = null;
+    var tenantEmails = emailsCsv ? emailsCsv.split(",") : null;
     try {
-      if (typeof findTenantByChatId === "function") {
+      if (!tenantEmails && typeof findTenantByChatId === "function") {
         var tenant = findTenantByChatId(chatId);
         if (tenant && tenant.emails && tenant.emails.length) {
           tenantEmails = tenant.emails;

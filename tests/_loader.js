@@ -94,6 +94,8 @@ const SHARED_DEFAULTS = {
     _isType("debit")(t.type) && ["CC Bill Payment", "Transfer Out", "Investment"].indexOf(t.category) === -1,
   isCreditTransaction: (t) => _isType("credit")(t.type),
   isTenantUsable: (t) => !!t && (t.status === "active" || t.status === "dormant"),
+  isNativeMode: () => false,
+  isWorkerActionBody: () => false,
   logParserEvent: () => {}
 };
 

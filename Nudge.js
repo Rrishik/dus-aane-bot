@@ -103,6 +103,7 @@ function formatNudgeMessage(decision, tenantName) {
 // Time-trigger handler: walk every tenant, nudge the ones shouldNudge flags.
 // Per-tenant try/catch so one failure doesn't halt the run.
 function nudgeDormantTenants() {
+  if (isNativeMode()) return;
   var tenants = loadTenants();
   var now = new Date();
   var nowIso = now.toISOString();

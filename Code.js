@@ -19,6 +19,12 @@ function doGet(e) {
 // Process most commands inline for instant responses; defer /backfill to async trigger
 function doPost(e) {
   try {
+    var contents = e && e.postData ? e.postData.contents : "";
+    var update = JSON.parse(contents);
+
+    // Signed Worker actions carry their own HMAC (no ?k).
+    if (isWorkerActionBody(update)) return handleWorkerAction(update);
+
     // The Worker forwards Telegram's verified updates with ?k=<secret>.
     // Anything else (someone POSTing to the public /exec URL) is dropped.
     var secret = getWebhookSecret();
@@ -31,9 +37,6 @@ function doPost(e) {
     } else {
       console.warn("[doPost] WEBHOOK_SECRET not configured — webhook auth is off");
     }
-
-    var contents = e.postData.contents;
-    var update = JSON.parse(contents);
 
     // Resolve the incoming chat id (message or callback).
     var incomingChatId = null;
@@ -188,6 +191,7 @@ function installEmailTrigger() {
 // Script console (Triggers panel → Add Trigger → function:
 // sendWeeklySummaries, event: time-driven, week timer, Friday, 8–9am).
 function sendWeeklySummaries() {
+  if (isNativeMode()) return;
   var range = weekRangeFor(new Date());
   var tenants = loadTenants().filter(function (t) {
     // Personal tenants only. Group sheets use the β-schema (one row per

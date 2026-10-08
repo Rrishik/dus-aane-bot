@@ -48,7 +48,10 @@ jobs:
           printf "const AZURE_OPENAI_DEPLOYMENT_NAME = \"${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}\";\n" >> AConfig.js
           printf "const AZURE_OPENAI_API_VERSION = \"${{ secrets.AZURE_OPENAI_API_VERSION }}\";\n\n" >> AConfig.js
           printf "// Webhook auth (Telegram -> Worker -> Apps Script)\n" >> AConfig.js
-          printf "const WEBHOOK_SECRET = \"${{ secrets.WEBHOOK_SECRET }}\";\n" >> AConfig.js
+          printf "const WEBHOOK_SECRET = \"${{ secrets.WEBHOOK_SECRET }}\";\n\n" >> AConfig.js
+          printf "// D1 mode (Worker <-> Apps Script bridge)\n" >> AConfig.js
+          printf "const INTERNAL_SECRET = \"${{ secrets.INTERNAL_SECRET }}\";\n" >> AConfig.js
+          printf "const NATIVE_MODE = \"${{ vars.NATIVE_MODE }}\";\n" >> AConfig.js
 
       - name: Set up authentication
         env:
@@ -70,6 +73,7 @@ jobs:
           workingDirectory: worker
           command: d1 migrations apply dus-aane-bot --remote
 
+      # Repository variable NATIVE_MODE=1 switches both sides to D1 mode.
       - name: Deploy Cloudflare Worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -79,6 +83,23 @@ jobs:
           secrets: |
             APPS_SCRIPT_URL
             WEBHOOK_SECRET
+            INTERNAL_SECRET
+            BOT_TOKEN
+            ADMIN_CHAT_ID
+            AZURE_OPENAI_ENDPOINT
+            AZURE_OPENAI_API_KEY
+            AZURE_OPENAI_DEPLOYMENT_NAME
+            AZURE_OPENAI_API_VERSION
+          vars: |
+            MODE
         env:
           APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+          MODE: ${{ vars.NATIVE_MODE == '1' && 'native' || 'proxy' }}

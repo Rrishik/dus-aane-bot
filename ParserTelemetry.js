@@ -178,6 +178,7 @@ function formatParserDigest(events, mode, disabled) {
 
 // Weekly time-trigger handler (install from the Apps Script console).
 function sendParserDigest() {
+  if (isNativeMode()) return;
   var events = _recentParserEvents(Date.now() - 7 * 86400000);
   sendTelegramMessage(ADMIN_CHAT_ID, formatParserDigest(events, getParserMode(), getDisabledParserTemplates()), {
     parse_mode: "Markdown"

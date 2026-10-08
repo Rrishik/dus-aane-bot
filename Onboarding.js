@@ -213,6 +213,20 @@ function buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl)
 }
 
 /**
+ * Send the setup email. Throws if MailApp fails. `verifyEmails` (optional)
+ * are signed into the verify link (used when the tenant lives in D1).
+ */
+function mailSetupInstructions(chatId, recipients, verifyEmails) {
+  var webAppUrl = getWebAppUrl();
+  var verifyUrl = webAppUrl ? buildVerifyForwardingUrl(webAppUrl, chatId, null, verifyEmails) : null;
+  MailApp.sendEmail({
+    to: recipients.join(","),
+    subject: "Set up Dus Aane Bot — auto-forward bank alerts",
+    htmlBody: buildSetupEmailHtml(buildGmailFilterQuery(), BOT_INBOX_EMAIL, DEMO_VIDEO_URL, SETUP_GUIDE_URL, verifyUrl)
+  });
+}
+
+/**
  * Email setup instructions to the tenant's address(es) and ack on Telegram.
  *
  * @param chatId       Telegram chat id of the requester.
@@ -228,16 +242,8 @@ function sendSetupInstructions(chatId, onlyEmails) {
     return;
   }
   var recipients = onlyEmails && onlyEmails.length ? onlyEmails : tenant.emails;
-  var query = buildGmailFilterQuery();
-  var webAppUrl = getWebAppUrl();
-  var verifyUrl = webAppUrl ? buildVerifyForwardingUrl(webAppUrl, chatId) : null;
-  var html = buildSetupEmailHtml(query, BOT_INBOX_EMAIL, DEMO_VIDEO_URL, SETUP_GUIDE_URL, verifyUrl);
   try {
-    MailApp.sendEmail({
-      to: recipients.join(","),
-      subject: "Set up Dus Aane Bot — auto-forward bank alerts",
-      htmlBody: html
-    });
+    mailSetupInstructions(chatId, recipients);
   } catch (e) {
     console.error("[sendSetupInstructions] mail send failed:", e.message);
     sendTelegramMessage(
