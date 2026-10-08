@@ -12,7 +12,11 @@ export async function callAppsScript(ctx, action, payload) {
   const { APPS_SCRIPT_URL, INTERNAL_SECRET } = ctx.env;
   if (!APPS_SCRIPT_URL || !INTERNAL_SECRET) throw new AppsScriptError("Apps Script bridge not configured");
   const ts = String(ctx.now());
-  const payloadStr = JSON.stringify(payload || {});
+  // Non-ASCII escaped so Apps Script's HMAC sees exactly these bytes.
+  const payloadStr = JSON.stringify(payload || {}).replace(
+    /[\u007f-\uffff]/g,
+    (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")
+  );
   const sig = await hmacHex(INTERNAL_SECRET, ts + "." + action + "." + payloadStr);
   let res;
   try {

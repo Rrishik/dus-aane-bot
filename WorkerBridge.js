@@ -23,11 +23,20 @@ function _internalSecret() {
 }
 
 function hmacHex(secret, message) {
-  return Utilities.computeHmacSha256Signature(message, secret)
+  return Utilities.computeHmacSha256Signature(message, secret, Utilities.Charset.UTF_8)
     .map(function (b) {
       return ((b + 256) % 256).toString(16).padStart(2, "0");
     })
     .join("");
+}
+
+// JSON with every non-ASCII character escaped (\uXXXX): the signed string
+// and the bytes on the wire are then identical whatever charset UrlFetchApp
+// or the HMAC call assumes. Bank emails are full of ₹ and NBSPs.
+function asciiJson(value) {
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g, function (c) {
+    return "\\u" + ("000" + c.charCodeAt(0).toString(16)).slice(-4);
+  });
 }
 
 // Is this doPost body a signed Worker action (vs. a Telegram update)?
@@ -113,10 +122,11 @@ var WORKER_ACTIONS = {
   export_dump: function () {
     return { dump: buildSheetsDump() };
   },
-  // Read-only poller health for the Diagnose workflow: filter decisions for
-  // recent bot-inbox mail (no addresses or content), last run, triggers.
+  // Poller health for the Diagnose workflow: filter decisions for recent
+  // bot-inbox mail (no addresses or content), last run, triggers.
+  //   requeue: put recent unlabelled bank mail back on the retry list
+  //   pollNow: run the poller once before reporting
   poller_status: function (p) {
-    if (p.pollNow) extractTransactions();
     var hours = Math.min(Math.max(Number(p.hours) || 3, 1), 48);
     var props = PropertiesService.getScriptProperties();
     var parse = function (k, d) {
@@ -126,51 +136,34 @@ var WORKER_ACTIONS = {
         return d;
       }
     };
-    var labelId = null;
-    try {
-      labelId = getProcessedLabelId();
-    } catch (_) {}
-    var list = Gmail.Users.Messages.list("me", { q: "newer_than:" + Math.ceil(hours / 24) + "d", maxResults: 50 });
-    var cutoff = Date.now() - hours * 3600000;
-    var recent = [];
-    ((list && list.messages) || []).forEach(function (m) {
-      var meta;
-      try {
-        meta = Gmail.Users.Messages.get("me", m.id, { format: "minimal" });
-      } catch (_) {
-        return;
-      }
-      var at = Number(meta.internalDate);
-      if (at < cutoff) return;
-      var headers = getMessageHeaders(m.id) || {};
-      var msg = null;
-      try {
-        msg = GmailApp.getMessageById(m.id);
-      } catch (_) {}
-      var forwarder = extractForwarderFromHeaders(headers);
-      recent.push({
-        minutesAgo: Math.round((Date.now() - at) / 60000),
-        labelled: !!labelId && (meta.labelIds || []).indexOf(labelId) !== -1,
-        inInbox: (meta.labelIds || []).indexOf("INBOX") !== -1,
-        ignoredByHeaders: shouldIgnoreByHeaders(headers),
-        allowedBank: msg ? isFromAllowedBank(msg) : null,
-        autoForwarded: !!headers.xForwardedFor,
-        forwarderDomain: forwarder ? forwarder.split("@")[1] : null,
-        inRetry: Object.prototype.hasOwnProperty.call(parse(WORKER_RETRY_PROP, {}), m.id)
+    var requeued = 0;
+    if (p.requeue) {
+      var retry = parse(WORKER_RETRY_PROP, {});
+      _recentBotMail(hours, retry).forEach(function (m) {
+        if (m.labelled || m.ignoredByHeaders || !m.allowedBank || !m.hasForwarder || m.inRetry) return;
+        retry[m.id] = 0;
+        requeued++;
       });
-    });
+      props.setProperty(WORKER_RETRY_PROP, JSON.stringify(retry));
+    }
+    if (p.pollNow) extractTransactions();
+    var retryNow = parse(WORKER_RETRY_PROP, {});
     return {
       nativeMode: isNativeMode(),
+      requeued: requeued,
       lastRun: parse(POLLER_LAST_RUN_PROP, null),
       runLockAgeMin: props.getProperty("gmail.runStartedAt")
         ? Math.round((Date.now() - Number(props.getProperty("gmail.runStartedAt"))) / 60000)
         : null,
-      retryCount: Object.keys(parse(WORKER_RETRY_PROP, {})).length,
+      retryCount: Object.keys(retryNow).length,
       lastWorkerFailure: parse("gmail.lastWorkerFailure", null),
       triggers: ScriptApp.getProjectTriggers().map(function (t) {
         return t.getHandlerFunction();
       }),
-      recent: recent
+      recent: _recentBotMail(hours, retryNow).map(function (m) {
+        delete m.id;
+        return m;
+      })
     };
   },
   backfill_range: function (p) {
@@ -214,7 +207,7 @@ function postToWorker(path, payload) {
   if (!secret || typeof WORKER_PROXY_URL === "undefined" || !WORKER_PROXY_URL) {
     throw new Error("Worker bridge not configured");
   }
-  var body = JSON.stringify(payload);
+  var body = asciiJson(payload);
   var ts = String(Date.now());
   var resp = UrlFetchApp.fetch(String(WORKER_PROXY_URL).replace(/\/+$/, "") + path, {
     method: "post",
@@ -277,8 +270,49 @@ function ingestEmailViaWorker(message, forwarder, silent) {
 
 // ─── Gmail poller (native mode) ─────────────────────────────────────
 
+// Recent bot-inbox mail with the poller's filter decisions (for diagnosis).
+function _recentBotMail(hours, retry) {
+  var labelId = null;
+  try {
+    labelId = getProcessedLabelId();
+  } catch (_) {}
+  var list = Gmail.Users.Messages.list("me", { q: "newer_than:" + Math.ceil(hours / 24) + "d", maxResults: 50 });
+  var cutoff = Date.now() - hours * 3600000;
+  var out = [];
+  ((list && list.messages) || []).forEach(function (m) {
+    var meta;
+    try {
+      meta = Gmail.Users.Messages.get("me", m.id, { format: "minimal" });
+    } catch (_) {
+      return;
+    }
+    var at = Number(meta.internalDate);
+    if (at < cutoff) return;
+    var headers = getMessageHeaders(m.id) || {};
+    var msg = null;
+    try {
+      msg = GmailApp.getMessageById(m.id);
+    } catch (_) {}
+    var forwarder = extractForwarderFromHeaders(headers);
+    out.push({
+      id: m.id,
+      minutesAgo: Math.round((Date.now() - at) / 60000),
+      labelled: !!labelId && (meta.labelIds || []).indexOf(labelId) !== -1,
+      inInbox: (meta.labelIds || []).indexOf("INBOX") !== -1,
+      ignoredByHeaders: shouldIgnoreByHeaders(headers),
+      allowedBank: msg ? isFromAllowedBank(msg) : null,
+      autoForwarded: !!headers.xForwardedFor,
+      hasForwarder: !!forwarder,
+      forwarderDomain: forwarder ? forwarder.split("@")[1] : null,
+      inRetry: Object.prototype.hasOwnProperty.call(retry || {}, m.id)
+    });
+  });
+  return out;
+}
+
 var WORKER_RETRY_PROP = "gmail.workerRetry";
-var WORKER_RETRY_MAX_ATTEMPTS = 6;
+// ~1 day at the 5-minute trigger, so a Worker outage doesn't drop mail.
+var WORKER_RETRY_MAX_ATTEMPTS = 288;
 var WORKER_RETRY_MAX_IDS = 200;
 var POLLER_LAST_RUN_PROP = "gmail.lastRun";
 

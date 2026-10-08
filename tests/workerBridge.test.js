@@ -9,6 +9,7 @@ const NOW = Date.UTC(2026, 9, 7, 8, 0);
 
 // Apps Script returns signed Java bytes.
 const Utilities = {
+  Charset: { UTF_8: "UTF_8" },
   computeHmacSha256Signature: (message, secret) =>
     Array.from(createHmac("sha256", secret).update(message, "utf8").digest()).map((b) => (b > 127 ? b - 256 : b)),
   base64EncodeWebSafe: (v) => Buffer.from(Array.isArray(v) ? v.map((b) => (b + 256) % 256) : v).toString("base64url")
@@ -122,6 +123,10 @@ describe("Worker → Apps Script actions", () => {
     expect(api.verifyWorkerAction({ ...body, payload: '{"messageId":"m2"}' }, NOW)).toBeNull();
     expect(api.verifyWorkerAction(body, NOW + 6 * 60 * 1000)).toBeNull();
     expect(api.isWorkerActionBody({ update_id: 1, message: {} })).toBe(false);
+
+    await callAppsScript(ctx, "export_to_sheet", { rows: [["Café ₹"]] });
+    expect(/^[\x00-\x7f]*$/.test(body.payload)).toBe(true);
+    expect(api.verifyWorkerAction(body, NOW)).toEqual({ rows: [["Café ₹"]] });
   });
 
   it("dispatches actions and reports errors as JSON", () => {
@@ -190,7 +195,7 @@ describe("Apps Script → Worker", () => {
     });
   });
 
-  it("retries failed emails on later runs, up to 6 attempts", () => {
+  it("retries failed emails on later runs for about a day", () => {
     const props = fakeProps();
     let down = true;
     const messages = { m1: fakeMessage("m1"), m2: fakeMessage("m2") };
@@ -202,16 +207,29 @@ describe("Apps Script → Worker", () => {
     const entries = ["m1", "m2"].map((id) => ({ msg: messages[id], headers: { xForwardedFor: "a@x.com" } }));
     expect(api.ingestBatchViaWorker(entries)).toEqual({ handled: 1, failed: 1, skipped: 0 });
     expect(JSON.parse(props.store["gmail.workerRetry"])).toEqual({ m2: 1 });
+    expect(JSON.parse(props.store["gmail.lastWorkerFailure"])).toMatchObject({ code: 503 });
 
     expect(api.ingestBatchViaWorker([])).toEqual({ handled: 0, failed: 1, skipped: 0 });
     expect(JSON.parse(props.store["gmail.workerRetry"])).toEqual({ m2: 2 });
-    for (let i = 0; i < 4; i++) api.ingestBatchViaWorker([]);
+    props.store["gmail.workerRetry"] = JSON.stringify({ m2: 287 });
+    api.ingestBatchViaWorker([]);
     expect(JSON.parse(props.store["gmail.workerRetry"])).toEqual({});
 
     props.store["gmail.workerRetry"] = JSON.stringify({ m2: 3 });
     down = false;
     expect(api.ingestBatchViaWorker([])).toEqual({ handled: 1, failed: 0, skipped: 0 });
     expect(posts.at(-1).payload.messageId).toBe("m2");
+  });
+
+  it("non-ASCII emails (₹, NBSP) are sent as ASCII and verify on the Worker", async () => {
+    const { api, posts } = load({ replies: () => ({ json: { status: "saved" } }) });
+    const text = "Rs.₹1,000\u00a0debited — café";
+    api.ingestEmailViaWorker(fakeMessage("m1", { body: text }), "a@x.com", false);
+    const { url, opts, payload } = posts[0];
+    expect(/^[\x00-\x7f]*$/.test(opts.payload)).toBe(true);
+    expect(payload.text).toBe(text);
+    const req = new Request(url, { method: "POST", headers: opts.headers, body: opts.payload });
+    expect((await verifySignedRequest(req, SECRET, Number(opts.headers["X-Dab-Timestamp"]))).ok).toBe(true);
   });
 });
 
