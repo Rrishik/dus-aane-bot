@@ -46,7 +46,14 @@ Pick a quiet time. Steps 2–4 should run back-to-back.
 3. **Catch-up** — _Import Sheets into D1_ → `catch-up`. Picks up anything Sheets saved between step 1 and the switch. Insert-only, so nothing changed in the bot since is overwritten; verification is lenient. (Avoid undoing splits in the bot until this finishes.)
 4. **Smoke test** — the deploy run from step 2 ends with _Smoke test the native Worker_ (it runs on every deploy while `NATIVE_MODE=1`). All ✅.
 5. **Check by hand** with the real bot: `/help`, paste an SMS, forward a bank email (card within ~5 min, the poller interval), `/ask`, a split in your group, the pinned balance updates.
-6. **Watch for a day**: Cloudflare Worker logs; Apps Script → Executions for `triggerEmailProcessing` (`worker {"handled":…,"failed":0}`); script property `gmail.workerRetry` stays `{}`.
+6. **Watch for a day**: Cloudflare Worker logs; Apps Script → Executions for `triggerEmailProcessing` (`worker {"handled":…,"failed":0}`).
+
+## Troubleshooting
+
+**Actions → Diagnose** (read-only; logs counts only) shows the webhook state, D1 activity, and for recent bot-inbox mail whether each email passed the poller's filters, is labelled or is waiting to retry, plus the last Worker failure (status + error). Options:
+
+- `poll_now` — run the Gmail poller once before reporting.
+- `requeue` — put recent unlabelled bank mail back on the retry list (e.g. after fixing a Worker failure). Failed emails are retried for about a day on their own.
 
 ## 3. Rollback
 
