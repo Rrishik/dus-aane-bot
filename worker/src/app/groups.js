@@ -60,10 +60,19 @@ export async function memberName(ctx, groupId, id, cache = {}) {
 
 // ─── Pure helpers ────────────────────────────────────────────────────
 
+// A member in callback data: "u<user id>", or a 0-based position on cards
+// posted before the move to D1. null if they're no longer a member.
+export function resolveMemberRef(members, ref) {
+  const s = String(ref || "");
+  if (/^u\d+$/.test(s)) return members.includes(s.slice(1)) ? s.slice(1) : null;
+  if (/^\d+$/.test(s)) return members[parseInt(s, 10)] || null;
+  return null;
+}
+
 // Share holders + amounts (minor units) for a split mode; null if invalid.
 //   "50"   2-person 50/50          "p100" 2-person, the other owes 100%
-//   "all"  everyone                "wK"   everyone except members[K]
-//   "iK"   just payer + members[K]
+//   "all"  everyone                "w<ref>" everyone except that member
+//   "i<ref>" just payer + that member      (ref: see resolveMemberRef)
 // holders[0] absorbs the rounding remainder so shares sum to the total.
 export function computeSplitShareSet(members, payerId, mode, totalMinor) {
   const n = members.length;
@@ -74,10 +83,10 @@ export function computeSplitShareSet(members, payerId, mode, totalMinor) {
     holders = mode === "50" ? members.slice() : members.filter((m) => m !== payer);
   } else if (mode === "all") {
     holders = members.slice();
-  } else if (/^[wi]\d+$/.test(mode || "")) {
-    const idx = parseInt(mode.slice(1), 10);
-    if (idx < 0 || idx >= n || members[idx] === payer) return null;
-    holders = mode[0] === "w" ? members.filter((m) => m !== members[idx]) : [payer, members[idx]];
+  } else if (/^[wi]/.test(mode || "")) {
+    const other = resolveMemberRef(members, mode.slice(1));
+    if (!other || other === payer) return null;
+    holders = mode[0] === "w" ? members.filter((m) => m !== other) : [payer, other];
   } else {
     return null;
   }
@@ -234,7 +243,7 @@ export async function splitTransaction(ctx, { payerId, txnId, groupId, mode }) {
   let splitId;
   try {
     splitId = await createSplit(ctx.db, {
-      transactionId: txnId,
+      transactionId: state.txn.id,
       groupId: group.id,
       payerId: payer,
       mode,
@@ -268,14 +277,14 @@ export async function splitTransaction(ctx, { payerId, txnId, groupId, mode }) {
   return { ok: true, txn: state.txn, group, holders: set.holders, shares: set.shares };
 }
 
-export async function settleTransaction(ctx, { payerId, txnId, groupId, targetIdx }) {
+export async function settleTransaction(ctx, { payerId, txnId, groupId, target: targetRef }) {
   const payer = String(payerId);
   const group = await activeGroup(ctx, groupId);
   if (!group) return { ok: false, error: "Group is no longer active." };
   const members = await getGroupMembers(ctx.db, group.id);
   if (!members.includes(payer)) return { ok: false, error: "You're not a member of this group." };
-  const target = members[parseInt(targetIdx, 10)];
-  if (!target) return { ok: false, error: "Invalid settlement target." };
+  const target = resolveMemberRef(members, targetRef);
+  if (!target) return { ok: false, error: "That member is no longer in the group." };
   if (target === payer) return { ok: false, error: "Can't settle with yourself." };
   const state = await loadCardState(ctx, payer, txnId);
   if (!state || state.txn.status !== "confirmed") return { ok: false, error: "Transaction not found." };
@@ -289,7 +298,7 @@ export async function settleTransaction(ctx, { payerId, txnId, groupId, targetId
       toId: target,
       amountMinor: state.txn.amount_minor,
       currency: state.txn.currency,
-      transactionId: txnId,
+      transactionId: state.txn.id,
       now: ctx.now()
     });
   } catch (e) {
@@ -400,9 +409,7 @@ export async function refreshBalancesPin(ctx, group) {
 async function level1Keyboard(ctx, group, payerId, txnId) {
   const members = await getGroupMembers(ctx.db, group.id);
   const others = [];
-  for (const m of members)
-    if (m !== String(payerId))
-      others.push({ id: m, idx: members.indexOf(m), label: await memberName(ctx, group.id, m) });
+  for (const m of members) if (m !== String(payerId)) others.push({ id: m, label: await memberName(ctx, group.id, m) });
   const n = others.length + 1;
   const cb = (...p) => p.join(":");
   const rows = [];
@@ -412,11 +419,11 @@ async function level1Keyboard(ctx, group, payerId, txnId) {
   } else if (n >= 3) {
     rows.push([{ text: "👥 All " + n, callback_data: cb("gsp", txnId, group.id, "all") }]);
     rows.push(
-      others.map((o) => ({ text: "➖ Without " + o.label, callback_data: cb("gsp", txnId, group.id, "w" + o.idx) }))
+      others.map((o) => ({ text: "➖ Without " + o.label, callback_data: cb("gsp", txnId, group.id, "wu" + o.id) }))
     );
     if (n === 4) {
       rows.push(
-        others.map((o) => ({ text: "👥 With " + o.label, callback_data: cb("gsp", txnId, group.id, "i" + o.idx) }))
+        others.map((o) => ({ text: "👥 With " + o.label, callback_data: cb("gsp", txnId, group.id, "iu" + o.id) }))
       );
     }
   }
@@ -428,12 +435,12 @@ async function level1Keyboard(ctx, group, payerId, txnId) {
 async function level2Keyboard(ctx, group, payerId, txnId) {
   const members = await getGroupMembers(ctx.db, group.id);
   const rows = [];
-  for (let i = 0; i < members.length; i++) {
-    if (members[i] === String(payerId)) continue;
+  for (const m of members) {
+    if (m === String(payerId)) continue;
     rows.push([
       {
-        text: "→ " + (await memberName(ctx, group.id, members[i])),
-        callback_data: ["gst", txnId, group.id, i].join(":")
+        text: "→ " + (await memberName(ctx, group.id, m)),
+        callback_data: ["gst", txnId, group.id, "u" + m].join(":")
       }
     ]);
   }
@@ -481,7 +488,7 @@ export async function handleGroupCallback(ctx, cb) {
     return res.ok ? refreshCard() : fail(res.error);
   }
   if (action === "gst") {
-    const res = await settleTransaction(ctx, { payerId: caller, txnId, groupId: parts[1], targetIdx: parts[2] });
+    const res = await settleTransaction(ctx, { payerId: caller, txnId, groupId: parts[1], target: parts[2] });
     return res.ok ? refreshCard() : fail(res.error);
   }
   if (action === "gun") {

@@ -100,14 +100,14 @@ export const ASK_TOOLS = [
       mode: {
         type: "string",
         description:
-          "Split mode: '50' (50/50 between 2 members), 'p100' (the other 2-member owes 100%), 'all' (even across all members), 'wN' (everyone except member index N), 'iN' (just payer + member index N). Member index N is the 0-based index in the group's members list from get_groups."
+          "Split mode: '50' (50/50 between 2 members), 'p100' (the other 2-member owes 100%), 'all' (even across all members), 'wu<chat_id>' (everyone except that member), 'iu<chat_id>' (just the payer and that member). chat_id is the member's chat_id from get_groups."
       }
     },
     ["transaction_id", "mode"]
   ),
   fn(
     "get_groups",
-    "List the active groups the current user is a member of. Use before split_transaction when the user hasn't specified the group, or when you need member indices for 'wN' / 'iN' split modes."
+    "List the active groups the current user is a member of. Use before split_transaction when the user hasn't specified the group, or when you need member chat_ids for 'wu<chat_id>' / 'iu<chat_id>' split modes."
   )
 ];
 
@@ -322,8 +322,8 @@ export function askToolExecutor(ctx, tenantId) {
       const out = [];
       for (const g of groups) {
         const members = [];
-        for (const [index, id] of (await getGroupMembers(ctx.db, g.id)).entries()) {
-          members.push({ index, chat_id: id, name: await memberName(ctx, g.id, id) });
+        for (const id of await getGroupMembers(ctx.db, g.id)) {
+          members.push({ chat_id: id, name: await memberName(ctx, g.id, id) });
         }
         out.push({ chat_id: g.id, name: g.name, primary_currency: g.primary_currency, members });
       }

@@ -228,10 +228,10 @@ export async function takeGroupInvites(db, userId) {
   return rows.results.map((r) => r.group_id);
 }
 
-// /deletemydata. Cascades remove emails, transactions (with their sources,
-// splits and linked settlements), memberships, quota and backfill state.
-// Shares the user holds in others' splits and /settle cash entries stay so
-// the other members' balances still add up.
+// /deletemydata. Cascades remove emails, transactions (with their sources
+// and splits), memberships, quota and backfill state. Shares the user holds
+// in others' splits and every settlement stay, so the other members'
+// balances still add up.
 export async function deleteTenantData(db, tenantId) {
   const id = String(tenantId);
   await db.batch([
@@ -239,6 +239,12 @@ export async function deleteTenantData(db, tenantId) {
     db.prepare("DELETE FROM group_invites WHERE user_id = ?").bind(id),
     db.prepare("UPDATE parser_events SET tenant_id = NULL, source_ref = NULL WHERE tenant_id = ?").bind(id),
     db.prepare("DELETE FROM settings WHERE key = ?").bind("export_sheet:" + id),
+    // Keep repayments made from their transactions, as cash-style entries.
+    db
+      .prepare(
+        "UPDATE settlements SET transaction_id = NULL WHERE transaction_id IN (SELECT id FROM transactions WHERE tenant_id = ?)"
+      )
+      .bind(id),
     db.prepare("DELETE FROM tenants WHERE id = ? AND kind = 'personal'").bind(id)
   ]);
 }

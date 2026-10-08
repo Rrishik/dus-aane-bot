@@ -3,7 +3,7 @@ import { testContext, seedTenant, seedGroup } from "./helpers/app.js";
 import { handleUpdate } from "../src/app/webhook.js";
 import { ingest } from "../src/app/ingest.js";
 import { getTenant, getGroupMembers } from "../src/db/tenants.js";
-import { createSplit, groupBalances } from "../src/db/splits.js";
+import { createSplit, groupBalances, recordSettlement } from "../src/db/splits.js";
 import { upsertMerchantRule, getMerchantRules } from "../src/db/merchantRules.js";
 import { getSetting } from "../src/db/settings.js";
 import { parseExportRange, toCsv, EXPORT_HEADER } from "../src/app/data.js";
@@ -148,6 +148,15 @@ describe("/deletemydata", () => {
       mode: "p100",
       shares: [{ holderId: "111", amountMinor: 40000 }]
     });
+    // 111 paid 222 back ₹100 from one of their own transactions.
+    await recordSettlement(ctx.db, {
+      groupId: "-100",
+      fromId: "111",
+      toId: "222",
+      amountMinor: 10000,
+      currency: "INR",
+      transactionId: ids[1]
+    });
 
     await handleUpdate(ctx, tap("wipe_yes"));
     expect(await getTenant(ctx.db, "111")).toBeNull();
@@ -160,7 +169,7 @@ describe("/deletemydata", () => {
     );
     expect(await getGroupMembers(ctx.db, "-100")).toEqual(["222"]);
     expect(await groupBalances(ctx.db, "-100")).toEqual({
-      INR: [{ debtor: "111", creditor: "222", amountMinor: 40000 }]
+      INR: [{ debtor: "111", creditor: "222", amountMinor: 30000 }]
     });
     expect(ctx.tg.of("sendMessage").some((c) => c.args[0] === "-100" && c.args[1].includes("live balances"))).toBe(
       true

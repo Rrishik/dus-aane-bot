@@ -273,6 +273,9 @@ describe("export_to_sheet", () => {
       const sheet = {
         clear: () => state.cleared++,
         getRange: (r, c, rows, cols) => ({
+          setNumberFormats: (f) => {
+            state.formats = f[0];
+          },
           setValues: (v) => {
             expect([r, c, rows, cols]).toEqual([1, 1, v.length, v[0].length]);
             state.values = v;
@@ -307,7 +310,12 @@ describe("export_to_sheet", () => {
       }
     };
   }
-  const payload = { title: "T", header: ["A", "B"], rows: [[1, "x"]], emails: ["a@x.com", "bad"] };
+  const payload = {
+    title: "T",
+    header: ["A", "B", "C"],
+    rows: [[1, "=HYPERLINK(1)", "0042"]],
+    emails: ["a@x.com", "bad"]
+  };
 
   it("creates the sheet on first use, then rewrites it", () => {
     const stub = sheetStub("s1");
@@ -318,9 +326,10 @@ describe("export_to_sheet", () => {
     });
     expect(stub.made[0].b.state).toMatchObject({
       values: [
-        ["A", "B"],
-        [1, "x"]
+        ["A", "B", "C"],
+        [1, "=HYPERLINK(1)", "0042"]
       ],
+      formats: ["#,##0.00", "@", "@"],
       frozen: 1,
       editors: ["a@x.com"]
     });

@@ -4,6 +4,7 @@ import { handleIngestEmail } from "./app/ingestRoute.js";
 import { handleBackfillProgress } from "./app/backfill.js";
 import { handleUpdate } from "./app/webhook.js";
 import { runScheduled } from "./app/cron.js";
+import { looksLikeTransactionText } from "./parser/index.js";
 
 // GET /healthz reports whether the D1 binding answers.
 export async function healthz(env) {
@@ -43,8 +44,26 @@ export default {
   async scheduled(event, env, ctx) {
     if (!isNative(env)) return;
     ctx.waitUntil(runScheduled(createContext(env), event.scheduledTime));
+  },
+
+  async queue(batch, env) {
+    await handleQueue(batch, env);
   }
 };
+
+// Updates that wait on the LLM or Apps Script can outlive waitUntil's 30s,
+// so they go through the queue; everything else is handled straight away.
+const SLOW_COMMANDS = ["/ask", "/register", "/backfill", "/export"];
+export function isSlowUpdate(update) {
+  const cb = update.callback_query;
+  if (cb) return /^(rr|export)_/.test(cb.data || "") || cb.data === "resend_setup";
+  const m = update.message;
+  if (!m || !m.text || !m.chat || m.chat.type !== "private") return false;
+  // Plain text: /ask replies and pasted SMS hit the LLM; a 🏷 tag reply doesn't.
+  if (!m.text.startsWith("/")) return !!m.reply_to_message || looksLikeTransactionText(m.text);
+  const command = m.text.split(/\s+/)[0].split("@")[0].toLowerCase();
+  return SLOW_COMMANDS.includes(command);
+}
 
 // Native Telegram webhook: verify Telegram's secret header, ack at once and
 // process in the background (a slow ack makes Telegram retry).
@@ -59,6 +78,23 @@ export async function handleTelegramWebhook(request, env, ctx) {
   } catch (_) {
     return new Response("OK", { status: 200 });
   }
+  if (env.UPDATES && isSlowUpdate(update)) {
+    try {
+      await env.UPDATES.send(update);
+      return new Response("OK", { status: 200 });
+    } catch (e) {
+      console.error("[queue] send failed, handling inline:", e && e.message);
+    }
+  }
   ctx.waitUntil(handleUpdate(createContext(env), update));
   return new Response("OK", { status: 200 });
+}
+
+// Queue consumer for slow updates. handleUpdate never throws, so a message
+// is never retried (retries could double-post).
+export async function handleQueue(batch, env) {
+  for (const msg of batch.messages) {
+    if (isNative(env)) await handleUpdate(createContext(env), msg.body);
+    msg.ack();
+  }
 }

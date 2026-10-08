@@ -191,10 +191,7 @@ describe("/ask", () => {
       groups: [
         {
           chat_id: "-100",
-          members: [
-            { index: 0, chat_id: "111" },
-            { index: 1, chat_id: "222", name: "U222" }
-          ]
+          members: [{ chat_id: "111" }, { chat_id: "222", name: "U222" }]
         }
       ]
     });

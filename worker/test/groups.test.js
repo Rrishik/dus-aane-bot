@@ -3,9 +3,15 @@ import { loadAppsScript } from "../../tests/_loader.js";
 import { testContext, seedTenant, seedGroup } from "./helpers/app.js";
 import { handleUpdate } from "../src/app/webhook.js";
 import { ingest } from "../src/app/ingest.js";
-import { getTenant, getGroupMembers, takeGroupInvites } from "../src/db/tenants.js";
+import { getTenant, getGroupMembers, takeGroupInvites, removeGroupMember } from "../src/db/tenants.js";
 import { getSplitForTransaction, getSettlementForTransaction, groupBalances } from "../src/db/splits.js";
-import { computeSplitShareSet, simplifyDebts, parseSettleCommand, formatBalancesPin } from "../src/app/groups.js";
+import {
+  computeSplitShareSet,
+  simplifyDebts,
+  parseSettleCommand,
+  formatBalancesPin,
+  resolveMemberRef
+} from "../src/app/groups.js";
 
 const legacy = loadAppsScript(["Groups.js"], ["computeSplitShareSet", "simplifyDebtsGreedy", "parseSettleCommand"]);
 
@@ -249,14 +255,14 @@ describe("split / settle / undo from the DM card", () => {
     await handleUpdate(ctx, tap("gset:" + id + ":-100"));
     const kb = ctx.tg.of("editMessageReplyMarkup").at(-1).args[2].inline_keyboard;
     expect(kb.map((r) => r[0].callback_data)).toEqual([
-      "gst:" + id + ":-100:1",
-      "gst:" + id + ":-100:2",
+      "gst:" + id + ":-100:u222",
+      "gst:" + id + ":-100:u333",
       "gbk:" + id + ":-100:1"
     ]);
 
-    await handleUpdate(ctx, tap("gst:" + id + ":-100:0"));
+    await handleUpdate(ctx, tap("gst:" + id + ":-100:u111"));
     expect(sent(ctx).at(-1).text).toContain("Can't settle with yourself");
-    await handleUpdate(ctx, tap("gst:" + id + ":-100:2"));
+    await handleUpdate(ctx, tap("gst:" + id + ":-100:u333"));
     expect(await getSettlementForTransaction(ctx.db, id)).toMatchObject({
       from_id: "111",
       to_id: "333",
@@ -269,6 +275,40 @@ describe("split / settle / undo from the DM card", () => {
 
     await handleUpdate(ctx, tap("gun:" + id));
     expect(await getSettlementForTransaction(ctx.db, id)).toBeNull();
+  });
+
+  it("buttons name members by id, so a stale keyboard can't hit the wrong person", async () => {
+    const { ctx, id } = await groupWithCard(["111", "222", "333", "444"]);
+    await handleUpdate(ctx, tap("gnav:" + id + ":-100"));
+    const kb = ctx.tg.of("editMessageReplyMarkup").at(-1).args[2].inline_keyboard;
+    expect(kb[1].map((b) => b.callback_data)).toEqual(
+      ["wu222", "wu333", "wu444"].map((m) => "gsp:" + id + ":-100:" + m)
+    );
+    expect(kb[2][0].callback_data).toBe("gsp:" + id + ":-100:iu222");
+
+    // 333 leaves after the keyboard was drawn.
+    await removeGroupMember(ctx.db, "-100", "333");
+    await handleUpdate(ctx, tap("gst:" + id + ":-100:u333"));
+    expect(sent(ctx).at(-1).text).toContain("no longer in the group");
+    await handleUpdate(ctx, tap("gsp:" + id + ":-100:wu333"));
+    expect(sent(ctx).at(-1).text).toContain("Invalid split");
+    expect(await getSplitForTransaction(ctx.db, id)).toBeNull();
+
+    // "Without 444" still drops 444, not whoever now sits at that position.
+    await handleUpdate(ctx, tap("gsp:" + id + ":-100:wu444"));
+    expect((await getSplitForTransaction(ctx.db, id)).shares.map((s) => s.holder_id)).toEqual(["111", "222"]);
+  });
+
+  it("callback data stays within Telegram's 64 bytes", () => {
+    const longest = "gsp:" + "0".repeat(26) + ":-1001234567890:wu" + "9".repeat(12);
+    expect(Buffer.byteLength(longest)).toBeLessThanOrEqual(64);
+  });
+
+  it("cards from before D1 still resolve member positions", () => {
+    expect(resolveMemberRef(["111", "222", "333"], "2")).toBe("333");
+    expect(resolveMemberRef(["111", "222", "333"], "u222")).toBe("222");
+    expect(resolveMemberRef(["111", "222"], "u333")).toBeNull();
+    expect(resolveMemberRef(["111"], "5")).toBeNull();
   });
 
   it("non-members can't split into the group", async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import worker, { healthz } from "../src/index.js";
+import worker, { healthz, isSlowUpdate } from "../src/index.js";
 import { ulid } from "../src/util/ids.js";
 import { toMinor, fromMinor } from "../src/util/money.js";
 import { defaultKind } from "../src/util/kind.js";
@@ -48,6 +48,57 @@ describe("router", () => {
     } finally {
       globalThis.fetch = origFetch;
     }
+  });
+});
+
+describe("slow updates go through the queue", () => {
+  const dm = (text, extra = {}) => ({ message: { chat: { id: 1, type: "private" }, text, ...extra } });
+  const tap = (data) => ({ callback_query: { data } });
+
+  it("classifies LLM / Apps Script work as slow", () => {
+    expect(
+      [
+        dm("/ask food?"),
+        dm("/register a@x.com"),
+        dm("/export"),
+        dm("Sent Rs.250.00 From HDFC Bank A/C *1234 To SWIGGY On 05/10/26 Ref 628012345678"),
+        dm("October", { reply_to_message: { message_id: 5 } }),
+        tap("rr_X"),
+        tap("export_sheet_all"),
+        tap("resend_setup")
+      ].map(isSlowUpdate)
+    ).toEqual([true, true, true, true, true, true, true, true]);
+    expect(
+      [dm("/help"), dm("/stats"), dm("Coffee"), tap("rra_X"), tap("cat_X_1"), tap("gsp:X:-1:50")].map(isSlowUpdate)
+    ).toEqual([false, false, false, false, false, false]);
+  });
+
+  it("queues slow updates, handles the rest inline, and falls back when the queue fails", async () => {
+    const sent = [];
+    const waited = [];
+    const ctx = { waitUntil: (p) => waited.push(p) };
+    const env = {
+      MODE: "native",
+      DB: createTestD1(),
+      UPDATES: { send: async (u) => sent.push(u) }
+    };
+    const post = (u) => new Request("https://w/", { method: "POST", body: JSON.stringify(u) });
+    await worker.fetch(post(dm("/ask x")), env, ctx);
+    expect(sent).toHaveLength(1);
+    expect(waited).toHaveLength(0);
+    env.UPDATES.send = async () => {
+      throw new Error("queue down");
+    };
+    await worker.fetch(post(dm("/ask y")), env, ctx);
+    expect(waited).toHaveLength(1);
+    await Promise.allSettled(waited);
+  });
+
+  it("the consumer acks every message and does nothing outside native mode", async () => {
+    const acked = [];
+    const batch = { messages: [{ body: {}, ack: () => acked.push(1) }] };
+    await worker.queue(batch, {});
+    expect(acked).toEqual([1]);
   });
 });
 
