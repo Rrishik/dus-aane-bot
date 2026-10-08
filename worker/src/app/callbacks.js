@@ -4,6 +4,7 @@ import { getTenant, getTenantEmails } from "../db/tenants.js";
 import { recentMessage, statsMenuKeyboard, sendSetupEmail } from "./commands.js";
 import { monthlyTrends, weeklyTrends, formatTrendsMessage } from "./analytics.js";
 import { isUsable, gateText } from "./onboarding.js";
+import { handleCardAction } from "./cardActions.js";
 
 const statsBackRow = [{ text: "🔙 Back", callback_data: "stats_back" }];
 
@@ -72,5 +73,13 @@ export async function handleCallback(ctx, cb) {
     await ctx.tg.sendMessage(chatId, "💎 *Premium coming soon* — we'll let you know when it's ready.");
     return;
   }
-  await ctx.tg.sendMessage(chatId, "❌ *Unknown action*");
+  const handled = await handleCardAction(ctx, {
+    chatId,
+    userId: String(cb.from && cb.from.id ? cb.from.id : chatId),
+    messageId,
+    action,
+    payload,
+    from: cb.from
+  });
+  if (!handled) await ctx.tg.sendMessage(chatId, "❌ *Unknown action*");
 }

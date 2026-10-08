@@ -13,6 +13,7 @@ import {
 import { handleBackfill } from "./backfill.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
+import { handleTagReply, handleCancel } from "./cardActions.js";
 import { isUsable, gateText } from "./onboarding.js";
 
 const ONBOARDING = ["/start", "/register", "/account"];
@@ -25,13 +26,14 @@ const PERSONAL_COMMANDS = {
   "/sheet": (ctx, m) => handleSheet(ctx, m.chatId),
   "/recent": (ctx, m) => handleRecent(ctx, m.chatId, m.text),
   "/stats": (ctx, m) => handleStats(ctx, m.chatId),
-  "/backfill": (ctx, m) => handleBackfill(ctx, m.chatId, m.text)
+  "/backfill": (ctx, m) => handleBackfill(ctx, m.chatId, m.text),
+  "/cancel": (ctx, m) => handleCancel(ctx, m)
 };
 
 // Group-chat commands (task 8) and plain-text reply flows that run before
-// SMS paste (ask resume / pending ask in 7c, pending tag in 7b).
+// SMS paste (ask resume / pending ask in 7c).
 const GROUP_COMMANDS = {};
-const PLAIN_TEXT_STEPS = [];
+const PLAIN_TEXT_STEPS = [(ctx, m) => handleTagReply(ctx, m)];
 
 export function commandOf(text) {
   return String(text || "")

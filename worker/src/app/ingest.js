@@ -19,13 +19,12 @@ import {
   attachSource,
   findTransactionBySource,
   findLinkCandidate,
-  updateTransaction,
-  getSources
+  updateTransaction
 } from "../db/transactions.js";
-import { groupsForMember, touchActivity } from "../db/tenants.js";
+import { touchActivity } from "../db/tenants.js";
 import { getParserMode, getDisabledTemplates, logParserEvent } from "../db/settings.js";
 import { extractWithLlm } from "./extraction.js";
-import { cardText, keyboardFor } from "./cards.js";
+import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
 import { categoriesFor } from "./constants.js";
 import { money, formatDayMonth } from "./format.js";
 import { toMinor } from "../util/money.js";
@@ -199,25 +198,11 @@ async function logShadow(ctx, tenantId, parsed, llm, input, receivedAt) {
 
 // Post the transaction card to the tenant's chat and remember its message id.
 export async function sendCard(ctx, tenant, transactionId) {
-  const { db } = ctx;
-  const tenantId = String(tenant.id);
-  const txn = await db
-    .prepare("SELECT * FROM transactions WHERE id = ? AND tenant_id = ?")
-    .bind(transactionId, tenantId)
-    .first();
-  if (!txn) return null;
-  const [sources, groups, emailCount] = await Promise.all([
-    getSources(db, tenantId, transactionId),
-    groupsForMember(db, tenantId),
-    db.prepare("SELECT COUNT(*) AS n FROM tenant_emails WHERE tenant_id = ?").bind(tenantId).first("n")
-  ]);
-  // 👤 only helps tenants with more than one forwarder.
-  const user = emailCount > 1 ? txn.forwarder : null;
-  const sent = await ctx.tg.sendMessage(tenantId, cardText(txn, { user }), {
-    reply_markup: keyboardFor(txn, { sources, groups, isSplit: false })
-  });
+  const state = await loadCardState(ctx, tenant.id, transactionId);
+  if (!state) return null;
+  const sent = await ctx.tg.sendMessage(String(tenant.id), renderCard(state), { reply_markup: defaultKeyboard(state) });
   if (sent && sent.message_id) {
-    await updateTransaction(db, tenantId, transactionId, { cardMessageId: sent.message_id }, ctx.now());
+    await updateTransaction(ctx.db, tenant.id, transactionId, { cardMessageId: sent.message_id }, ctx.now());
   }
   return sent;
 }
