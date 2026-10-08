@@ -64,6 +64,10 @@ export async function recordSettlement(
   return id;
 }
 
+export async function setSettlementGroupMessage(db, settlementId, groupMessageId) {
+  await db.prepare("UPDATE settlements SET group_message_id = ? WHERE id = ?").bind(groupMessageId, settlementId).run();
+}
+
 export async function getSettlementForTransaction(db, transactionId) {
   return db.prepare("SELECT * FROM settlements WHERE transaction_id = ?").bind(transactionId).first();
 }

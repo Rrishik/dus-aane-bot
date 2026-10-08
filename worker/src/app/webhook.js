@@ -15,6 +15,15 @@ import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
 import { handleTagReply, handleCancel } from "./cardActions.js";
 import { isUsable, gateText } from "./onboarding.js";
+import {
+  handleGroupStart,
+  handleGroupHelp,
+  handleGroupAccount,
+  handleGroupSheet,
+  handleGroupStats,
+  handleGroupSettle,
+  handleMembershipUpdate
+} from "./groups.js";
 
 const ONBOARDING = ["/start", "/register", "/account"];
 
@@ -30,9 +39,16 @@ const PERSONAL_COMMANDS = {
   "/cancel": (ctx, m) => handleCancel(ctx, m)
 };
 
-// Group-chat commands (task 8) and plain-text reply flows that run before
-// SMS paste (ask resume / pending ask in 7c).
-const GROUP_COMMANDS = {};
+const GROUP_COMMANDS = {
+  "/start": handleGroupStart,
+  "/help": handleGroupHelp,
+  "/account": handleGroupAccount,
+  "/sheet": handleGroupSheet,
+  "/stats": handleGroupStats,
+  "/settle": handleGroupSettle
+};
+
+// Plain-text reply flows that run before SMS paste (ask resume / pending ask in 7c).
 const PLAIN_TEXT_STEPS = [(ctx, m) => handleTagReply(ctx, m)];
 
 export function commandOf(text) {
@@ -88,6 +104,7 @@ export async function handleUpdate(ctx, update) {
   try {
     if (update.callback_query) return await handleCallback(ctx, update.callback_query);
     if (update.message) return await handleMessage(ctx, update.message);
+    if (update.my_chat_member || update.chat_member) return await handleMembershipUpdate(ctx, update);
   } catch (e) {
     console.error("[update] failed:", e && e.stack);
   }

@@ -1,6 +1,7 @@
 // Everything needed to render a transaction card in its current state.
 import { getTransaction, getSources } from "../db/transactions.js";
-import { groupsForMember } from "../db/tenants.js";
+import { getTenant, groupsForMember } from "../db/tenants.js";
+import { escapeMarkdown } from "./format.js";
 import { getSplitForTransaction, getSettlementForTransaction } from "../db/splits.js";
 import { cardText, keyboardFor, canReread } from "./cards.js";
 
@@ -16,6 +17,14 @@ export async function loadCardState(ctx, tenantId, txnId) {
     ctx.db.prepare("SELECT COUNT(*) AS n FROM tenant_emails WHERE tenant_id = ?").bind(tid).first("n")
   ]);
   const isSplit = !!(split || settlement);
+  let linkLine = null;
+  if (split) {
+    const g = groups.find((x) => x.id === split.group_id) || (await getTenant(ctx.db, split.group_id));
+    linkLine = "👥 Split with *" + escapeMarkdown((g && g.name) || "group") + "*";
+  } else if (settlement) {
+    const to = await getTenant(ctx.db, settlement.to_id);
+    linkLine = "🤝 Settled with *" + escapeMarkdown((to && to.name) || settlement.to_id) + "*";
+  }
   return {
     txn,
     sources,
@@ -23,6 +32,7 @@ export async function loadCardState(ctx, tenantId, txnId) {
     split,
     settlement,
     isSplit,
+    linkLine,
     // 👤 only helps tenants with more than one forwarder.
     user: emailCount > 1 ? txn.forwarder : null,
     canReread: canReread(sources, isSplit)
@@ -30,7 +40,7 @@ export async function loadCardState(ctx, tenantId, txnId) {
 }
 
 export function renderCard(state, extraLine) {
-  return cardText(state.txn, { user: state.user, extraLine });
+  return cardText(state.txn, { user: state.user, extraLine: [state.linkLine, extraLine].filter(Boolean).join("\n") });
 }
 
 export function defaultKeyboard(state) {

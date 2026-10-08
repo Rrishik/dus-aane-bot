@@ -1,10 +1,11 @@
-// Inline-button callbacks. Card actions land here in task 7b; this file
-// starts with the /stats views and "Resend setup".
+// Inline-button callbacks: /stats views, "Resend setup", group split/settle
+// (":"-separated) and transaction card actions ("_"-separated).
 import { getTenant, getTenantEmails } from "../db/tenants.js";
 import { recentMessage, statsMenuKeyboard, sendSetupEmail } from "./commands.js";
 import { monthlyTrends, weeklyTrends, formatTrendsMessage } from "./analytics.js";
 import { isUsable, gateText } from "./onboarding.js";
 import { handleCardAction } from "./cardActions.js";
+import { isGroupCallback, handleGroupCallback } from "./groups.js";
 
 const statsBackRow = [{ text: "🔙 Back", callback_data: "stats_back" }];
 
@@ -41,6 +42,10 @@ export async function handleCallback(ctx, cb) {
   const chatId = String(cb.message.chat.id);
   const messageId = cb.message.message_id;
   const data = cb.data || "";
+  if (data.startsWith("gstats:")) {
+    await ctx.tg.answerCallbackQuery(cb.id, "");
+    return handleGroupCallback(ctx, cb);
+  }
   const tenant = await getTenant(ctx.db, chatId);
 
   // Resend setup must work for pending tenants — they need it most.
@@ -64,6 +69,7 @@ export async function handleCallback(ctx, cb) {
 
   // Ack first so the spinner clears; later errors go out as messages.
   await ctx.tg.answerCallbackQuery(cb.id, "");
+  if (isGroupCallback(data)) return handleGroupCallback(ctx, cb);
   const sep = data.indexOf("_");
   const action = sep < 0 ? data : data.slice(0, sep);
   const payload = sep < 0 ? "" : data.slice(sep + 1);

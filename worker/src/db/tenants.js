@@ -147,10 +147,15 @@ export async function getGroupMembers(db, groupId) {
   return rows.results.map((r) => r.member_id);
 }
 
+// joined_at is forced past the group's latest so join order stays strict.
 export async function addGroupMember(db, groupId, memberId, now = Date.now()) {
+  const gid = String(groupId);
   const res = await db
-    .prepare("INSERT OR IGNORE INTO group_members (group_id, member_id, joined_at) VALUES (?, ?, ?)")
-    .bind(String(groupId), String(memberId), now)
+    .prepare(
+      "INSERT OR IGNORE INTO group_members (group_id, member_id, joined_at) " +
+        "SELECT ?, ?, MAX(?, COALESCE((SELECT MAX(joined_at) + 1 FROM group_members WHERE group_id = ?), 0))"
+    )
+    .bind(gid, String(memberId), now, gid)
     .run();
   return res.meta.changes > 0;
 }
@@ -168,6 +173,11 @@ export async function setGroupMembers(db, groupId, members, now = Date.now()) {
   const gid = String(groupId);
   const keep = members.map(String);
   const current = await getGroupMembers(db, gid);
+  const latest = await db
+    .prepare("SELECT MAX(joined_at) AS t FROM group_members WHERE group_id = ?")
+    .bind(gid)
+    .first("t");
+  const base = Math.max(now, latest == null ? 0 : latest + 1);
   const stmts = [];
   current
     .filter((m) => !keep.includes(m))
@@ -178,7 +188,7 @@ export async function setGroupMembers(db, groupId, members, now = Date.now()) {
     .filter((m) => !current.includes(m))
     .forEach((m, i) =>
       stmts.push(
-        db.prepare("INSERT INTO group_members (group_id, member_id, joined_at) VALUES (?, ?, ?)").bind(gid, m, now + i)
+        db.prepare("INSERT INTO group_members (group_id, member_id, joined_at) VALUES (?, ?, ?)").bind(gid, m, base + i)
       )
     );
   if (stmts.length) await db.batch(stmts);
