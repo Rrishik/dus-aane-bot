@@ -16,7 +16,12 @@ Code.js                 # Webhook / async trigger orchestration
 Constants.js            # Categories, bank senders, column indexes
 BotHandlers.js          # Telegram command + callback routers
 TelegramUtils.js        # Telegram API wrappers, retry/backoff
-TransactionProcessor.js # Email → LLM → Sheet pipeline
+TransactionProcessor.js # Email → parser/LLM → validate → Sheet pipeline
+Parser.js               # Deterministic email/SMS parser + shared validation (plain JS only)
+BankTemplates.js        # Per-bank templates + scrubbed samples (data only)
+ParserTelemetry.js      # parser.mode, disabled templates, ParserEvents log, digest
+SmsPaste.js             # Pasted SMS → cards
+PendingInput.js         # Expiring "waiting for your reply" flags
 Forwarding.js           # Verify-forwarding-address one-tap helper
 GoogleSheetUtils.js     # Sheet CRUD + merchant resolution tabs
 Analytics.js            # /stats aggregations and formatters
@@ -52,6 +57,14 @@ You'll also need a local `AConfig.js` (gitignored) with all the constants listed
 - Open the script editor → run functions manually (e.g. `triggerEmailProcessing`, `adminCreateTemplateSheet`).
 - CI runs on push to `main`; avoid force-pushing directly.
 
+## Tests
+
+```powershell
+npm test
+```
+
+Tests load source files into a `vm` sandbox via `tests/_loader.js` and stub the Apps Script services. The loader also supplies defaults for a few shared constants/predicates (`SHARED_DEFAULTS`); a loaded file's own declarations and per-test stubs always win.
+
 ## Formatting
 
 ```powershell
@@ -68,7 +81,13 @@ The narrowest change: add verified transaction-alert senders to `TRANSACTION_SEN
 - Add any known marketing/statement addresses for that bank to `IGNORE_SENDERS`.
 - Regenerate the user-facing Gmail filter (the bot sends the fresh query on `/register`, so existing tenants can re-paste if they want new banks covered).
 
-Test with a real forwarded email if possible — LLM extraction varies wildly by formatting.
+Then add a parser template in [BankTemplates.js](../BankTemplates.js) for the bank's email and/or SMS format:
+
+- One entry per format, with an `id` ending in a version (`hdfc_cc_spent_sms_v1`), a `channel` (`email` / `sms` / `both`) and a strict regex with named groups (`amount` required; `cur`, `date`, `merchant`, `account`, `reference` optional).
+- Add `samples` with the expected read. `tests/parser.test.js` runs every sample automatically.
+- **Never commit real messages** — this repo is public. Replace names, account digits and reference numbers with fakes before adding a sample.
+- Email templates run in `shadow` mode first (`parser.mode` script property): the LLM result is saved and the parser's read is only compared in the `ParserEvents` tab. Switch to `on` once agreement is consistently high.
+- If you change a template's behaviour, bump its version suffix so telemetry for the old and new versions stays separate.
 
 ## Adding a new command
 
@@ -104,7 +123,7 @@ Every entry point that touches sheets or sends Telegram messages must be tenant-
 
 - **`extractTransactions`** — sets `setCurrentTenant(tenant)` per-message based on the forwarder's email.
 - **`doPost`** — sets tenant from the incoming Telegram `chat_id`.
-- **Async triggers (`continueBackfill`, `processWebhookUpdate`)** — restore tenant from a stashed `chat_id` or `sheet_id` in `PropertiesService`.
+- **Async triggers (`continueBackfill`, `processWebhookUpdate`)** — restore tenant from state keyed by the invoking trigger's `triggerUid` (so concurrent users don't clobber each other).
 
 Never call `getSpreadsheet()` or `sendTelegramMessage(CHAT_ID, ...)` in a code path that could be shared between tenants. Use `getTenantSheetId()` and `getTenantChatId()` accessors.
 
@@ -121,7 +140,8 @@ Never call `getSpreadsheet()` or `sendTelegramMessage(CHAT_ID, ...)` in a code p
 - Apps Script → **Executions** tab shows logs for every run including triggers. Search by function name.
 - `console.error` and `console.warn` surface as severity levels in Stackdriver / Executions.
 - For local-ish debugging of parsing, paste a raw email body into a scratch function in the script editor and run it directly.
-- Test webhook flow: `POST` a Telegram-shaped JSON payload at the `/exec` URL with `curl` or a REST client.
+- Test webhook flow: `POST` a Telegram-shaped JSON payload at the `/exec?k=<WEBHOOK_SECRET>` URL with `curl` or a REST client (without `k` the update is dropped when a secret is configured).
+- Test parsing locally: `npx vitest run tests/parser.test.js`, or load `BankTemplates.js` + `Parser.js` into a Node `vm` context and call `parseTransactionText(text, { channel, receivedAt })`.
 
 ## Pull request checklist
 
