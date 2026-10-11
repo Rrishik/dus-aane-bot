@@ -37,6 +37,8 @@ const claims = (o = {}) => ({
 });
 
 let kp;
+const EMAIL_BODY = "Rs.250.00 has been debited from account **1234 to VPA swiggy@ybl SWIGGY on 07-10-26.";
+
 let other;
 const calls = [];
 function fetchStub({ appsScript, telegram } = {}) {
@@ -45,6 +47,12 @@ function fetchStub({ appsScript, telegram } = {}) {
     if (String(url) === "https://" + TEAM + "/cdn-cgi/access/certs") return Response.json({ keys: [kp.jwk] });
     if (String(url).startsWith("https://script.example")) {
       if (appsScript === "down") return new Response("nope", { status: 500 });
+      const { action, payload } = JSON.parse(init.body);
+      if (action === "get_email_body") {
+        const { messageId } = JSON.parse(payload);
+        if (messageId === "gone") return Response.json({ ok: false, error: "message not found" });
+        return Response.json({ ok: true, text: EMAIL_BODY, receivedAt: NOW });
+      }
       return Response.json({
         ok: true,
         lastRun: { at: new Date(NOW - 120000).toISOString(), found: 1, stats: { handled: 1, failed: 0, skipped: 0 } },
@@ -273,5 +281,58 @@ describe("/api/summary", () => {
       reports: 2
     });
     expect(summarizeTemplate({})).toMatchObject({ reads: 0, shadowAgreement: null, correctionRate: null });
+  });
+});
+
+describe("parser cases", () => {
+  // The LLM calls it a credit; the parser reads a debit from the same email.
+  async function mismatch(sourceRef = "m9") {
+    const ctx = testContext({ llmReplies: [llmTxn({ transaction_type: "Credit" })] });
+    const alice = await seedTenant(ctx, "111", { email: "alice@x.com", name: "Alice" });
+    await ingest(ctx, { tenant: alice, source: "email", sourceRef, text: EMAIL_BODY });
+    return ctx;
+  }
+
+  it("lists disagreements in the summary without their content", async () => {
+    const ctx = await mismatch();
+    const text = await (await get("/api/summary", { env: ENV(ctx.db), token: await sign(kp, claims()) })).text();
+    const cases = JSON.parse(text).summary.parser.cases;
+    expect(cases).toEqual([
+      expect.objectContaining({ event: "shadow_mismatch", channel: "email", fields: "transaction_type", linked: 1 })
+    ]);
+    expect(cases[0].user).toMatch(/^u-[0-9a-f]{6}$/);
+    for (const secret of ["SWIGGY", "swiggy", "Alice", "alice@x.com", "m9", '"111"'])
+      expect(text).not.toContain(secret);
+  });
+
+  it("shows one case in full: message, saved values and today's parser read", async () => {
+    const ctx = await mismatch();
+    const env = ENV(ctx.db);
+    const token = await sign(kp, claims());
+    const { id } = (await (await get("/api/summary", { env, token })).json()).summary.parser.cases[0];
+    const res = await get("/api/case?id=" + id, { env, token });
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    const c = await res.json();
+    expect(c).toMatchObject({
+      event: "shadow_mismatch",
+      text: EMAIL_BODY,
+      saved: { transaction_type: "Credit", amount: 250, transaction_date: "2026-10-07", status: expect.any(String) },
+      parser: { read: true, values: { transaction_type: "Debit", amount: 250 } },
+      changed: ["transaction_type"]
+    });
+  });
+
+  it("explains when the message can't be fetched, and rejects bad ids", async () => {
+    const ctx = await mismatch("gone");
+    const env = ENV(ctx.db);
+    const token = await sign(kp, claims());
+    const { id } = (await (await get("/api/summary", { env, token })).json()).summary.parser.cases[0];
+    const c = await (await get("/api/case?id=" + id, { env, token })).json();
+    expect(c.text).toBeNull();
+    expect(c.textError).toMatch(/message not found/);
+    expect(c.saved).toMatchObject({ transaction_type: "Credit" });
+    expect((await get("/api/case?id=abc", { env, token })).status).toBe(400);
+    expect((await get("/api/case?id=999", { env, token })).status).toBe(404);
+    expect((await get("/api/case?id=" + id, { env })).status).toBe(403);
   });
 });

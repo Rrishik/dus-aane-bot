@@ -1,8 +1,10 @@
 // Admin dashboard Worker (admin.healthvault.online). Read-only: D1
-// aggregates plus live checks of the Gmail poller (Apps Script) and the
-// Telegram webhook. Every request must carry a valid Cloudflare Access token.
+// aggregates, single parser cases in full, and live checks of the Gmail
+// poller (Apps Script) and the Telegram webhook. Every request must carry a
+// valid Cloudflare Access token.
 import { verifyAccess } from "./access.js";
 import { collectSummary } from "./queries.js";
+import { loadCase } from "./cases.js";
 import { HTML, CSS, JS } from "./page.js";
 import { callAppsScript } from "../app/appsScript.js";
 
@@ -78,6 +80,15 @@ export async function handleAdmin(request, env, { fetchImpl = (...a) => fetch(..
       webhookStatus(env, fetchImpl)
     ]);
     return respond(JSON.stringify({ email: auth.email, summary, ops: { poller, webhook } }), "application/json");
+  }
+  if (url.pathname === "/api/case") {
+    const id = Number(url.searchParams.get("id"));
+    if (!Number.isSafeInteger(id) || id <= 0) return respond('{"error":"bad id"}', "application/json", 400);
+    const ctx = { env, now: () => now, fetch: fetchImpl };
+    const c = await loadCase(env.DB, id, (messageId) => callAppsScript(ctx, "get_email_body", { messageId }));
+    if (!c) return respond('{"error":"not found"}', "application/json", 404);
+    console.log("[admin] case", id, "viewed by", auth.email);
+    return respond(JSON.stringify(c), "application/json");
   }
   return respond("Not found", "text/plain; charset=utf-8", 404);
 }

@@ -73,10 +73,11 @@ Staging can't receive forwarded email (Apps Script only talks to the production 
 
 - users, groups and transactions per day; items awaiting review;
 - ingestion health: the Telegram webhook, the Gmail poller's last run, retry list and last Worker failure, recent bot-inbox mail and what happened to it;
-- parser accuracy per reader (each bank template, the generic rules, and the LLM): saves, shadow agreement, corrections (accepted Re-reads + ✏️ Fix) and correction rate, and which fields differed;
+- parser accuracy per reader (each bank template, the generic rules, and the LLM): saves, shadow agreement, corrections (accepted Re-reads + ✏️ Fix) and correction rate;
+- **cases**: each disagreement, parser miss, correction and report in the window. Clicking one shows the original message (email fetched live from the bot inbox, or the stored SMS), the saved values next to the parser's read with today's templates, and the differing fields highlighted;
 - per-user and per-group counts under masked ids (`u-1a2b3c`).
 
-It never shows amounts, merchants, names, emails or message text.
+The overview shows only counts and statuses. Opening a case shows that message in full, including amounts, merchants and account digits; each opened case is logged in the Worker's logs with the admin's email.
 
 **Access.** Cloudflare Access (Zero Trust) asks for a login before any request reaches the Worker, and the Worker re-checks Access's signed token on every request — it refuses everything if the Access settings are missing. The Worker has no `workers.dev` URL. The site on the bare `healthvault.online` (GitHub Pages) is unaffected; only an `admin` DNS record is added.
 

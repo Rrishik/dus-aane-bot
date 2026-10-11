@@ -13,14 +13,12 @@ export const HTML = `<!doctype html>
 <body>
 <header>
   <h1>Dus Aane Bot <span>admin</span></h1>
-  <label>Window
-    <select id="days">
-      <option value="7">7 days</option>
-      <option value="30" selected>30 days</option>
-      <option value="90">90 days</option>
-    </select>
-  </label>
-  <button id="refresh" type="button">Refresh</button>
+  <div class="seg" id="days" role="group" aria-label="Window">
+    <button type="button" data-days="7">7 d</button>
+    <button type="button" data-days="30" aria-pressed="true">30 d</button>
+    <button type="button" data-days="90">90 d</button>
+  </div>
+  <button id="refresh" type="button" title="Refresh" aria-label="Refresh">↻</button>
   <span id="meta"></span>
 </header>
 <main id="app"><p class="muted">Loading…</p></main>
@@ -30,36 +28,65 @@ export const HTML = `<!doctype html>
 `;
 
 export const CSS = `
-:root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --fg: #1d2330; --muted: #6b7385; --line: #e3e6ec;
-  --ok: #1a7f37; --warn: #b26b00; --bad: #c62828; --bar: #3b6fe0; --bar2: #8aa8ef; }
-@media (prefers-color-scheme: dark) { :root { --bg: #11141a; --card: #1a1f28; --fg: #e6e9ef; --muted: #9aa3b5;
-  --line: #2a3140; --bar: #6d93f0; --bar2: #3d5aa8; } }
+:root { color-scheme: light dark; --bg: #fafafa; --card: #fff; --fg: #1c1f26; --muted: #6e7480; --line: #e8e9ec;
+  --ok: #16833a; --warn: #b26b00; --bad: #c62828; --accent: #3b6fe0; --accent2: #a9bff2; --hl: #fff4d6; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0f1115; --card: #171a20; --fg: #e7e9ee; --muted: #959cab;
+  --line: #262a33; --accent: #7c9ef2; --accent2: #3a4f86; --hl: #3a2f12; } }
 * { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--fg); }
-header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; }
-h1 { font-size: 17px; margin: 0 12px 0 0; } h1 span { color: var(--muted); font-weight: 400; }
+body { margin: 0; font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px max(16px, calc((100% - 1080px) / 2));
+  border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; z-index: 1; }
+h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 600; } h1 span { color: var(--muted); font-weight: 400; }
 #meta { color: var(--muted); margin-left: auto; font-size: 12px; }
-select, button { font: inherit; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
-button { cursor: pointer; }
-main { padding: 16px 20px 40px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
-section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
-section.wide { grid-column: 1 / -1; }
-h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
-.kpis { display: flex; flex-wrap: wrap; gap: 18px; }
-.kpi b { display: block; font-size: 22px; } .kpi span { color: var(--muted); font-size: 12px; }
+button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+.seg { display: inline-flex; } .seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 6px 0 0 6px; } .seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--card); border-color: var(--fg); }
+main { max-width: 1080px; margin: 0 auto; padding: 18px 16px 48px; display: grid; gap: 18px; }
+section, details { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+h3 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 18px 0 8px; }
+summary { cursor: pointer; font-weight: 600; font-size: 13px; } summary .muted { font-weight: 400; }
+details[open] summary { margin-bottom: 10px; }
+.status { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.status .head { font-weight: 600; margin-right: 6px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+.chip .k { color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 18px; }
+.kpi b { display: block; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi span { color: var(--muted); font-size: 12px; display: block; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
 th { color: var(--muted); font-weight: 500; } td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.click { cursor: pointer; } tr.click:hover td, tr.open td { background: var(--bg); }
+tr.detail > td { background: var(--bg); white-space: normal; padding: 12px; }
 .scroll { overflow-x: auto; }
 .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .muted { color: var(--muted); }
-.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 12px; }
-.chart { display: flex; align-items: flex-end; gap: 2px; height: 90px; margin-top: 6px; }
+.pill { display: inline-block; padding: 0 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 12px; font-weight: 400; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.filters button { font-size: 12px; border-radius: 999px; padding: 1px 10px; }
+.filters button[aria-pressed="true"] { background: var(--fg); color: var(--card); border-color: var(--fg); }
+.case { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(280px, 1.3fr); gap: 16px; }
+@media (max-width: 760px) { .case { grid-template-columns: 1fr; } }
+.case table { background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.case td { white-space: normal; word-break: break-word; }
+.case tr.diff td { background: var(--hl); } .case tr.diff td:first-child { font-weight: 600; }
+.case .note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+pre { margin: 0; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+.chart { display: flex; align-items: flex-end; gap: 2px; height: 96px; }
 .chart div { flex: 1; display: flex; flex-direction: column-reverse; min-width: 3px; }
-.chart i { display: block; background: var(--bar); } .chart i.b { background: var(--bar2); }
+.chart i { display: block; background: var(--accent); } .chart i.b { background: var(--accent2); }
+.chart div i:last-child { border-radius: 2px 2px 0 0; }
 .legend { font-size: 12px; color: var(--muted); margin-top: 6px; }
-.legend i { display: inline-block; width: 10px; height: 10px; background: var(--bar); margin: 0 4px 0 10px; vertical-align: -1px; }
-.legend i.b { background: var(--bar2); }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; } dt { color: var(--muted); }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: var(--accent); margin: 0 4px 0 12px; vertical-align: -1px; }
+.legend i.b { background: var(--accent2); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; } dt { color: var(--muted); } dd { margin: 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
 `;
 
 export const JS = `"use strict";
@@ -67,81 +94,233 @@ const $ = (s) => document.querySelector(s);
 function el(tag, attrs, ...kids) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
     if (k === "class") n.className = v;
     else if (k === "style") Object.assign(n.style, v);
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
     else n.setAttribute(k, v);
   }
-  for (const k of kids.flat()) if (k != null) n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  for (const k of kids.flat()) if (k != null && k !== false) n.append(k instanceof Node ? k : document.createTextNode(String(k)));
   return n;
 }
 const pct = (x) => (x == null ? "—" : Math.round(x * 1000) / 10 + "%");
 function ago(ms) {
   if (!ms) return "—";
   const m = Math.round((Date.now() - ms) / 60000);
+  if (m < 1) return "just now";
   if (m < 60) return m + " min ago";
   if (m < 2880) return Math.round(m / 60) + " h ago";
   return Math.round(m / 1440) + " d ago";
 }
+const stamp = (ms) => (ms ? new Date(ms).toLocaleString() : "");
 const day = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : "—");
-function card(title, body, wide) { return el("section", { class: wide ? "wide" : "" }, el("h2", {}, title), body); }
-function table(cols, rows) {
+
+const state = { days: 30, filter: "all", openCase: null, open: new Set(), data: null };
+
+const EVENTS = {
+  shadow_mismatch: ["Disagreed", "bad"],
+  shadow_nomatch: ["Parser missed", "warn"],
+  shadow_extra: ["Parser only", "warn"],
+  reparse_accepted: ["Re-read fixed", "bad"],
+  user_fix: ["User fixed", "bad"],
+  report: ["Reported", "warn"]
+};
+const FIELD_LABELS = [
+  ["transaction_date", "Date"], ["amount", "Amount"], ["currency", "Currency"], ["transaction_type", "Type"],
+  ["merchant", "Merchant"], ["account_last4", "Account"], ["reference", "Reference"]
+];
+
+function table(cols, rows, opts) {
+  opts = opts || {};
+  const body = [];
+  if (!rows.length) body.push(el("tr", {}, el("td", { colspan: cols.length, class: "muted" }, opts.empty || "Nothing yet")));
+  for (const r of rows) {
+    const tr = el("tr", opts.rowAttrs ? opts.rowAttrs(r) : {}, cols.map((c) => {
+      const v = c.get(r);
+      return el("td", { class: (c.num ? "num " : "") + (c.cls ? c.cls(r) || "" : ""), title: c.title ? c.title(r) : null }, v == null || v === "" ? "—" : v);
+    }));
+    body.push(tr);
+    if (opts.after) { const extra = opts.after(r, cols.length); if (extra) body.push(extra); }
+  }
   return el("div", { class: "scroll" }, el("table", {},
     el("thead", {}, el("tr", {}, cols.map((c) => el("th", { class: c.num ? "num" : "" }, c.label)))),
-    el("tbody", {}, rows.length ? rows.map((r) => el("tr", {}, cols.map((c) => {
-      const v = c.get(r);
-      return el("td", { class: (c.num ? "num " : "") + (c.cls ? c.cls(r) || "" : "") }, v == null ? "—" : v);
-    }))) : el("tr", {}, el("td", { colspan: cols.length, class: "muted" }, "Nothing yet")))));
+    el("tbody", {}, body)));
 }
-function kpis(items) { return el("div", { class: "kpis" }, items.map(([v, l, cls]) => el("div", { class: "kpi" }, el("b", { class: cls || "" }, v), el("span", {}, l)))); }
+function section(title, ...body) { return el("section", {}, title ? el("h2", {}, title) : null, body); }
+function fold(key, title, count, ...body) {
+  const d = el("details", { open: state.open.has(key) ? "" : null }, el("summary", {}, title, count != null ? el("span", { class: "muted" }, " · " + count) : null), body);
+  d.addEventListener("toggle", () => (d.open ? state.open.add(key) : state.open.delete(key)));
+  return d;
+}
 function bars(series, days) {
   const end = new Date(); const keys = [];
   for (let i = days - 1; i >= 0; i--) keys.push(new Date(end.getTime() + 5.5 * 3600000 - i * 86400000).toISOString().slice(0, 10));
   const max = Math.max(1, ...keys.map((k) => (series.a[k] || 0) + (series.b[k] || 0)));
+  const h = 96;
   return el("div", {}, el("div", { class: "chart" }, keys.map((k) => {
     const a = series.a[k] || 0, b = series.b[k] || 0;
-    return el("div", { title: k + ": " + a + " " + series.la + ", " + b + " " + series.lb },
-      el("i", { style: { height: (a / max) * 90 + "px" } }), el("i", { class: "b", style: { height: (b / max) * 90 + "px" } }));
-  })), el("div", { class: "legend" }, keys[0] + " → " + keys.at(-1), el("i", {}), series.la, el("i", { class: "b" }), series.lb));
+    return el("div", { title: k + " · " + a + " " + series.la + (series.lb ? ", " + b + " " + series.lb : "") },
+      el("i", { style: { height: (a / max) * h + "px" } }), series.lb ? el("i", { class: "b", style: { height: (b / max) * h + "px" } }) : null);
+  })), el("div", { class: "legend" }, keys[0] + " → " + keys.at(-1), el("i", {}), series.la, series.lb ? [el("i", { class: "b" }), series.lb] : null));
+}
+
+function statuses(s, ops) {
+  const w = ops.webhook || {}, p = ops.poller || {}, out = [];
+  if (w.error) out.push(["bad", "Webhook", w.error]);
+  else {
+    const recentErr = w.lastErrorAt && Date.now() - w.lastErrorAt < 3600000;
+    out.push([!w.pointsAtWorker ? "bad" : recentErr || w.pending > 5 ? "warn" : "ok", "Webhook",
+      !w.pointsAtWorker ? "not pointing at the Worker" : recentErr ? w.lastError + " · " + ago(w.lastErrorAt) : w.pending ? w.pending + " pending" : "OK"]);
+  }
+  if (p.error) out.push(["bad", "Gmail poller", p.error]);
+  else if (!p.lastRun) out.push(["warn", "Gmail poller", "no run recorded"]);
+  else {
+    const at = Date.parse(p.lastRun.at), failed = (p.lastRun.stats && p.lastRun.stats.failed) || 0;
+    out.push([Date.now() - at > 20 * 60000 || failed ? "warn" : "ok", "Gmail poller", "ran " + ago(at) + (failed ? " · " + failed + " failed" : "")]);
+  }
+  if (p.retryCount) out.push(["warn", "Retry list", p.retryCount]);
+  if (s.backlog.review) out.push(["warn", "Awaiting review", s.backlog.review]);
+  const lf = p.lastWorkerFailure;
+  if (lf && Date.now() - Date.parse(lf.at) < 86400000) out.push(["bad", "Worker failure", lf.code + " · " + ago(Date.parse(lf.at))]);
+  out.push(["", "Last email", ago(s.latest.email)]);
+  out.push(["", "Last SMS", ago(s.latest.sms)]);
+  return out;
+}
+
+function caseDetail(c) {
+  const saved = c.saved || {}, parsed = (c.parser && c.parser.values) || {};
+  const rows = FIELD_LABELS.map(([k, label]) => el("tr", { class: c.changed.includes(k) ? "diff" : "" },
+    el("td", {}, label), el("td", {}, c.saved ? String(saved[k] ?? "") || "—" : "—"), el("td", {}, c.parser && c.parser.read ? String(parsed[k] ?? "") || "—" : "—")));
+  const notes = [];
+  if (c.parser) notes.push(c.parser.read ? "Parser now: " + c.parser.template + " · confidence " + c.parser.confidence : "Parser now: no read (" + c.parser.reason + ")");
+  if (c.saved) notes.push("Saved: " + [c.saved.status, c.saved.kind, c.saved.category, c.saved.merchant_clean].filter(Boolean).join(" · "));
+  else notes.push("No saved transaction (not saved, or deleted).");
+  if (c.fields.length) notes.push("Recorded difference: " + c.fields.join(", "));
+  notes.push("Saved values include later edits; the parser column uses today's templates.");
+  return el("div", { class: "case" },
+    el("div", {}, el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Field"), el("th", {}, "Saved"), el("th", {}, "Parser now"))), el("tbody", {}, rows)),
+      notes.map((n) => el("p", { class: "note" }, n))),
+    el("div", {}, c.text != null ? el("pre", {}, c.text) : el("p", { class: "muted" }, c.textError || "No message text.")));
+}
+
+async function toggleCase(id) {
+  state.openCase = state.openCase === id ? null : id;
+  renderCases();
+  if (state.openCase == null) return;
+  const cell = document.getElementById("case-" + id);
+  if (!cell) return;
+  try {
+    const res = await fetch("/api/case?id=" + id, { credentials: "same-origin" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const c = await res.json();
+    if (state.openCase === id) cell.replaceChildren(caseDetail(c));
+  } catch (e) {
+    cell.replaceChildren(el("p", { class: "bad" }, "Couldn't load the case: " + e.message));
+  }
+}
+
+function renderCases() {
+  const host = $("#cases"); if (!host) return;
+  const all = state.data.summary.parser.cases;
+  const counts = {};
+  for (const c of all) counts[c.event] = (counts[c.event] || 0) + 1;
+  const shown = state.filter === "all" ? all : all.filter((c) => c.event === state.filter);
+  const chips = [["all", "All", all.length]].concat(Object.keys(EVENTS).filter((k) => counts[k]).map((k) => [k, EVENTS[k][0], counts[k]]));
+  host.replaceChildren(...[
+    all.length ? el("div", { class: "filters" }, chips.map(([k, label, n]) => el("button", { type: "button", "aria-pressed": String(state.filter === k),
+      onclick: () => { state.filter = k; state.openCase = null; renderCases(); } }, label + " " + n))) : null,
+    table([
+      { label: "When", get: (r) => ago(r.ts), title: (r) => stamp(r.ts) },
+      { label: "What", get: (r) => el("span", { class: "pill " + (EVENTS[r.event] || ["", ""])[1] }, (EVENTS[r.event] || [r.event])[0]) },
+      { label: "Reader", get: (r) => r.template },
+      { label: "Channel", get: (r) => r.channel },
+      { label: "User", get: (r) => r.user },
+      { label: "Fields", get: (r) => (r.fields || "").split(",").join(", ") }
+    ], shown, {
+      empty: "No disagreements or corrections in this window.",
+      rowAttrs: (r) => r.linked ? { class: "click" + (state.openCase === r.id ? " open" : ""), tabindex: "0", title: "Show the message",
+        onclick: () => toggleCase(r.id), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleCase(r.id); } } } : {},
+      after: (r, span) => state.openCase === r.id ? el("tr", { class: "detail" }, el("td", { colspan: span, id: "case-" + r.id }, el("span", { class: "muted" }, "Loading…"))) : null
+    }),
+    all.length >= state.data.summary.parser.caseLimit ? el("p", { class: "note muted" }, "Showing the latest " + all.length + ".") : null
+  ].filter(Boolean));
 }
 
 function render(d) {
+  state.data = d;
   const app = $("#app"); app.replaceChildren();
-  const s = d.summary, ops = d.ops || {};
+  const s = d.summary, ops = d.ops || {}, p = ops.poller || {};
   const count = (kind, status) => s.tenants.filter((t) => t.kind === kind && (!status || t.status === status)).reduce((a, t) => a + t.n, 0);
   const sources = { a: {}, b: {}, la: "email", lb: "SMS" };
-  for (const r of s.sourcesByDay) (r.source === "sms" ? sources.b : sources.a)[r.day] = r.n;
-  const inWindow = s.sourcesByDay.reduce((a, r) => a + r.n, 0);
+  let emails = 0, sms = 0;
+  for (const r of s.sourcesByDay) {
+    (r.source === "sms" ? sources.b : sources.a)[r.day] = r.n;
+    if (r.source === "sms") sms += r.n; else emails += r.n;
+  }
 
-  app.append(card("Overview", kpis([
-    [count("personal", "active"), "active users"],
-    [count("personal", "pending"), "pending"],
-    [count("personal", "dormant"), "dormant"],
-    [count("group"), "groups"],
-    [inWindow, "transactions in " + s.days + " d"],
-    [s.backlog.review, "awaiting review", s.backlog.review ? "warn" : ""]
-  ]), true));
+  const st = statuses(s, ops);
+  const issues = st.filter((x) => x[0] === "bad" || x[0] === "warn").length;
+  app.append(el("section", { class: "status" },
+    el("span", { class: "head " + (st.some((x) => x[0] === "bad") ? "bad" : issues ? "warn" : "ok") }, issues ? issues + " need attention" : "All systems normal"),
+    st.map(([cls, k, v]) => el("span", { class: "chip" }, el("i", { class: "dot " + cls }), el("span", { class: "k" }, k), el("span", {}, v)))));
 
-  app.append(card("Transactions per day (IST)", bars(sources, s.days), true));
+  const parsers = s.parser.templates.filter((t) => t.template !== "llm");
+  const match = parsers.reduce((a, t) => a + (t.events.shadow_match || 0), 0);
+  const compared = parsers.reduce((a, t) => a + t.shadowCompared, 0);
+  const llm = s.parser.templates.find((t) => t.template === "llm");
+  app.append(section(null, el("div", { class: "kpis" },
+    [
+      [count("personal", "active"), "active users", count("personal", "pending") + " pending · " + count("personal", "dormant") + " dormant"],
+      [count("group"), "groups", ""],
+      [emails + sms, "transactions · " + s.days + " d", emails + " email · " + sms + " SMS"],
+      [pct(compared ? match / compared : null), "parser agrees with LLM", "of " + compared + " compared"],
+      [pct(llm ? llm.correctionRate : null), "LLM reads corrected", llm ? llm.corrections + " of " + llm.saved : "no LLM reads"]
+    ].map(([v, l, sub]) => el("div", { class: "kpi" }, el("b", {}, v), el("span", {}, l), sub ? el("span", {}, sub) : null)))));
 
-  const p = ops.poller || {};
-  const w = ops.webhook || {};
-  const lastFail = p.lastWorkerFailure;
-  const health = el("dl", {},
-    el("dt", {}, "Telegram webhook"), el("dd", {}, w.error ? el("span", { class: "bad" }, w.error) :
-      [el("span", { class: w.pointsAtWorker ? "ok" : "bad" }, w.pointsAtWorker ? "→ Worker" : "not the Worker"),
-       " · pending " + (w.pending ?? "—") + (w.lastError ? " · last error: " + w.lastError + " (" + ago(w.lastErrorAt) + ")" : "")]),
-    el("dt", {}, "Gmail poller"), el("dd", {}, p.error ? el("span", { class: "bad" }, p.error) :
-      [p.lastRun ? "last run " + ago(Date.parse(p.lastRun.at)) + " · found " + p.lastRun.found + " · handled " + p.lastRun.stats.handled + " · failed " + p.lastRun.stats.failed : "no run recorded"]),
-    el("dt", {}, "Retry list"), el("dd", { class: p.retryCount ? "warn" : "" }, p.retryCount ?? "—"),
-    el("dt", {}, "Last Worker failure"), el("dd", {}, lastFail ? lastFail.code + " " + (lastFail.error || "") + " (" + ago(Date.parse(lastFail.at)) + ")" : "none"),
-    el("dt", {}, "Apps Script triggers"), el("dd", {}, (p.triggers || []).join(", ") || "—"),
-    el("dt", {}, "Latest email / SMS"), el("dd", {}, ago(s.latest.email) + " / " + ago(s.latest.sms)),
-    el("dt", {}, "Backfills running"), el("dd", {}, s.backlog.backfills),
-    el("dt", {}, "Short-lived state"), el("dd", {}, s.backlog.ephemeral_live + " live, " + s.backlog.ephemeral_expired + " expired (purged daily)"));
-  app.append(card("Ingestion health", health));
+  app.append(section("Transactions per day (IST)", bars(sources, s.days)));
 
-  const recent = (p.recent || []);
-  app.append(card("Bot inbox, last " + (p.hours || 6) + " h", table([
+  app.append(section(
+    ["Parser", el("span", { class: "pill muted" }, "mode: " + s.parser.mode), s.parser.disabled.length ? el("span", { class: "pill warn" }, "disabled: " + s.parser.disabled.join(", ")) : null],
+    table([
+      { label: "Reader", get: (r) => r.template },
+      { label: "Saved", num: true, get: (r) => r.saved },
+      { label: "Compared", num: true, get: (r) => r.shadowCompared },
+      { label: "Agreement", num: true, get: (r) => pct(r.shadowAgreement), cls: (r) => (r.shadowAgreement == null ? "" : r.shadowAgreement >= 0.99 ? "ok" : r.shadowAgreement >= 0.9 ? "warn" : "bad") },
+      { label: "Corrections", num: true, get: (r) => r.corrections ? r.corrections + " (" + pct(r.correctionRate) + ")" : 0, cls: (r) => (r.corrections ? (r.correctionRate <= 0.01 ? "ok" : "bad") : "") },
+      { label: "Reports", num: true, get: (r) => r.reports }
+    ], s.parser.templates),
+    el("h3", {}, "Cases"),
+    el("div", { id: "cases" })));
+  renderCases();
+
+  app.append(fold("users", "Users", s.users.length, table([
+    { label: "User", get: (r) => r.id },
+    { label: "Status", get: (r) => el("span", { class: "pill " + (r.status === "active" ? "ok" : r.status === "pending" ? "warn" : "muted") }, r.status) },
+    { label: "Joined", get: (r) => day(r.created_at) },
+    { label: "Last active", get: (r) => ago(r.last_activity_at), title: (r) => stamp(r.last_activity_at) },
+    { label: "Emails", num: true, get: (r) => r.emails },
+    { label: "Txns " + s.days + " d", num: true, get: (r) => r.txns_window },
+    { label: "Total", num: true, get: (r) => r.txns_total },
+    { label: "SMS " + s.days + " d", num: true, get: (r) => r.sms_window },
+    { label: "Review", num: true, get: (r) => r.review, cls: (r) => (r.review ? "warn" : "") },
+    { label: "Groups", num: true, get: (r) => r.groups },
+    { label: "/ask today · total", num: true, get: (r) => r.ask_today + " · " + r.ask_lifetime },
+    { label: "Cap hits", num: true, get: (r) => r.ask_cap_hits },
+    { label: "Nudges", num: true, get: (r) => r.nag_count }
+  ], s.users)));
+
+  app.append(fold("groups", "Groups", s.groups.length, table([
+    { label: "Group", get: (r) => r.id },
+    { label: "Status", get: (r) => r.status },
+    { label: "Members", num: true, get: (r) => r.members },
+    { label: "Splits " + s.days + " d", num: true, get: (r) => r.splits_window },
+    { label: "Splits total", num: true, get: (r) => r.splits_total },
+    { label: "Settlements " + s.days + " d", num: true, get: (r) => r.settlements_window },
+    { label: "Pinned balance", get: (r) => (r.pinned ? "yes" : "no") }
+  ], s.groups)));
+
+  const recent = p.recent || [];
+  app.append(fold("inbox", "Bot inbox · last " + (p.hours || 6) + " h", recent.length, table([
     { label: "When", get: (r) => r.minutesAgo + " min ago" },
     { label: "Bank?", get: (r) => (r.allowedBank ? "yes" : "no"), cls: (r) => (r.allowedBank ? "" : "muted") },
     { label: "Ignored", get: (r) => (r.ignoredByHeaders ? "yes" : "") },
@@ -149,77 +328,43 @@ function render(d) {
     { label: "Forwarder", get: (r) => r.forwarderDomain || "" }
   ], recent)));
 
-  app.append(card("Parser — mode " + s.parser.mode + (s.parser.disabled.length ? " · disabled: " + s.parser.disabled.join(", ") : ""), table([
-    { label: "Reader", get: (r) => r.template },
-    { label: "Saved", num: true, get: (r) => r.saved },
-    { label: "Shadow compared", num: true, get: (r) => r.shadowCompared },
-    { label: "Agreement", num: true, get: (r) => pct(r.shadowAgreement), cls: (r) => (r.shadowAgreement == null ? "" : r.shadowAgreement >= 0.99 ? "ok" : r.shadowAgreement >= 0.9 ? "warn" : "bad") },
-    { label: "Corrections", num: true, get: (r) => r.corrections },
-    { label: "Correction rate", num: true, get: (r) => pct(r.correctionRate), cls: (r) => (r.correctionRate ? (r.correctionRate <= 0.01 ? "ok" : "bad") : "") },
-    { label: "Reports", num: true, get: (r) => r.reports }
-  ], s.parser.templates), true));
-
-  app.append(card("Fields that differed", table([
-    { label: "Reader", get: (r) => r.template },
-    { label: "Event", get: (r) => r.event },
-    { label: "Fields", get: (r) => r.fields },
-    { label: "Count", num: true, get: (r) => r.n }
-  ], s.parser.fields)));
-
-  app.append(card("Who read saved transactions", table([
-    { label: "Channel", get: (r) => r.source },
-    { label: "Reader", get: (r) => r.reader },
-    { label: "Count", num: true, get: (r) => r.n }
-  ], s.readers)));
-
-  app.append(card("Users (masked)", table([
-    { label: "User", get: (r) => r.id },
-    { label: "Status", get: (r) => el("span", { class: "pill " + (r.status === "active" ? "ok" : r.status === "pending" ? "warn" : "muted") }, r.status) },
-    { label: "Joined", get: (r) => day(r.created_at) },
-    { label: "Last activity", get: (r) => ago(r.last_activity_at) },
-    { label: "Emails", num: true, get: (r) => r.emails },
-    { label: "Txns (" + s.days + " d)", num: true, get: (r) => r.txns_window },
-    { label: "Txns total", num: true, get: (r) => r.txns_total },
-    { label: "SMS (" + s.days + " d)", num: true, get: (r) => r.sms_window },
-    { label: "Review", num: true, get: (r) => r.review, cls: (r) => (r.review ? "warn" : "") },
-    { label: "Groups", num: true, get: (r) => r.groups },
-    { label: "/ask today", num: true, get: (r) => r.ask_today },
-    { label: "/ask total", num: true, get: (r) => r.ask_lifetime },
-    { label: "Cap hits", num: true, get: (r) => r.ask_cap_hits },
-    { label: "Nudges", num: true, get: (r) => r.nag_count }
-  ], s.users), true));
-
-  app.append(card("Groups (masked)", table([
-    { label: "Group", get: (r) => r.id },
-    { label: "Status", get: (r) => r.status },
-    { label: "Members", num: true, get: (r) => r.members },
-    { label: "Splits (" + s.days + " d)", num: true, get: (r) => r.splits_window },
-    { label: "Splits total", num: true, get: (r) => r.splits_total },
-    { label: "Settlements (" + s.days + " d)", num: true, get: (r) => r.settlements_window },
-    { label: "Pinned balance", get: (r) => (r.pinned ? "yes" : "no") }
-  ], s.groups)));
-
-  app.append(card("Merchant rules", kpis([[s.merchantRules.shared, "shared defaults"], [s.merchantRules.personal, "personal corrections"]])));
-
+  const w = ops.webhook || {}, lf = p.lastWorkerFailure;
   const signups = { a: {}, b: {}, la: "sign-ups", lb: "" };
   for (const r of s.signups) signups.a[r.day] = r.n;
-  app.append(card("Sign-ups per day (IST)", bars(signups, s.days)));
+  app.append(fold("pipeline", "Pipeline details", null, el("div", { class: "grid2" },
+    el("dl", {},
+      el("dt", {}, "Webhook"), el("dd", {}, w.error || ((w.pointsAtWorker ? "→ Worker" : "not the Worker") + " · pending " + (w.pending ?? "—") + (w.lastError ? " · last error: " + w.lastError + " (" + ago(w.lastErrorAt) + ")" : ""))),
+      el("dt", {}, "Last poller run"), el("dd", {}, p.lastRun ? ago(Date.parse(p.lastRun.at)) + " · found " + p.lastRun.found + " · handled " + p.lastRun.stats.handled + " · failed " + p.lastRun.stats.failed : p.error || "—"),
+      el("dt", {}, "Retry list"), el("dd", {}, p.retryCount ?? "—"),
+      el("dt", {}, "Last Worker failure"), el("dd", {}, lf ? lf.code + " " + (lf.error || "") + " (" + ago(Date.parse(lf.at)) + ")" : "none"),
+      el("dt", {}, "Apps Script triggers"), el("dd", {}, (p.triggers || []).join(", ") || "—"),
+      el("dt", {}, "Backfills running"), el("dd", {}, s.backlog.backfills),
+      el("dt", {}, "Short-lived state"), el("dd", {}, s.backlog.ephemeral_live + " live · " + s.backlog.ephemeral_expired + " expired"),
+      el("dt", {}, "Merchant rules"), el("dd", {}, s.merchantRules.shared + " shared · " + s.merchantRules.personal + " personal")),
+    el("div", {},
+      table([
+        { label: "Channel", get: (r) => r.source },
+        { label: "Reader", get: (r) => r.reader },
+        { label: "Saved", num: true, get: (r) => r.n }
+      ], s.readers),
+      el("h3", {}, "Sign-ups per day"), bars(signups, s.days)))));
 
-  $("#meta").textContent = "Signed in as " + d.email + " · updated " + new Date(s.generatedAt).toLocaleTimeString();
+  $("#meta").textContent = d.email + " · " + new Date(s.generatedAt).toLocaleTimeString();
 }
 
 async function load() {
   $("#meta").textContent = "Loading…";
+  for (const b of document.querySelectorAll("#days button")) b.setAttribute("aria-pressed", String(Number(b.dataset.days) === state.days));
   try {
-    const res = await fetch("/api/summary?days=" + $("#days").value, { credentials: "same-origin" });
+    const res = await fetch("/api/summary?days=" + state.days, { credentials: "same-origin" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     render(await res.json());
   } catch (e) {
-    $("#app").replaceChildren(el("section", { class: "wide" }, el("p", { class: "bad" }, "Couldn't load: " + e.message)));
+    $("#app").replaceChildren(el("section", {}, el("p", { class: "bad" }, "Couldn't load: " + e.message)));
     $("#meta").textContent = "";
   }
 }
 $("#refresh").addEventListener("click", load);
-$("#days").addEventListener("change", load);
+for (const b of document.querySelectorAll("#days button")) b.addEventListener("click", () => { state.days = Number(b.dataset.days); state.openCase = null; load(); });
 load();
 `;
