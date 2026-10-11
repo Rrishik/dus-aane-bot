@@ -1,10 +1,5 @@
 # 💰 Dus Aane Bot
 
-<!-- TODO: replace with assets/hero.png — wide 1280×640 banner combining logo + a phone mockup showing the txn card. Also upload to GitHub → Settings → Social preview. -->
-<p align="center">
-  <img src="assets/hero.png" alt="Dus Aane Bot — Splitwise that fills itself in from your bank emails" width="100%" />
-</p>
-
 <p align="center">
   <b>Splitwise that fills itself in — from your bank emails and SMS.</b>
 </p>
@@ -26,45 +21,61 @@
 
 Forward a bank email or paste a bank SMS; the bot reads it, categorises it, and sends you a card. Tap one button to split it 50/50 with your partner — the group chat gets a notification, the math is done. Ask `/ask how much on food this month?` in plain English. No data entry, no app to install, no full-Gmail OAuth grant to a black box.
 
-## See it in action
+<!--
+Screenshots are hidden until assets/ exists. To publish them: add the files
+below, then move the hero block back above the tagline and the gallery back
+under a "## See it in action" heading.
 
-<!-- TODO: replace these 6 placeholders with real screenshots. Capture from a phone in dark mode; sanitize names ("Alice"/"Bob") and amounts. See shot list below.
-  - assets/demo.gif         — 10s loop: bank email → DM card → ✂️ Split → group notification
-  - assets/01-txn-card.png  — a single transaction DM with the inline button row
-  - assets/02-new-merchant.png — card showing 🆕 Save and 🏪 Edit Merchant buttons
-  - assets/03-group-split.png  — the auto-posted split notification in the group chat
-  - assets/04-stats.png        — /stats settlement view ("Bob owes Alice ₹1,250")
-  - assets/05-ask.png          — /ask natural-language Q&A
--->
+Shot list (phone, dark mode; sanitise names to Alice / Bob and use made-up amounts):
+  assets/hero.png             wide 1280x640 banner: logo + phone mockup of a transaction card.
+                              Also upload under GitHub Settings, Social preview.
+  assets/demo.gif             10 s loop: forwarded bank email, card arrives, Split with Flat,
+                              50-50, group notification and the pinned live balance updating
+  assets/01-txn-card.png      a transaction card: "Split with <group>" row, then the
+                              merchant pill, category pill and the overflow (three dots) button
+  assets/02-sms-paste.png     pasting a bank SMS into the chat and the card it becomes
+  assets/03-group-split.png   the group notification ("Alice paid", each share) plus the
+                              pinned live-balance message
+  assets/04-stats.png         group /stats ("who owes whom") with the Simplify button
+  assets/05-ask.png           /ask question and answer with the Follow up button
+
+Hero block (goes right after the "# 💰 Dus Aane Bot" title):
 
 <p align="center">
-  <img src="assets/demo.gif" alt="Demo: bank email → transaction card → tap Split → group notification" width="320" />
+  <img src="assets/hero.png" alt="Dus Aane Bot: Splitwise that fills itself in from your bank emails and SMS" width="100%" />
+</p>
+
+Gallery (under "## See it in action"):
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Demo: bank email, transaction card, split with the group, group notification" width="320" />
 </p>
 
 <table>
   <tr>
-    <td><img src="assets/01-txn-card.png" alt="Transaction card with Split / Category / Delete buttons" /></td>
-    <td><img src="assets/02-new-merchant.png" alt="New-merchant flow: one-tap Save and Edit Merchant" /></td>
+    <td><img src="assets/01-txn-card.png" alt="Transaction card with split, merchant, category and overflow buttons" /></td>
+    <td><img src="assets/02-sms-paste.png" alt="A pasted bank SMS turned into a card" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Every email becomes a one-tap card.</em></td>
-    <td align="center"><em>New merchant? One tap teaches the bot.</em></td>
+    <td align="center"><em>Every bank email becomes a one-tap card.</em></td>
+    <td align="center"><em>Paste an SMS; same card.</em></td>
   </tr>
   <tr>
-    <td><img src="assets/03-group-split.png" alt="Group chat notification after a 50/50 split" /></td>
-    <td><img src="assets/04-stats.png" alt="/stats settlement view" /></td>
+    <td><img src="assets/03-group-split.png" alt="Group notification after a 50/50 split, with the pinned live balance" /></td>
+    <td><img src="assets/04-stats.png" alt="Group /stats: who owes whom" /></td>
   </tr>
   <tr>
     <td align="center"><em>Splits land in the group chat automatically.</em></td>
     <td align="center"><em><code>/stats</code> rolls every split into a settlement.</em></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="assets/05-ask.png" alt="/ask natural-language query example" /></td>
+    <td colspan="2"><img src="assets/05-ask.png" alt="/ask natural-language question and answer" /></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><em>Ask in plain English — <code>/ask</code> calls structured tools, not RAG.</em></td>
+    <td colspan="2" align="center"><em>Ask in plain English: <code>/ask</code> calls structured tools, not RAG.</em></td>
   </tr>
 </table>
+-->
 
 ## Why not just use CRED, Walnut, or Splitwise?
 
