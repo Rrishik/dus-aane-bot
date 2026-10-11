@@ -73,32 +73,6 @@ if (COVERAGE_ENABLED) globalThis.__appsScriptFlushCoverage = writeCoverageSnapsh
 const _instrumenterReady = COVERAGE_ENABLED ? getInstrumenter() : Promise.resolve(null);
 const _resolvedInstrumenter = await _instrumenterReady;
 
-// Defaults for cross-file constants and trivial predicates that most suites
-// don't care about. Declarations in the loaded files win (function and const
-// declarations shadow sandbox properties); per-test stubs override these.
-const _isType = (want) => (t) => (t || "").toString().trim().toLowerCase() === want;
-const SHARED_DEFAULTS = {
-  NON_SPEND_CATEGORIES: ["CC Bill Payment", "Transfer Out", "Investment"],
-  TXN_STATUS_REVIEW: "review",
-  PARSED_BY_LLM: "llm",
-  REREAD_MARKER: "|rr",
-  SMS_ID_PREFIX: "sms-",
-  PARSED_BY_COLUMN: 12,
-  SOURCE_TEXT_COLUMN: 13,
-  STATUS_COLUMN: 14,
-  PERSONAL_COL_COUNT: 14,
-  TAG_MAX_LEN: 18,
-  isDebit: _isType("debit"),
-  isCredit: _isType("credit"),
-  isSpendTransaction: (t) =>
-    _isType("debit")(t.type) && ["CC Bill Payment", "Transfer Out", "Investment"].indexOf(t.category) === -1,
-  isCreditTransaction: (t) => _isType("credit")(t.type),
-  isTenantUsable: (t) => !!t && (t.status === "active" || t.status === "dormant"),
-  isNativeMode: () => false,
-  isWorkerActionBody: () => false,
-  logParserEvent: () => {}
-};
-
 /**
  * Load one or more Apps Script source files into a fresh sandbox and return
  * the named exports.
@@ -124,7 +98,6 @@ export function loadAppsScript(files, symbols, stubs = {}) {
     Boolean,
     RegExp,
     Error,
-    ...SHARED_DEFAULTS,
     ...stubs
   };
   if (COVERAGE_ENABLED) {

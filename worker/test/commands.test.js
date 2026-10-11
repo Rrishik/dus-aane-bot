@@ -7,6 +7,7 @@ import { signedHeaders, hmacHex } from "../src/app/auth.js";
 import { insertTransaction } from "../src/db/transactions.js";
 import { createSplit, recordSettlement } from "../src/db/splits.js";
 import { getTenant, getTenantEmails } from "../src/db/tenants.js";
+import { createTestD1 } from "./helpers/d1.js";
 import {
   weeklyTrends,
   monthlyTrends,
@@ -303,10 +304,10 @@ describe("/backfill", () => {
   });
 });
 
-describe("native webhook route", () => {
+describe("webhook route", () => {
   it("checks Telegram's secret header and processes in the background", async () => {
     const waits = [];
-    const env = { MODE: "native", WEBHOOK_SECRET: "k1" };
+    const env = { WEBHOOK_SECRET: "k1" };
     const req = (h) =>
       new Request("https://w/", { method: "POST", headers: h, body: JSON.stringify({ update_id: 1 }) });
     expect((await worker.fetch(req({}), env, { waitUntil: (p) => waits.push(p) })).status).toBe(401);
@@ -318,12 +319,22 @@ describe("native webhook route", () => {
     await waits[0];
   });
 
-  it("stays in proxy mode unless MODE=native", async () => {
-    const res = await worker.fetch(
-      new Request("https://w/internal/backfill", { method: "POST", body: "{}" }),
-      {},
-      { waitUntil() {} }
-    );
-    expect(res.status).toBe(409);
+  it("accepts nothing when no webhook secret is configured", async () => {
+    const req = new Request("https://w/", {
+      method: "POST",
+      headers: { "X-Telegram-Bot-Api-Secret-Token": "" },
+      body: "{}"
+    });
+    expect((await worker.fetch(req, {}, { waitUntil() {} })).status).toBe(401);
+  });
+
+  it("internal routes need a signature", async () => {
+    const env = { DB: createTestD1(), INTERNAL_SECRET: "int" };
+    for (const path of ["/internal/backfill", "/ingest/email"]) {
+      const res = await worker.fetch(new Request("https://w" + path, { method: "POST", body: "{}" }), env, {
+        waitUntil() {}
+      });
+      expect(res.status).toBe(401);
+    }
   });
 });

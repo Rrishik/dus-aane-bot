@@ -11,9 +11,7 @@ let signVerifyToken,
 // Capture state for stubs so tests can assert against it.
 var propsStore;
 var fetchedUrls;
-var sentTelegramMessages;
 var fakeThreads;
-var fakeTenants;
 
 function makeMessage(subject, body) {
   return {
@@ -37,9 +35,7 @@ function makeThread(messages) {
 beforeAll(() => {
   propsStore = {};
   fetchedUrls = [];
-  sentTelegramMessages = [];
   fakeThreads = [];
-  fakeTenants = {};
 
   ({
     signVerifyToken,
@@ -101,11 +97,6 @@ beforeAll(() => {
           };
         }
       },
-      sendTelegramMessage: (chatId, msg) => {
-        sentTelegramMessages.push({ chatId: chatId, msg: msg });
-        return "{}";
-      },
-      findTenantByChatId: (chatId) => fakeTenants[String(chatId)] || null,
       _escHtml: (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     }
   ));
@@ -305,7 +296,6 @@ describe("findPendingForwardingConfirmations", () => {
 describe("handleVerifyForwardingClick", () => {
   it("returns redirect HTML targeting the vf URL when token valid and confirmation found", () => {
     fakeThreads.length = 0;
-    sentTelegramMessages.length = 0;
     fakeThreads.push(
       makeThread([
         makeMessage(
@@ -322,8 +312,6 @@ describe("handleVerifyForwardingClick", () => {
     expect(html).toContain("u@example.com");
     // top-level redirect (escapes the Apps Script iframe)
     expect(html).toContain("window.top.location.href");
-    expect(sentTelegramMessages.length).toBe(1);
-    expect(sentTelegramMessages[0].chatId).toBe(777);
   });
 
   it("returns invalid-link HTML when token signature is bad", () => {
@@ -340,23 +328,17 @@ describe("handleVerifyForwardingClick", () => {
     expect(html).toContain("bot@gmail.com");
   });
 
-  it("uses the tenant's registered emails to scope the inbox scan", () => {
+  it("uses the emails signed into the link to scope the inbox scan", () => {
     fakeThreads.length = 0;
-    sentTelegramMessages.length = 0;
-    fakeTenants["555"] = {
-      chat_id: "555",
-      emails: ["rishikramena@gmail.com"],
-      status: "pending"
-    };
     fakeThreads.push(
-      // Older mail for a different tenant — must NOT be returned.
+      // Older mail for someone else — must NOT be returned.
       makeThread([
         makeMessage(
           "(Gmail Forwarding Confirmation - Receive Mail from ramenarishik@gmail.com)",
           "ramenarishik@gmail.com has requested ... https://mail.google.com/mail/vf-OLD"
         )
       ]),
-      // Recent mail for this tenant — should win.
+      // Recent mail for this user — should win.
       makeThread([
         makeMessage(
           "(Gmail Forwarding Confirmation - Receive Mail from rishikramena@gmail.com)",
@@ -365,8 +347,9 @@ describe("handleVerifyForwardingClick", () => {
       ])
     );
     var iat = Date.now();
-    var sig = signVerifyToken("555", iat);
-    var html = handleVerifyForwardingClick({ t: "555", iat: String(iat), sig: sig });
+    var e = "rishikramena@gmail.com";
+    var sig = signVerifyToken("555", iat, e);
+    var html = handleVerifyForwardingClick({ t: "555", iat: String(iat), e: e, sig: sig });
     expect(html).toContain("https://mail.google.com/mail/vf-NEW");
     expect(html).not.toContain("vf-OLD");
     expect(html).toContain("rishikramena@gmail.com");

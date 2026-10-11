@@ -1,3 +1,6 @@
+# The bot. Secrets (bot token, webhook/bridge secrets, Azure OpenAI, Apps
+# Script URL) are uploaded by .github/workflows/deploy.yml. The name predates
+# the move off Apps Script; renaming would change the workers.dev URL.
 name = "dus-aane-bot-proxy"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
@@ -6,10 +9,6 @@ compatibility_date = "2024-01-01"
 enabled = true
 head_sampling_rate = 1
 invocation_logs = true
-
-[vars]
-# APPS_SCRIPT_URL is set via `wrangler secret put APPS_SCRIPT_URL`
-# Do NOT put it here — use secrets for the actual URL
 
 [[d1_databases]]
 binding = "DB"

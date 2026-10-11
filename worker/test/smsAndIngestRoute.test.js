@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import worker from "../src/index.js";
 import { testContext, seedTenant, seedGroup, llmTxn, NOW } from "./helpers/app.js";
 import { handleSmsPaste, smsSourceRef } from "../src/app/sms.js";
 import { handleIngestEmail } from "../src/app/ingestRoute.js";
@@ -119,16 +118,5 @@ describe("POST /ingest/email", () => {
     expect((await ctx.db.prepare("SELECT status FROM tenants WHERE id='111'").first()).status).toBe("active");
     expect(await getGroupMembers(ctx.db, "-100")).toEqual(["222", "111"]);
     expect(ctx.tg.of("sendMessage").map((c) => c.args[0])).toEqual(["111", "-100", "111"]);
-  });
-});
-
-describe("router modes", () => {
-  it("/ingest/email is refused until MODE=native", async () => {
-    const res = await worker.fetch(
-      new Request("https://w/ingest/email", { method: "POST", body: "{}" }),
-      {},
-      { waitUntil() {} }
-    );
-    expect(res.status).toBe(409);
   });
 });

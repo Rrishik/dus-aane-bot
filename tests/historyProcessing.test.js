@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { loadAppsScript } from "./_loader.js";
 
-// Mirrors Constants.js so we don't have to load it (it depends on BOT_TOKEN
-// being globally defined, which other tests deliberately avoid).
 const PROCESSED_LABEL_NAME = "processed-by-bot";
 
 function makePropsStore(initial) {
@@ -20,25 +18,13 @@ function makePropsStore(initial) {
   };
 }
 
-function makeCacheStore() {
-  var store = {};
-  return {
-    get(k) {
-      return k in store ? store[k] : null;
-    },
-    put(k, v) {
-      store[k] = v;
-    }
-  };
-}
-
 describe("getProcessedLabelId", () => {
   let propsStore;
   let gmail;
   let getProcessedLabelId;
 
   function load() {
-    return loadAppsScript(["TransactionProcessor.js"], ["getProcessedLabelId"], {
+    return loadAppsScript(["Gmail.js"], ["getProcessedLabelId"], {
       PROCESSED_LABEL_NAME,
       PropertiesService: { getScriptProperties: () => propsStore },
       Gmail: gmail
@@ -132,7 +118,7 @@ describe("listNewMessageIdsViaHistory", () => {
   let listNewMessageIdsViaHistory;
 
   function load() {
-    return loadAppsScript(["TransactionProcessor.js"], ["listNewMessageIdsViaHistory"], {
+    return loadAppsScript(["Gmail.js"], ["listNewMessageIdsViaHistory"], {
       PROCESSED_LABEL_NAME,
       PropertiesService: { getScriptProperties: () => makePropsStore() },
       Gmail: gmail
@@ -247,7 +233,7 @@ describe("bootstrapHistoryState", () => {
     var gmail = {
       Users: { getProfile: () => ({ historyId: "9001", emailAddress: "x@y" }) }
     };
-    var { bootstrapHistoryState } = loadAppsScript(["TransactionProcessor.js"], ["bootstrapHistoryState"], {
+    var { bootstrapHistoryState } = loadAppsScript(["Gmail.js"], ["bootstrapHistoryState"], {
       PROCESSED_LABEL_NAME,
       PropertiesService: { getScriptProperties: () => propsStore },
       Gmail: gmail
@@ -260,7 +246,6 @@ describe("bootstrapHistoryState", () => {
 
 describe("markProcessed", () => {
   let propsStore;
-  let cacheStore;
   let gmail;
   let markProcessed;
 
@@ -269,17 +254,15 @@ describe("markProcessed", () => {
   }
 
   function load() {
-    return loadAppsScript(["TransactionProcessor.js"], ["markProcessed"], {
+    return loadAppsScript(["Gmail.js"], ["markProcessed"], {
       PROCESSED_LABEL_NAME,
       PropertiesService: { getScriptProperties: () => propsStore },
-      CacheService: { getScriptCache: () => cacheStore },
       Gmail: gmail
     }).markProcessed;
   }
 
   beforeEach(() => {
     propsStore = makePropsStore({ "gmail.processedLabelId": "Label_cached" });
-    cacheStore = makeCacheStore();
     gmail = {
       Users: {
         Labels: { list: () => ({ labels: [] }), create: () => ({ id: "X" }) },
@@ -288,7 +271,7 @@ describe("markProcessed", () => {
     };
   });
 
-  it("writes the cache entry and calls Messages.modify with the cached label id", () => {
+  it("calls Messages.modify with the cached label id", () => {
     var modifyArgs = null;
     gmail.Users.Messages.modify = (resource, userId, msgId) => {
       modifyArgs = { resource, userId, msgId };
@@ -297,7 +280,6 @@ describe("markProcessed", () => {
 
     markProcessed(makeMessage("msg_42"));
 
-    expect(cacheStore.get("processed:msg_42")).toBe("1");
     expect(modifyArgs).toEqual({
       resource: { addLabelIds: ["Label_cached"] },
       userId: "me",
@@ -327,21 +309,7 @@ describe("markProcessed", () => {
     expect(propsStore.getProperty("gmail.processedLabelId")).toBe("Label_cached");
   });
 
-  it("still attempts modify when cache.put throws (and does not propagate)", () => {
-    cacheStore.put = () => {
-      throw new Error("cache quota exceeded");
-    };
-    var modifyCalled = false;
-    gmail.Users.Messages.modify = () => {
-      modifyCalled = true;
-    };
-    markProcessed = load();
-
-    expect(() => markProcessed(makeMessage("msg_45"))).not.toThrow();
-    expect(modifyCalled).toBe(true);
-  });
-
-  it("falls back to getProcessedLabelId (creating the label) when cache is cold", () => {
+  it("falls back to getProcessedLabelId (creating the label) when no label id is stored", () => {
     propsStore = makePropsStore();
     var createCalls = 0;
     gmail.Users.Labels.list = () => ({ labels: [] });
@@ -365,7 +333,6 @@ describe("markProcessed", () => {
 
 describe("markProcessed batch buffer", () => {
   let propsStore;
-  let cacheStore;
   let gmail;
   let api;
 
@@ -374,17 +341,15 @@ describe("markProcessed batch buffer", () => {
   }
 
   function load() {
-    return loadAppsScript(["TransactionProcessor.js"], ["markProcessed", "beginProcessedBatch", "endProcessedBatch"], {
+    return loadAppsScript(["Gmail.js"], ["markProcessed", "beginProcessedBatch", "endProcessedBatch"], {
       PROCESSED_LABEL_NAME,
       PropertiesService: { getScriptProperties: () => propsStore },
-      CacheService: { getScriptCache: () => cacheStore },
       Gmail: gmail
     });
   }
 
   beforeEach(() => {
     propsStore = makePropsStore({ "gmail.processedLabelId": "Label_cached" });
-    cacheStore = makeCacheStore();
     gmail = {
       Users: {
         Labels: { list: () => ({ labels: [] }), create: () => ({ id: "X" }) },
@@ -411,9 +376,6 @@ describe("markProcessed batch buffer", () => {
 
     expect(modifyCalls).toBe(0);
     expect(batchCalls).toHaveLength(0);
-    // Cache writes still happen inline so isAlreadyProcessed sees them mid-loop.
-    expect(cacheStore.get("processed:m1")).toBe("1");
-    expect(cacheStore.get("processed:m3")).toBe("1");
 
     api.endProcessedBatch();
 
@@ -471,10 +433,11 @@ describe("markProcessed batch buffer", () => {
 
 describe("extractTransactions overlap guard", () => {
   function load(props, history) {
-    return loadAppsScript(["TransactionProcessor.js"], ["extractTransactions"], {
+    return loadAppsScript(["Gmail.js"], ["extractTransactions"], {
       PropertiesService: { getScriptProperties: () => props },
       Gmail: { Users: { History: { list: history }, getProfile: () => ({ historyId: "h" }) } },
-      getMerchantResolutionsForTenant: () => []
+      ingestBatchViaWorker: () => ({ handled: 0, failed: 0, skipped: 0 }),
+      recordPollerRun: () => {}
     });
   }
 

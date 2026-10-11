@@ -8,18 +8,19 @@ const IGNORE_SUBJECTS = ["survey", '"feedback request"'];
 const BANK_FROM_DOMAINS = ["hdfcbank.net", "icicibank.com", "axisbank.com"];
 
 function loadHelpers() {
-  return loadAppsScript(
-    ["TransactionProcessor.js"],
-    ["getMessageHeaders", "shouldIgnoreByHeaders", "isBankFromHeader"],
-    { IGNORE_SENDERS, IGNORE_SUBJECTS, BANK_FROM_DOMAINS, Gmail: { Users: { Messages: { get: () => ({}) } } } }
-  );
+  return loadAppsScript(["Gmail.js"], ["getMessageHeaders", "shouldIgnoreByHeaders", "isBankFromHeader"], {
+    IGNORE_SENDERS,
+    IGNORE_SUBJECTS,
+    BANK_FROM_DOMAINS,
+    Gmail: { Users: { Messages: { get: () => ({}) } } }
+  });
 }
 
 describe("getMessageHeaders", () => {
   let gmail;
 
   function load() {
-    return loadAppsScript(["TransactionProcessor.js"], ["getMessageHeaders"], { Gmail: gmail }).getMessageHeaders;
+    return loadAppsScript(["Gmail.js"], ["getMessageHeaders"], { Gmail: gmail }).getMessageHeaders;
   }
 
   beforeEach(() => {

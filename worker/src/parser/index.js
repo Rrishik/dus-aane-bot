@@ -1,3 +1,4 @@
-// Worker entry point for the shared parser. The implementation is generated
-// from the Apps Script sources; see worker/scripts/sync-parser.mjs.
-export * from "./parser.gen.js";
+// Deterministic bank SMS / email parser. Templates (data) live in
+// templates.js; adding a bank format means adding an entry there.
+export * from "./templates.js";
+export * from "./parser.js";

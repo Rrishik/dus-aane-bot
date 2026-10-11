@@ -1,17 +1,16 @@
 name: Staging
 
 # Manual. A second Telegram bot (STAGING_BOT_TOKEN) on its own Worker, D1
-# database and queue, in native mode, for a full check before cutover.
+# database and queue, for trying risky changes before they reach main.
 #   deploy   — create D1/queue if missing, migrate, deploy, point the
 #              staging bot's webhook at it, smoke test
-#   import   — copy the live sheets into staging D1 and verify (strict)
-#   teardown — delete the staging Worker, queue and D1 (and its data copy)
+#   teardown — delete the staging Worker, queue and D1
 on:
   workflow_dispatch:
     inputs:
       action:
         type: choice
-        options: [deploy, import, teardown]
+        options: [deploy, teardown]
         default: deploy
 
 concurrency: staging
@@ -80,52 +79,15 @@ jobs:
       - name: Point the staging bot at the staging Worker
         if: inputs.action == 'deploy'
         env:
+          BOT_TOKEN: ${{ secrets.STAGING_BOT_TOKEN }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
-        run: |
-          node --input-type=module -e '
-            const call = async (m, body) =>
-              (await fetch("https://api.telegram.org/bot" + process.env.STAGING_BOT_TOKEN + "/" + m, {
-                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {})
-              })).json();
-            const hook = await call("setWebhook", {
-              url: process.env.STAGING_URL,
-              secret_token: process.env.WEBHOOK_SECRET,
-              allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member", "chat_member"],
-              drop_pending_updates: true
-            });
-            if (!hook.ok) { console.error("setWebhook failed: " + hook.description); process.exit(1); }
-            await call("setMyCommands", { scope: { type: "all_private_chats" }, commands: [
-              { command: "start", description: "Onboard / show welcome" },
-              { command: "ask", description: "Ask anything about your spending" },
-              { command: "stats", description: "Dashboard: recent, trends" },
-              { command: "export", description: "Download your data" },
-              { command: "account", description: "Account & settings" },
-              { command: "help", description: "Show available commands" } ] });
-            await call("setMyCommands", { scope: { type: "all_group_chats" }, commands: [
-              { command: "start", description: "Set up / re-sync this group" },
-              { command: "stats", description: "Who owes whom" },
-              { command: "help", description: "Group commands" } ] });
-            const me = await call("getMe");
-            console.log("Staging bot @" + me.result.username + " → " + process.env.STAGING_URL);'
-
+        run: node scripts/set-webhook.mjs "$STAGING_URL" --drop-pending
       - name: Smoke test
         if: inputs.action == 'deploy'
         env:
           INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
         run: node scripts/smoke.mjs "$STAGING_URL"
-
-      # Output hidden: wrangler errors can echo SQL rows into public logs.
-      - name: Import the sheets into staging D1
-        if: inputs.action == 'import'
-        env:
-          APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
-          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
-        run: |
-          node scripts/import-sheets.mjs --out ../import.sql --report ../import-report.json
-          $W d1 execute dus-aane-bot-staging --remote --yes --config wrangler.staging.toml --file ../import.sql > apply.log 2>&1 \
-            || { echo "::error::Import failed; wrangler output hidden (may contain personal data)."; exit 1; }
-          node scripts/verify-import.mjs --report ../import-report.json --wrangler --db dus-aane-bot-staging --config wrangler.staging.toml
 
       - name: Tear down
         if: inputs.action == 'teardown'

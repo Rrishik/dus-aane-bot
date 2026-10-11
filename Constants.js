@@ -1,126 +1,12 @@
-const BOT_EDIT_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`;
-const BOT_EDIT_REPLY_MARKUP_URL = `https://api.telegram.org/bot${BOT_TOKEN}/editMessageReplyMarkup`;
-const BOT_SEND_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-const BOT_DELETE_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`;
-const BOT_ANSWER_CALLBACK_QUERY_URL = `https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`;
-const BOT_SET_COMMANDS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setMyCommands`;
-const BOT_DELETE_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`;
-const BOT_SET_WEBHOOK_URL = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
-const BOT_GET_CHAT_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChat`;
-const BOT_GET_CHAT_ADMINISTRATORS_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChatAdministrators`;
-const BOT_GET_CHAT_MEMBER_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getChatMember`;
-const BOT_GET_ME_URL = `https://api.telegram.org/bot${BOT_TOKEN}/getMe`;
-const BOT_SEND_CHAT_ACTION_URL = `https://api.telegram.org/bot${BOT_TOKEN}/sendChatAction`;
-const BOT_PIN_CHAT_MESSAGE_URL = `https://api.telegram.org/bot${BOT_TOKEN}/pinChatMessage`;
+// Apps Script constants: the bot inbox, Gmail filtering and the setup email.
 
-// Public email address that tenants forward their bank emails to.
-// Displayed in /start and /register onboarding copy.
+// Public email address that users forward their bank emails to.
 const BOT_INBOX_EMAIL = "dusaanebot.inbox@gmail.com";
 
-// Public-facing demo + setup-guide assets (hosted on Google Drive). Linked
-// from the onboarding email and Telegram welcome flow. Replace with the
-// actual share URLs after recording / authoring.
+// Demo + setup-guide links in the setup email. Replace with the real share
+// URLs after recording / authoring.
 const DEMO_VIDEO_URL = "https://drive.google.com/file/d/REPLACE_WITH_VIDEO_FILE_ID/view";
 const SETUP_GUIDE_URL = "https://drive.google.com/file/d/REPLACE_WITH_GUIDE_FILE_ID/view";
-
-// ADMIN_SHEET_ID and ADMIN_CHAT_ID are defined in AConfig.js (generated from
-// GitHub secrets during deploy). They identify tenant 0's spreadsheet + chat,
-// which also hosts the shared Tenants / MerchantResolution / CategoryOverrides tabs.
-
-const EMAIL_DATE_COLUMN = 1; // Column A
-const TRANSACTION_DATE_COLUMN = 2; // Column B
-const MERCHANT_COLUMN = 3; // Column C
-const AMOUNT_COLUMN = 4; // Column D
-const CATEGORY_COLUMN = 5; // Column E
-const TRANSACTION_TYPE_COLUMN = 6; // Column F
-const USER_COLUMN = 7; // Column G
-const MESSAGE_ID_COLUMN = 8; // Column H
-const CURRENCY_COLUMN = 9; // Column I
-const GROUP_REF_COLUMN = 10; // Column J — "<group_chat_id>:<tx_id>" when row is split into a group, else empty
-const GROUP_MESSAGE_ID_COLUMN = 11; // Column K — Telegram message id of the group's split notification, else empty
-const PARSED_BY_COLUMN = 12; // Column L — parser template id or "llm"; "|rr" suffix once Re-read was used
-const SOURCE_TEXT_COLUMN = 13; // Column M — raw pasted SMS text (SMS rows only; emails are re-fetched by id)
-const STATUS_COLUMN = 14; // Column N — "" = confirmed, "review" = awaiting the user's ✅ Save
-const PERSONAL_COL_COUNT = 14;
-
-const TXN_STATUS_REVIEW = "review";
-const PARSED_BY_LLM = "llm";
-const REREAD_MARKER = "|rr";
-
-// Message-id prefix for pasted SMS rows. No ":" or "_" — callback_data uses
-// both as separators.
-const SMS_ID_PREFIX = "sms-";
-
-// Debit categories that move money without being consumption. Counting them
-// as spend double-counts (a card bill repays purchases already recorded).
-const NON_SPEND_CATEGORIES = ["CC Bill Payment", "Transfer Out", "Investment"];
-
-// --- Group-sheet schema (β: one row per share) ---
-// Group sheets have a different column layout than personal sheets — they
-// store splits as N rows per transaction (one per share holder). The column
-// positions intentionally differ from personal sheets; never mix the two
-// constant blocks. Helpers in GroupSheet.js are the only readers/writers.
-const G_EMAIL_DATE_COLUMN = 1;
-const G_TRANSACTION_DATE_COLUMN = 2;
-const G_MERCHANT_COLUMN = 3;
-const G_AMOUNT_COLUMN = 4;
-const G_CURRENCY_COLUMN = 5;
-const G_PAID_BY_COLUMN = 6; // chat_id of the member who paid
-const G_SHARE_HOLDER_COLUMN = 7; // chat_id of the member whose share this row records
-const G_SHARE_AMOUNT_COLUMN = 8;
-const G_TX_ID_COLUMN = 9; // shared across all share rows of one transaction; unique within the sheet
-const G_CATEGORY_COLUMN = 10;
-const G_TRANSACTION_TYPE_COLUMN = 11;
-const G_MESSAGE_ID_COLUMN = 12;
-const G_COL_COUNT = 12;
-
-// Hard cap on group size. Telegram supports far more, but the split UI fans out
-// quadratically with members and the small-flat-share use case rarely exceeds 4.
-const MAX_GROUP_MEMBERS = 4;
-
-// Merchant tag length cap — keeps the 🏷 pill from wrapping on narrow phones.
-const TAG_MAX_LEN = 18;
-
-// Category options for the picker
-const CATEGORIES = [
-  "Shopping",
-  "Groceries",
-  "Food & Dining",
-  "Healthcare",
-  "Fuel",
-  "Entertainment",
-  "Travel",
-  "Bills & Utilities",
-  "Education",
-  "Investment",
-  "Subscriptions",
-  "CC Bill Payment",
-  "Transfer Out"
-];
-
-const CREDIT_CATEGORIES = ["Salary", "Refund", "Cashback", "Transfer In", "Reimbursement", "Interest/Dividend"];
-
-const CATEGORY_EMOJIS = {
-  Shopping: "🛍",
-  Groceries: "🥦",
-  "Food & Dining": "🍕",
-  Healthcare: "🏥",
-  Fuel: "⛽",
-  Entertainment: "🎬",
-  Travel: "✈️",
-  "Bills & Utilities": "💡",
-  Education: "🎓",
-  Investment: "📈",
-  Subscriptions: "📱",
-  "CC Bill Payment": "💳",
-  "Transfer Out": "📤",
-  Salary: "💼",
-  Refund: "🔄",
-  Cashback: "🎁",
-  "Transfer In": "📥",
-  Reimbursement: "🧾",
-  "Interest/Dividend": "🏦"
-};
 
 // Gmail
 // Trigger flow is history-driven (Gmail.Users.History.list) — incremental,
@@ -130,44 +16,11 @@ const CATEGORY_EMOJIS = {
 // back to a one-shot time-window scan to catch in-flight mail.
 const BOOTSTRAP_WINDOW_MINUTES = 70;
 
-// Gmail label applied to messages once the bot has finished handling them
-// (saved as a transaction, or notified-and-discarded as non-transaction).
+// Gmail label applied to messages once the Worker has handled them.
 // Applied per-message via the Advanced Gmail Service so multi-message threads
 // (some banks reuse subjects → Gmail bundles alerts into one thread) get
 // labelled correctly without hiding newer siblings from search.
 const PROCESSED_LABEL_NAME = "processed-by-bot";
-
-// Display symbols for the currencies we expect to see in bank emails. Any
-// code not in this map is rendered as-is (the original 3-letter code is a
-// safe fallback for unknowns and rarely-seen currencies). See
-// currencySymbol() in Analytics.js for the lookup.
-const CURRENCY_SYMBOLS = {
-  INR: "₹",
-  USD: "$",
-  EUR: "€",
-  GBP: "£",
-  JPY: "¥",
-  CNY: "¥",
-  AUD: "A$",
-  CAD: "C$",
-  SGD: "S$",
-  HKD: "HK$",
-  NZD: "NZ$",
-  CHF: "CHF ",
-  AED: "AED ",
-  SAR: "SAR ",
-  THB: "฿",
-  KRW: "₩",
-  RUB: "₽",
-  TRY: "₺",
-  ZAR: "R "
-};
-
-// /ask quota — calls per tenant per IST day. Hard cap for everyone (no
-// premium tier yet); when the cap is hit we surface a "Premium coming soon"
-// upsell so we can measure who hits the limit before pricing/sizing premium.
-const FREE_ASK_LIMIT = 5;
-const IST_TIMEZONE = "Asia/Kolkata";
 
 // Bank sender domains — matched as substrings by Gmail's `from:` operator.
 // Add new banks here; no label setup needed.

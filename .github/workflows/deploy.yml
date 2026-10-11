@@ -1,10 +1,9 @@
-name: Deploy to Apps Script
+name: Deploy
 
 on:
   push:
     branches:
       - main
-  # Re-deploy after changing the NATIVE_MODE variable (cutover / rollback).
   workflow_dispatch:
 
 jobs:
@@ -30,30 +29,11 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Check generated Worker parser is in sync
-        run: npm run parser:check
-
+      # Apps Script only needs the Worker's URL and the shared bridge secret.
       - name: Create AConfig.js from secrets
         run: |
-          printf "// Telegram\n" > AConfig.js
-          printf "const BOT_TOKEN = \"${{ secrets.BOT_TOKEN }}\";\n" >> AConfig.js
-          printf "const ADMIN_CHAT_ID = \"${{ secrets.GROUP_CHAT_ID }}\";\n\n" >> AConfig.js
-          printf "const SCRIPT_APP_URL = \"${{ secrets.SCRIPT_APP_URL }}\";\n\n" >> AConfig.js
-          printf "const WORKER_PROXY_URL = \"${{ secrets.WORKER_PROXY_URL }}\";\n\n" >> AConfig.js
-          printf "// Google Sheets\n" >> AConfig.js
-          printf "const ADMIN_SHEET_ID = \"${{ secrets.PROD_SHEET_ID }}\";\n" >> AConfig.js
-          printf "const TEMPLATE_SHEET_ID = \"${{ secrets.TEMPLATE_SHEET_ID }}\";\n\n" >> AConfig.js
-          printf "const GROUP_TEMPLATE_SHEET_ID = \"${{ secrets.GROUP_TEMPLATE_SHEET_ID }}\";\n\n" >> AConfig.js
-          printf "// Azure OpenAI\n" >> AConfig.js
-          printf "const AZURE_OPENAI_ENDPOINT = \"${{ secrets.AZURE_OPENAI_ENDPOINT }}\";\n" >> AConfig.js
-          printf "const AZURE_OPENAI_API_KEY = \"${{ secrets.AZURE_OPENAI_API_KEY }}\";\n" >> AConfig.js
-          printf "const AZURE_OPENAI_DEPLOYMENT_NAME = \"${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}\";\n" >> AConfig.js
-          printf "const AZURE_OPENAI_API_VERSION = \"${{ secrets.AZURE_OPENAI_API_VERSION }}\";\n\n" >> AConfig.js
-          printf "// Webhook auth (Telegram -> Worker -> Apps Script)\n" >> AConfig.js
-          printf "const WEBHOOK_SECRET = \"${{ secrets.WEBHOOK_SECRET }}\";\n\n" >> AConfig.js
-          printf "// D1 mode (Worker <-> Apps Script bridge)\n" >> AConfig.js
+          printf "const WORKER_PROXY_URL = \"${{ secrets.WORKER_PROXY_URL }}\";\n" > AConfig.js
           printf "const INTERNAL_SECRET = \"${{ secrets.INTERNAL_SECRET }}\";\n" >> AConfig.js
-          printf "const NATIVE_MODE = \"${{ vars.NATIVE_MODE }}\";\n" >> AConfig.js
 
       - name: Set up authentication
         env:
@@ -86,7 +66,6 @@ jobs:
             npx --yes wrangler@4.81.1 queues create dus-aane-bot-updates
           fi
 
-      # Repository variable NATIVE_MODE=1 switches both sides to D1 mode.
       - name: Deploy Cloudflare Worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -103,8 +82,6 @@ jobs:
             AZURE_OPENAI_API_KEY
             AZURE_OPENAI_DEPLOYMENT_NAME
             AZURE_OPENAI_API_VERSION
-          vars: |
-            MODE
         env:
           APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
@@ -115,10 +92,16 @@ jobs:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
           AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
-          MODE: ${{ vars.NATIVE_MODE == '1' && 'native' || 'proxy' }}
 
-      - name: Smoke test the native Worker
-        if: vars.NATIVE_MODE == '1'
+      # Re-applied on every deploy, so rotating BOT_TOKEN or WEBHOOK_SECRET
+      # only needs the secret updated and a deploy.
+      - name: Point the bot's webhook at the Worker
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: node worker/scripts/set-webhook.mjs "${{ secrets.WORKER_PROXY_URL }}"
+
+      - name: Smoke test
         env:
           INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}

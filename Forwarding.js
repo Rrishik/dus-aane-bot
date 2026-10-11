@@ -208,7 +208,7 @@ function findPendingForwardingConfirmations(tenantEmails) {
       matchedAny = true;
     }
     // Only mark threads we actually consumed. Leaves another tenant's
-    // pending confirmation unread for their own /setup click.
+    // pending confirmation unread for their own verify click.
     if (matchedAny) {
       try {
         threads[i].markRead();
@@ -237,27 +237,14 @@ function handleVerifyForwardingClick(params) {
     return _verifyResponseHtml({
       ok: false,
       title: "Link expired or invalid",
-      body: "This verification link is no longer valid. Open Telegram and send /setup to get a fresh link."
+      body: "This verification link is no longer valid. Open Telegram, send /account and tap Resend setup for a fresh link."
     });
   }
   try {
-    // Scope the inbox scan to this tenant's registered addresses so an old,
-    // unread confirmation mail from a different tenant (sharing the bot
-    // inbox) can't be returned by mistake. If the tenant isn't registered
-    // or has no emails on file, fall back to the unfiltered scan — the
-    // user is mid-onboarding and any vf URL that arrived after they hit
-    // /setup is overwhelmingly likely to be theirs.
+    // Scope the inbox scan to the user's signed forwarder addresses so an
+    // old, unread confirmation for someone else sharing the bot inbox can't
+    // be picked. Links from before addresses were signed scan unfiltered.
     var tenantEmails = emailsCsv ? emailsCsv.split(",") : null;
-    try {
-      if (!tenantEmails && typeof findTenantByChatId === "function") {
-        var tenant = findTenantByChatId(chatId);
-        if (tenant && tenant.emails && tenant.emails.length) {
-          tenantEmails = tenant.emails;
-        }
-      }
-    } catch (lookupErr) {
-      console.warn("[handleVerifyForwardingClick] tenant lookup failed: " + lookupErr.message);
-    }
     var result = findPendingForwardingConfirmations(tenantEmails);
     if (result.urls.length > 0) {
       // GmailApp.search() returns threads newest-first, so urls[0] is from
@@ -265,18 +252,6 @@ function handleVerifyForwardingClick(params) {
       // tenant has multiple pending vf-... mails (e.g. they retried setup).
       var targetUrl = result.urls[0];
       var addr = result.addresses.length > 0 ? result.addresses[0] : "";
-      // Optimistic Telegram nudge — user is about to land on Google's page.
-      try {
-        sendTelegramMessage(
-          Number(chatId),
-          "🔗 Found the confirmation email" +
-            (addr ? " for `" + addr + "`" : "") +
-            ". Click *Open confirmation page* in your browser, then click *Confirm* on Google's page.",
-          { parse_mode: "Markdown" }
-        );
-      } catch (e) {
-        console.warn("[handleVerifyForwardingClick] telegram notify failed: " + e.message);
-      }
       return _verifyRedirectHtml(targetUrl, addr);
     }
     return _verifyResponseHtml({
@@ -292,7 +267,7 @@ function handleVerifyForwardingClick(params) {
     return _verifyResponseHtml({
       ok: false,
       title: "Something went wrong",
-      body: "We hit an error verifying your forwarding address. Try again in a minute, or send /setup on Telegram for a fresh link."
+      body: "We hit an error verifying your forwarding address. Try again in a minute, or send /account on Telegram and tap Resend setup."
     });
   }
 }

@@ -80,10 +80,9 @@ export async function deleteSettlement(db, groupId, settlementId) {
   return res.meta.changes > 0;
 }
 
-// Net pairwise balances per currency, matching Groups.js
-// aggregatePairwiseDebts: each share held by someone other than the payer
-// is owed to the payer (regardless of debit/credit); settlements reduce
-// what `from` owes `to`. Returns { [currency]: [{ debtor, creditor,
+// Net pairwise balances per currency: each share held by someone other than
+// the payer is owed to the payer (regardless of debit/credit); settlements
+// reduce what `from` owes `to`. Returns { [currency]: [{ debtor, creditor,
 // amountMinor }] }, largest first, net-zero pairs dropped.
 export async function groupBalances(db, groupId) {
   const gid = String(groupId);
@@ -105,9 +104,8 @@ export async function groupBalances(db, groupId) {
   return netBalances(owed.results, paid.results);
 }
 
-// owed/paid: [{ currency, debtor, creditor, amount }] → per-currency net
-// pairs. Shared with the import verifier.
-export function netBalances(owed, paid) {
+// owed/paid: [{ currency, debtor, creditor, amount }] → per-currency net pairs.
+function netBalances(owed, paid) {
   // ledger[currency]["a|b"] = what a owes b minus what b owes a (a < b).
   const ledger = {};
   function bump(currency, debtor, creditor, amount) {

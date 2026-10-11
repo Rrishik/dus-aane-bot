@@ -1,5 +1,4 @@
-// Bot-wide constants for the native Worker app. Mirrors Constants.js in the
-// Apps Script project until cutover, when that copy is deleted.
+// Bot-wide constants: categories, currency symbols, limits.
 
 export const CATEGORIES = [
   "Shopping",

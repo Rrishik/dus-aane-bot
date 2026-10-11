@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { loadAppsScript } from "../../tests/_loader.js";
 import { testContext, seedTenant, seedGroup } from "./helpers/app.js";
 import { handleUpdate } from "../src/app/webhook.js";
 import { ingest } from "../src/app/ingest.js";
@@ -12,8 +11,6 @@ import {
   formatBalancesPin,
   resolveMemberRef
 } from "../src/app/groups.js";
-
-const legacy = loadAppsScript(["Groups.js"], ["computeSplitShareSet", "simplifyDebtsGreedy", "parseSettleCommand"]);
 
 const SMS = "Sent Rs.900.00 From HDFC Bank A/C *1234 To SWIGGY On 07/10/26 Ref 628012345678 Not You? Call 18002586161";
 
@@ -35,24 +32,19 @@ async function groupWithCard(members = ["111", "222"]) {
   return { ctx, id: res.transactionId };
 }
 
-describe("pure helpers match Groups.js", () => {
+describe("pure helpers (values frozen from the Apps Script originals)", () => {
   const members = ["111", "222", "333", "444"];
   it.each([
-    [["111", "222"], "50", 90001],
-    [["111", "222"], "p100", 90000],
-    [members, "all", 100000],
-    [members, "w2", 100001],
-    [members, "i3", 33333],
-    [members, "w0", 100],
-    [["111", "222", "333"], "50", 100],
-    [members, "x1", 100]
-  ])("computeSplitShareSet %j %s %d", (m, mode, minor) => {
-    const want = legacy.computeSplitShareSet({ group_members: m }, "111", mode, minor / 100);
-    const got = computeSplitShareSet(m, "111", mode, minor);
-    if (!want) return expect(got).toBeNull();
-    expect(got.holders).toEqual(want.holders);
-    expect(got.shares.map((s) => s / 100)).toEqual(want.shares);
-    expect(got.shares.reduce((a, b) => a + b, 0)).toBe(minor);
+    [["111", "222"], "50", 90001, { holders: ["111", "222"], shares: [45000, 45001] }],
+    [["111", "222"], "p100", 90000, { holders: ["222"], shares: [90000] }],
+    [members, "all", 100000, { holders: members, shares: [25000, 25000, 25000, 25000] }],
+    [members, "w2", 100001, { holders: ["111", "222", "444"], shares: [33333, 33334, 33334] }],
+    [members, "i3", 33333, { holders: ["111", "444"], shares: [16666, 16667] }],
+    [members, "w0", 100, null],
+    [["111", "222", "333"], "50", 100, null],
+    [members, "x1", 100, null]
+  ])("computeSplitShareSet %j %s %d", (m, mode, minor, want) => {
+    expect(computeSplitShareSet(m, "111", mode, minor)).toEqual(want);
   });
 
   it("simplifyDebts", () => {
@@ -64,29 +56,21 @@ describe("pure helpers match Groups.js", () => {
       ],
       USD: [{ debtor: "x", creditor: "y", amountMinor: 1050 }]
     };
-    const asMajor = (o) =>
-      Object.fromEntries(
-        Object.entries(o).map(([k, v]) => [
-          k,
-          v.map((e) => ({ debtor: e.debtor, creditor: e.creditor, amount: e.amountMinor / 100 }))
-        ])
-      );
-    expect(asMajor(simplifyDebts(input))).toEqual(legacy.simplifyDebtsGreedy(asMajor(input)));
-    expect(simplifyDebts(input).INR).toEqual([{ debtor: "a", creditor: "c", amountMinor: 25000 }]);
+    expect(simplifyDebts(input)).toEqual({
+      INR: [{ debtor: "a", creditor: "c", amountMinor: 25000 }],
+      USD: [{ debtor: "x", creditor: "y", amountMinor: 1050 }]
+    });
   });
 
   it.each([
-    "/settle @alice 500",
-    "/settle@Bot alice 1,250.5",
-    "/settle @alice",
-    "/settle @alice -3",
-    "/settle",
-    "/settle <x> 5"
-  ])("parseSettleCommand %s", (text) => {
-    const want = legacy.parseSettleCommand(text);
-    const got = parseSettleCommand(text);
-    if (want.error) return expect(got).toEqual(want);
-    expect(got).toEqual({ mention: want.mention, amountMinor: Math.round(want.amount * 100) });
+    ["/settle @alice 500", { mention: "alice", amountMinor: 50000 }],
+    ["/settle@Bot alice 1,250.5", { mention: "alice", amountMinor: 125050 }],
+    ["/settle @alice", { error: "syntax" }],
+    ["/settle @alice -3", { error: "amount" }],
+    ["/settle", { error: "syntax" }],
+    ["/settle <x> 5", { error: "syntax" }]
+  ])("parseSettleCommand %s", (text, want) => {
+    expect(parseSettleCommand(text)).toEqual(want);
   });
 
   it("pin caps currencies", () => {

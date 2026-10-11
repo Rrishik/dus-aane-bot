@@ -8,7 +8,7 @@ beforeAll(() => {
   // array literal). All Apps Script globals are referenced inside functions,
   // so loading is safe with no stubs.
   ({ extractForwardedFrom, extractForwarderFromHeaders } = loadAppsScript(
-    ["TransactionProcessor.js"],
+    ["Gmail.js"],
     ["extractForwardedFrom", "extractForwarderFromHeaders"]
   ));
 });

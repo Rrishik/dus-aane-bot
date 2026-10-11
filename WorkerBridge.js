@@ -1,6 +1,5 @@
-// Apps Script ↔ Worker bridge for D1 mode. NATIVE_MODE (AConfig) flips the
-// Gmail poller to hand emails to the Worker and turns off the Apps Script
-// crons; the Worker owns the bot and the data from then on.
+// Apps Script ↔ Worker bridge. The Worker runs the bot and owns the data;
+// Apps Script does what needs the bot's Google account (Gmail, mail, Sheets).
 //
 // Worker → Apps Script: signed actions in the doPost body
 //   { action, ts, payload: "<json>", sig: hex(HMAC(INTERNAL_SECRET, ts.action.payload)) }
@@ -13,10 +12,6 @@ var WORKER_BACKFILL_CHUNK_MS = 5 * 60 * 1000;
 // Emails the Worker fails on stay unlabelled and are retried by the next
 // chunk; this bounds the chain if the Worker keeps failing.
 var WORKER_BACKFILL_MAX_CHUNKS = 12;
-
-function isNativeMode() {
-  return typeof NATIVE_MODE !== "undefined" && String(NATIVE_MODE) === "1";
-}
 
 function _internalSecret() {
   return typeof INTERNAL_SECRET !== "undefined" && INTERNAL_SECRET ? String(INTERNAL_SECRET) : "";
@@ -39,7 +34,7 @@ function asciiJson(value) {
   });
 }
 
-// Is this doPost body a signed Worker action (vs. a Telegram update)?
+// Is this doPost body a signed Worker action?
 function isWorkerActionBody(body) {
   return !!(body && typeof body.action === "string" && typeof body.sig === "string");
 }
@@ -118,10 +113,6 @@ var WORKER_ACTIONS = {
     });
     return { sheetId: ss.getId(), url: ss.getUrl() };
   },
-  // Everything the D1 importer needs (worker/scripts/import-sheets.mjs).
-  export_dump: function () {
-    return { dump: buildSheetsDump() };
-  },
   // Poller health for the Diagnose workflow: filter decisions for recent
   // bot-inbox mail (no addresses or content), last run, triggers.
   //   requeue: put recent unlabelled bank mail back on the retry list
@@ -149,7 +140,6 @@ var WORKER_ACTIONS = {
     if (p.pollNow) extractTransactions();
     var retryNow = parse(WORKER_RETRY_PROP, {});
     return {
-      nativeMode: isNativeMode(),
       requeued: requeued,
       lastRun: parse(POLLER_LAST_RUN_PROP, null),
       runLockAgeMin: props.getProperty("gmail.runStartedAt")
@@ -268,7 +258,7 @@ function ingestEmailViaWorker(message, forwarder, silent) {
   return "failed";
 }
 
-// ─── Gmail poller (native mode) ─────────────────────────────────────
+// ─── Gmail poller ─────────────────────────────────────────────────
 
 // Recent bot-inbox mail with the poller's filter decisions (for diagnosis).
 function _recentBotMail(hours, retry) {
@@ -369,78 +359,6 @@ function ingestBatchViaWorker(entries) {
   });
   props.setProperty(WORKER_RETRY_PROP, JSON.stringify(next));
   return stats;
-}
-
-// ─── Sheets dump for the D1 import ──────────────────────────────────
-
-// Dates travel as { $d: epoch ms } so the importer never guesses timezones.
-function _dumpCell(v) {
-  return v instanceof Date ? { $d: v.getTime() } : v;
-}
-
-function _dumpTab(tab, cols) {
-  if (!tab || tab.getLastRow() <= 1) return [];
-  return tab
-    .getRange(2, 1, tab.getLastRow() - 1, cols)
-    .getValues()
-    .map(function (r) {
-      return r.map(_dumpCell);
-    });
-}
-
-function buildSheetsDump() {
-  var tab = _getOrCreateTenantsTab();
-  var tenants = [];
-  if (tab.getLastRow() > 1) {
-    tenants = tab
-      .getRange(2, 1, tab.getLastRow() - 1, TENANT_COL_COUNT)
-      .getValues()
-      .filter(function (r) {
-        return r[TENANT_COLS.CHAT_ID - 1];
-      })
-      .map(function (r) {
-        var t = _rowToTenant(r);
-        t.created_at = _dumpCell(t.created_at);
-        t.last_forward_at = _dumpCell(t.last_forward_at);
-        t.last_nag_at = _dumpCell(t.last_nag_at);
-        return t;
-      });
-  }
-
-  var personal = {};
-  var groups = {};
-  tenants.forEach(function (t) {
-    if (!t.sheet_id) return;
-    try {
-      var ss = SpreadsheetApp.openById(t.sheet_id);
-      if (t.chat_type === TENANT_CHAT_TYPE.GROUP) {
-        groups[t.chat_id] = { rows: _dumpTab(ss.getSheets()[0], G_COL_COUNT) };
-      } else {
-        personal[t.chat_id] = {
-          rows: _dumpTab(ss.getSheets()[0], PERSONAL_COL_COUNT),
-          myMerchants: _dumpTab(ss.getSheetByName(MY_MERCHANTS_TAB), 3)
-        };
-      }
-    } catch (e) {
-      (t.chat_type === TENANT_CHAT_TYPE.GROUP ? groups : personal)[t.chat_id] = { error: e.message };
-    }
-  });
-
-  return {
-    version: 1,
-    exportedAt: Date.now(),
-    tenants: tenants,
-    personal: personal,
-    groups: groups,
-    shared: {
-      resolutions: _dumpTab(getOrCreateResolutionSheet(), 2),
-      overrides: _dumpTab(getOrCreateOverridesSheet(), 2)
-    },
-    settings: {
-      "parser.mode": getParserMode(),
-      "parser.disabledTemplates": getDisabledParserTemplates().join(",")
-    }
-  };
 }
 
 // ─── /backfill (Worker-driven) ──────────────────────────────────────

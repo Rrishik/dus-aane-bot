@@ -1,4 +1,4 @@
-// Native Telegram update dispatcher (MODE=native).
+// Telegram update dispatcher.
 import { getTenant } from "../db/tenants.js";
 import {
   handleStart,

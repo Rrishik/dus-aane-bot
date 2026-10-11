@@ -1,6 +1,6 @@
 // Analytics reads. A transaction split into a group counts only the
 // tenant's own share (0 if someone else holds all of it); one that settled a
-// group debt counts 0 — matching the Apps Script getAllTransactions().
+// group debt counts 0.
 
 export async function listEffectiveTransactions(db, tenantId, { from, to, statuses = ["confirmed"] } = {}) {
   const where = ["t.tenant_id = ?", "t.status IN (" + statuses.map(() => "?").join(", ") + ")"];

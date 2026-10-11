@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { createTestD1 } from "./helpers/d1.js";
-import { loadAppsScript } from "../../tests/_loader.js";
 import * as tenants from "../src/db/tenants.js";
 import * as txns from "../src/db/transactions.js";
 import * as splits from "../src/db/splits.js";
@@ -50,12 +49,8 @@ describe("splits + group balances", () => {
     expect(await splits.getSplitForTransaction(db, t)).toBeNull();
   });
 
-  it("balances match Groups.js aggregatePairwiseDebts on the same data", async () => {
+  it("balances net shares against settlements, per currency", async () => {
     const db = await groupFixture();
-    const legacyRows = [];
-    // Legacy β row: [email, txDate, merchant, amount, currency, paidBy, holder, share, txId, category, txType, msgId]
-    const legacy = (payer, holder, share, currency, category) =>
-      legacyRows.push(["", "", "", 0, currency, payer, holder, share, "", category || "Food", "Debit", ""]);
 
     async function split(payer, amountMinor, currency, direction, shares, ref) {
       const t = await paid(db, payer, amountMinor, currency, direction, ref);
@@ -66,7 +61,6 @@ describe("splits + group balances", () => {
         mode: "all",
         shares: shares.map(([h, a]) => ({ holderId: h, amountMinor: a }))
       });
-      shares.forEach(([h, a]) => legacy(payer, h, a / 100, currency));
     }
 
     await split(
@@ -123,28 +117,15 @@ describe("splits + group balances", () => {
       currency: "INR",
       transactionId: settleTxn
     });
-    legacy("222", "111", 200, "INR", "Settlement");
 
-    const { aggregatePairwiseDebts } = loadAppsScript(["Groups.js"], ["aggregatePairwiseDebts"], {
-      G_CURRENCY_COLUMN: 5,
-      G_PAID_BY_COLUMN: 6,
-      G_SHARE_HOLDER_COLUMN: 7,
-      G_SHARE_AMOUNT_COLUMN: 8,
-      G_CATEGORY_COLUMN: 10
+    // Frozen from Groups.js aggregatePairwiseDebts on the same data.
+    expect(await splits.groupBalances(db, "-100")).toEqual({
+      INR: [
+        { debtor: "333", creditor: "111", amountMinor: 30000 },
+        { debtor: "222", creditor: "111", amountMinor: 8000 }
+      ],
+      USD: [{ debtor: "111", creditor: "333", amountMinor: 600 }]
     });
-    const expected = aggregatePairwiseDebts(legacyRows);
-    const actual = await splits.groupBalances(db, "-100");
-
-    const asMajor = (byCcy) =>
-      Object.fromEntries(
-        Object.entries(byCcy).map(([c, list]) => [
-          c,
-          list.map((e) => ({ debtor: e.debtor, creditor: e.creditor, amount: e.amountMinor / 100 }))
-        ])
-      );
-    expect(asMajor(actual)).toEqual(expected);
-    expect(actual.INR.length).toBeGreaterThan(0);
-    expect(actual.USD).toEqual([{ debtor: "111", creditor: "333", amountMinor: 600 }]);
   });
 
   it("deleting a settlement or a deleted transaction drops it from balances", async () => {

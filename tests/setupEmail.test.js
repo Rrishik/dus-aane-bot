@@ -5,7 +5,7 @@ let buildGmailFilterQuery, buildSetupEmailHtml, buildGmailFilterPrefillUrl;
 
 beforeAll(() => {
   ({ buildGmailFilterQuery, buildSetupEmailHtml, buildGmailFilterPrefillUrl } = loadAppsScript(
-    ["Onboarding.js"],
+    ["SetupEmail.js"],
     ["buildGmailFilterQuery", "buildSetupEmailHtml", "buildGmailFilterPrefillUrl"],
     {
       TRANSACTION_SENDERS: ["alerts@hdfcbank.net", "alerts@axisbank.com"],

@@ -44,7 +44,7 @@ describe("fetchAndFilterMessages", () => {
   let fetchAndFilterMessages;
 
   function load() {
-    return loadAppsScript(["TransactionProcessor.js"], ["fetchAndFilterMessages"], {
+    return loadAppsScript(["Gmail.js"], ["fetchAndFilterMessages"], {
       PROCESSED_LABEL_NAME,
       GMAIL_SEARCH_QUERY,
       BANK_FROM_DOMAINS,
@@ -251,7 +251,7 @@ describe("isFromAllowedBank", () => {
   let isFromAllowedBank;
 
   beforeEach(() => {
-    ({ isFromAllowedBank } = loadAppsScript(["TransactionProcessor.js"], ["isFromAllowedBank"], {
+    ({ isFromAllowedBank } = loadAppsScript(["Gmail.js"], ["isFromAllowedBank"], {
       BANK_FROM_DOMAINS
     }));
   });

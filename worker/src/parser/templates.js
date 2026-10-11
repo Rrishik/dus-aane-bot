@@ -1,11 +1,11 @@
-// Bank message templates for Parser.js. Data only — adding a format means
+// Bank message templates for parser.js. Data only — adding a format means
 // adding an entry here, not writing code.
 //
 // Each template runs against normalized text (single-spaced, footers cut).
 // Named groups: amount (required), cur, date, merchant, account, reference.
 // `samples` are scrubbed/synthetic messages with the expected read; the test
-// suite runs every sample automatically (tests/parser.test.js). Never commit
-// real messages — this repo is public.
+// suite runs every sample automatically (worker/test/parser.test.js). Never
+// commit real messages — this repo is public.
 //
 // Seed entries below were written from approximated public formats, not from
 // collected samples. Replace or extend them as real (scrubbed) samples and
@@ -176,3 +176,5 @@ var BANK_TEMPLATES = [
     ]
   }
 ];
+
+export { BANK_TEMPLATES };

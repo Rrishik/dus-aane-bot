@@ -1,4 +1,4 @@
-// /stats trends and the weekly digest, ported from Analytics.js. Spend is
+// /stats trends and the weekly digest. Spend is
 // kind = 'spend' (card bill payments, transfers and investments excluded).
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { CATEGORY_EMOJIS } from "./constants.js";

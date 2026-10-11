@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { loadAppsScript } from "../../tests/_loader.js";
 import { testContext, seedTenant, NOW } from "./helpers/app.js";
 import worker from "../src/index.js";
 import { ingest } from "../src/app/ingest.js";
@@ -7,68 +6,52 @@ import { getTenant } from "../src/db/tenants.js";
 import { putEphemeral } from "../src/db/ephemeral.js";
 import { logParserEvent, disableTemplate } from "../src/db/settings.js";
 import { TelegramError } from "../src/telegram/client.js";
-import { shouldNudge, formatParserDigest, runScheduled, nudgeDormantTenants, NUDGE_CONFIG } from "../src/app/cron.js";
+import { shouldNudge, formatParserDigest, runScheduled, nudgeDormantTenants } from "../src/app/cron.js";
 
 const DAY = 86400000;
-const legacy = loadAppsScript(
-  ["Nudge.js", "ParserTelemetry.js"],
-  ["shouldNudge", "formatParserDigest", "PARSER_EVENT"],
-  {
-    TENANT_CHAT_TYPE: { PERSONAL: "personal", GROUP: "group" }
-  }
-);
 // NOW is a Wednesday; these are the next matching weekdays at 08:00 IST.
 const at = (daysAhead) => NOW + daysAhead * DAY - 5.5 * 3600 * 1000;
 const FRI = at(2);
 const MON = at(5);
 const TUE = at(6);
 
-describe("shouldNudge matches Nudge.js", () => {
+// Expected values frozen from the Apps Script originals (Nudge.js).
+describe("shouldNudge", () => {
   const base = { kind: "personal", status: "active", nag_count: 0, created_at: NOW - 30 * DAY };
   it.each([
-    ["fresh pending", { status: "pending", created_at: NOW - DAY }],
-    ["pending 2d", { status: "pending", created_at: NOW - 2 * DAY }],
-    ["active never forwarded", {}],
-    ["inactive 4d", { last_activity_at: NOW - 4 * DAY }],
-    ["inactive 9d", { last_activity_at: NOW - 9 * DAY }],
-    ["cooldown", { last_activity_at: NOW - 9 * DAY, last_nag_at: NOW - 3 * DAY }],
-    ["after cooldown", { last_activity_at: NOW - 20 * DAY, last_nag_at: NOW - 8 * DAY, nag_count: 2 }],
-    ["capped", { last_activity_at: NOW - 20 * DAY, nag_count: 3 }],
-    ["dormant", { status: "dormant", last_activity_at: NOW - 20 * DAY }],
-    ["group", { kind: "group" }]
-  ])("%s", (_name, o) => {
-    const t = { ...base, ...o };
-    const iso = (ms) => (ms ? new Date(ms).toISOString() : "");
-    const legacyTenant = {
-      chat_type: t.kind,
-      status: t.status,
-      nag_count: t.nag_count,
-      created_at: iso(t.created_at),
-      last_forward_at: iso(t.last_activity_at),
-      last_nag_at: iso(t.last_nag_at)
-    };
-    expect(shouldNudge(t, NOW)).toEqual(legacy.shouldNudge(legacyTenant, new Date(NOW), NUDGE_CONFIG));
+    ["fresh pending", { status: "pending", created_at: NOW - DAY }, null],
+    ["pending 2d", { status: "pending", created_at: NOW - 2 * DAY }, { kind: "pending", daysSilent: 2 }],
+    ["active never forwarded", {}, { kind: "pending", daysSilent: 30 }],
+    ["inactive 4d", { last_activity_at: NOW - 4 * DAY }, null],
+    ["inactive 9d", { last_activity_at: NOW - 9 * DAY }, { kind: "inactive", daysSilent: 9 }],
+    ["cooldown", { last_activity_at: NOW - 9 * DAY, last_nag_at: NOW - 3 * DAY }, null],
+    [
+      "after cooldown",
+      { last_activity_at: NOW - 20 * DAY, last_nag_at: NOW - 8 * DAY, nag_count: 2 },
+      { kind: "inactive", daysSilent: 20 }
+    ],
+    ["capped", { last_activity_at: NOW - 20 * DAY, nag_count: 3 }, null],
+    ["dormant", { status: "dormant", last_activity_at: NOW - 20 * DAY }, null],
+    ["group", { kind: "group" }, null]
+  ])("%s", (_name, o, want) => {
+    expect(shouldNudge({ ...base, ...o }, NOW)).toEqual(want);
   });
 });
 
-it("parser digest matches ParserTelemetry.js", () => {
-  const events = [
-    ["hdfc_upi", "saved"],
-    ["hdfc_upi", "saved"],
-    ["hdfc_upi", "saved"],
-    ["hdfc_upi", "reparse_requested"],
-    ["hdfc_upi", "reparse_accepted"],
-    ["icici_card", "shadow_match"],
-    ["icici_card", "shadow_mismatch"],
-    ["icici_card", "report"]
-  ].map(([templateId, event]) => ({ templateId, event }));
-  const summary = {};
-  for (const e of events) {
-    summary[e.templateId] = summary[e.templateId] || {};
-    summary[e.templateId][e.event] = (summary[e.templateId][e.event] || 0) + 1;
-  }
-  expect(formatParserDigest(summary, "on", ["axis_x"])).toBe(legacy.formatParserDigest(events, "on", ["axis_x"]));
-  expect(formatParserDigest({}, "shadow", [])).toBe(legacy.formatParserDigest([], "shadow", []));
+it("parser digest", () => {
+  const summary = {
+    hdfc_upi: { saved: 3, reparse_requested: 1, reparse_accepted: 1 },
+    icici_card: { shadow_match: 1, shadow_mismatch: 1, report: 1 }
+  };
+  expect(formatParserDigest(summary, "on", ["axis_x"])).toBe(
+    "🧪 *Parser — last 7 days* (mode: `on`)\n" +
+      "• `hdfc_upi` — saved 3, re-read 1, wrong 1 (33%)\n" +
+      "• `icici_card` — saved 0, shadow agree 50% of 2, reports 1\n\n" +
+      "Disabled: `axis_x`"
+  );
+  expect(formatParserDigest({}, "shadow", [])).toBe(
+    "🧪 *Parser — last 7 days* (mode: `shadow`)\n_No parser activity._"
+  );
 });
 
 describe("runScheduled", () => {
@@ -143,10 +126,10 @@ describe("runScheduled", () => {
     expect(msg.args[1]).toContain("Disabled: `axis_x`");
   });
 
-  it("the scheduled handler is a no-op until MODE=native", async () => {
+  it("the scheduled handler runs the jobs in the background", async () => {
     const waited = [];
-    const ctx = { waitUntil: (p) => waited.push(p) };
-    await worker.scheduled({ scheduledTime: FRI }, {}, ctx);
-    expect(waited).toHaveLength(0);
+    await worker.scheduled({ scheduledTime: NOW }, { DB: testContext().db }, { waitUntil: (p) => waited.push(p) });
+    expect(waited).toHaveLength(1);
+    expect(await waited[0]).toEqual(["purge"]);
   });
 });

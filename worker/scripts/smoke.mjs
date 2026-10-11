@@ -34,9 +34,8 @@ export async function runSmoke(baseUrl, { internalSecret, webhookSecret, fetchIm
     expect(body.ok === true && body.db === true, "got " + JSON.stringify(body));
   });
 
-  await check("native mode on", async () => {
+  await check("unsigned email ingest is rejected", async () => {
     const res = await fetchImpl(base + "/ingest/email", { method: "POST", body: "{}" });
-    expect(res.status !== 409, "Worker is still in proxy mode (409)");
     expect(res.status === 401, "unsigned ingest returned " + res.status + ", expected 401");
   });
 

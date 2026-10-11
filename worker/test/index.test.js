@@ -27,27 +27,9 @@ describe("router", () => {
     expect(broken.status).toBe(503);
   });
 
-  it("keeps the pre-migration behaviour: other GETs are 405", async () => {
+  it("other GETs are 405", async () => {
     const res = await worker.fetch(new Request("https://w/"), {}, ctx);
     expect(res.status).toBe(405);
-  });
-
-  it("POST still goes through the secret-checked Apps Script proxy", async () => {
-    const calls = [];
-    const origFetch = globalThis.fetch;
-    globalThis.fetch = async (u) => {
-      calls.push(String(u));
-      return new Response("ok");
-    };
-    try {
-      const env = { APPS_SCRIPT_URL: "https://script.example/exec", WEBHOOK_SECRET: "k1" };
-      const post = (h) => new Request("https://w/", { method: "POST", headers: h, body: "{}" });
-      expect((await worker.fetch(post({}), env, ctx)).status).toBe(401);
-      expect((await worker.fetch(post({ "X-Telegram-Bot-Api-Secret-Token": "k1" }), env, ctx)).status).toBe(200);
-      expect(calls).toEqual(["https://script.example/exec?k=k1"]);
-    } finally {
-      globalThis.fetch = origFetch;
-    }
   });
 });
 
@@ -78,11 +60,16 @@ describe("slow updates go through the queue", () => {
     const waited = [];
     const ctx = { waitUntil: (p) => waited.push(p) };
     const env = {
-      MODE: "native",
       DB: createTestD1(),
+      WEBHOOK_SECRET: "k1",
       UPDATES: { send: async (u) => sent.push(u) }
     };
-    const post = (u) => new Request("https://w/", { method: "POST", body: JSON.stringify(u) });
+    const post = (u) =>
+      new Request("https://w/", {
+        method: "POST",
+        headers: { "X-Telegram-Bot-Api-Secret-Token": "k1" },
+        body: JSON.stringify(u)
+      });
     await worker.fetch(post(dm("/ask x")), env, ctx);
     expect(sent).toHaveLength(1);
     expect(waited).toHaveLength(0);
@@ -94,7 +81,7 @@ describe("slow updates go through the queue", () => {
     await Promise.allSettled(waited);
   });
 
-  it("the consumer acks every message and does nothing outside native mode", async () => {
+  it("the consumer acks every message, even when handling fails", async () => {
     const acked = [];
     const batch = { messages: [{ body: {}, ack: () => acked.push(1) }] };
     await worker.queue(batch, {});

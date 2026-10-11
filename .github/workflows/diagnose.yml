@@ -39,7 +39,7 @@ jobs:
             console.log("WORKER_PROXY_URL query string:", u.search ? "yes" : "no");
             const r = await (await fetch("https://api.telegram.org/bot" + process.env.BOT_TOKEN + "/getWebhookInfo")).json();
             const w = r.result || {};
-            console.log("webhook points at WORKER_PROXY_URL:", w.url === process.env.WORKER_PROXY_URL);
+            console.log("webhook points at the Worker:", !!w.url && new URL(w.url).origin === u.origin);
             console.log("pending updates:", w.pending_update_count, "| last error:", w.last_error_message || "none",
               w.last_error_date ? "(" + new Date(w.last_error_date * 1000).toISOString() + ")" : "");
             console.log("allowed updates:", (w.allowed_updates || []).join(","));'

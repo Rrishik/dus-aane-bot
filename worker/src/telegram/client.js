@@ -69,7 +69,7 @@ export function createTelegram({
       body: JSON.stringify(payload || {})
     }));
 
-  // parse_mode defaults to legacy Markdown, matching the Apps Script bot;
+  // parse_mode defaults to legacy Markdown (see docs/CONTRIBUTING.md);
   // pass parse_mode: null for plain text.
   function withParseMode(opts) {
     const out = { ...opts };
