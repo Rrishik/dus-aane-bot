@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <b>Splitwise that fills itself in — from your bank emails, into your own Google Sheet.</b>
+  <b>Splitwise that fills itself in — from your bank emails and SMS.</b>
 </p>
 
 <p align="center">
@@ -19,13 +19,12 @@
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/License-MIT-yellow.svg" />
   <img alt="Telegram Bot" src="https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white" />
-  <img alt="Google Apps Script" src="https://img.shields.io/badge/Apps_Script-V8-4285F4?logo=google&logoColor=white" />
   <img alt="Azure OpenAI" src="https://img.shields.io/badge/Azure_OpenAI-Tool_calling-0078D4?logo=microsoftazure&logoColor=white" />
   <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white" />
   <img alt="GitHub stars" src="https://img.shields.io/github/stars/Rrishik/dus-aane-bot?style=social" />
 </p>
 
-Forward a bank email; the bot reads it, categorises it, and writes a row to a Google Sheet you own. Tap one button to split it 50/50 with your partner — the group chat gets a notification, the math is done. Ask `/ask how much on food this month?` in plain English. No data entry, no app to install, no full-Gmail OAuth grant to a black box.
+Forward a bank email or paste a bank SMS; the bot reads it, categorises it, and sends you a card. Tap one button to split it 50/50 with your partner — the group chat gets a notification, the math is done. Ask `/ask how much on food this month?` in plain English. No data entry, no app to install, no full-Gmail OAuth grant to a black box.
 
 ## See it in action
 
@@ -77,8 +76,8 @@ Dus Aane Bot inverts that:
 | ------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------- |
 | **Access scope**                      | Full Gmail read (all mail, all labels)        | Only emails you forward to the bot inbox                                      |
 | **OTPs / statements / personal mail** | Readable by the app                           | Never leaves your Gmail                                                       |
-| **Data location**                     | Their servers, their schema                   | Your Google Sheet, your account                                               |
-| **Export / delete**                   | Via their UI, if offered                      | Native Google Sheets — yours forever                                          |
+| **Data location**                     | Their servers, their schema                   | Your own deployment (self-hostable), scoped to your chat                      |
+| **Export / delete**                   | Via their UI, if offered                      | `/export` (CSV or Google Sheet) and `/deletemydata`, any time                 |
 | **Source code**                       | Closed                                        | [This repo](https://github.com/Rrishik/dus-aane-bot) — audit before you trust |
 | **Revoke access**                     | OAuth revoke (still had full read until then) | Delete the Gmail filter                                                       |
 | **Shared expenses**                   | Manual entry (Splitwise) or absent            | One-tap split, group chat notification, settlement math built in              |
@@ -94,7 +93,7 @@ The trust model is a one-time Gmail filter that matches a **fixed allowlist of v
 
 - 👫 **Couples** — one of you registers, the other gets added to a 2-person group. Every bank email becomes a card; one tap splits it 50/50. `/stats` shows who owes whom.
 - 🏠 **Roommates** (up to 4) — same idea, with `Split with everyone`, `Split with everyone except X`, and `Just me + person Y` modes for the messy edge cases.
-- ✈️ **Friends on a trip** — spin up a group, share expenses for the trip duration, run `/stats simplify` at the end to settle in minimum-transfer mode.
+- ✈️ **Friends on a trip** — spin up a group, share expenses for the trip duration, run `/stats` in the group and tap 🔀 Simplify at the end to settle in the fewest transfers.
 - 🧑‍💻 **Anyone who wants automated personal expense tracking** — works fine solo; you just never tap the Split button.
 
 ## How it works
@@ -104,23 +103,23 @@ sequenceDiagram
     participant Bank
     participant Gmail as Your Gmail
     participant Inbox as Bot inbox
-    participant Bot as Apps Script
-    participant Sheet as Your Sheet
+    participant AS as Apps Script
+    participant W as Cloudflare Worker + D1
     participant TG as Telegram
     Bank->>Gmail: Transaction alert
     Gmail->>Inbox: Auto-forward (allowlist filter)
-    Note over Inbox: 5-minute trigger
-    Inbox->>Bot: Poll new messages
-    Bot->>Bot: Parser (LLM fallback) extracts<br/>merchant, amount, category
-    Bot->>Sheet: Write transaction row
-    Bot->>TG: DM with inline buttons
+    Note over Inbox,AS: every 5 minutes
+    AS->>Inbox: New bank mail?
+    AS->>W: Signed hand-off (one email)
+    W->>W: Parser (LLM fallback) extracts<br/>merchant, amount, category
+    W->>TG: Card with inline buttons
 ```
 
 1. Each user sets up a Gmail filter that forwards only verified transaction-alert senders (see [`TRANSACTION_SENDERS`](Constants.js)) to the bot inbox.
-2. A 5-minute Apps Script trigger polls the bot inbox, extracts the forwarder's email from the `X-Forwarded-For` or `From:` header, looks up the tenant, and writes to their sheet.
-3. For each saved transaction the bot DMs the user a card with inline buttons for tag, category, splitting and an overflow (⋯) menu.
+2. Every 5 minutes a small Apps Script project checks the bot inbox, drops anything that isn't from a bank, and hands each email to the Worker.
+3. The Worker works out who forwarded it, reads it, saves it to D1 and sends that user a card with buttons for tag, category, splitting and an overflow (⋯) menu.
 
-You can also **paste bank SMS** straight into your DM with the bot — each one becomes a card immediately, no polling involved.
+You can also **paste bank SMS** straight into your DM with the bot — each one becomes a card immediately, no polling involved. Everything you do in Telegram (buttons, `/ask`, groups) is handled by the Worker directly.
 
 The Gmail filter on the user's side is the **primary privacy boundary** — the bot literally never sees mail that doesn't match the allowlist.
 
@@ -128,14 +127,14 @@ The Gmail filter on the user's side is the **primary privacy boundary** — the 
 
 - ⚡ **Deterministic parser first** — bank templates plus generic rules read amount, direction, date, merchant, account and reference without an LLM call. Every read is validated (the amount must appear in the text, dates must be recent); low-confidence reads become "⚠️ Check this" cards.
 - 🤖 **LLM fallback** — Azure OpenAI with tool calling handles formats the parser can't read. Tap **⋯ → 🔄 Re-read** on a parser-read card to have the LLM read it again and pick the better result.
-- 📱 **SMS paste** — paste one or several bank SMS into the chat; duplicates (same SMS, or the same transaction already in from email) are caught.
-- 👫 **One-tap splits** — `Personal` / `50–50` / `Partner paid 100%` / `Split with all` / `Everyone except X` / `Just me + Y`. `/stats` rolls it into a who-owes-whom settlement with optional minimum-transfer simplification.
-- 💬 **`/ask` in plain English** — 6 structured tools (`get_spending_summary`, `get_category_breakdown`, `get_top_merchants`, `get_user_spend`, `get_split_summary`, `search_transactions`). Tool calling stays at ~600 base tokens regardless of data volume.
-- 📊 **Your sheet, your data** — each tenant gets their own Google Sheet, shared with them as editor on day 1. Native CSV export, Sheets formulas, Apps Script — anything you can do with a spreadsheet, you can do here.
-- 🧠 **Self-improving merchant map** — your 🏷 Tag and 📂 Category taps go into a `MyMerchants` tab in your own sheet and win for your future transactions. Admin-curated `MerchantResolution` / `CategoryOverrides` tabs provide shared defaults.
-- ⏪ **`/backfill`** — reprocess any date range in 5-minute chunks with progress updates.
-- 🔒 **Allowlist-only ingestion** — bot only sees emails matching ~30 fixed bank senders. OTPs, statements, security codes and personal mail never leave your Gmail.
-- 🚀 **CI/CD** — GitHub Actions push to Apps Script and Cloudflare on every commit to `main`.
+- 📱 **SMS paste** — paste one or several bank SMS into the chat. The same payment arriving by email and SMS becomes one transaction (matched on reference number, or account + amount + date); the same SMS twice is caught.
+- 👫 **One-tap splits** — `50–50` / `They owe 100%` / `Split with all` / `Everyone except X` / `Just me + Y`, plus 🤝 Settle up. Group `/stats` shows who owes whom with optional minimum-transfer simplification, and a pinned message keeps live balances.
+- 💬 **`/ask` in plain English** — structured tools over your own data (summaries, category breakdowns, top merchants, search), and it can fix a category or split a transaction when you ask it to.
+- 📤 **Your data, any time** — `/export` sends a CSV (all time, a month or a date range) with an **Open in Google Sheets** button; `/deletemydata` removes everything.
+- 🧠 **Self-improving merchant map** — your 🏷 Tag and 📂 Category taps teach the bot for your future transactions only; admin-curated shared defaults give new users a head start.
+- ⏪ **`/backfill`** — reprocess any date range of forwarded mail with progress updates.
+- 🔒 **Allowlist-only ingestion** — the bot only sees emails matching ~30 fixed bank senders. OTPs, statements, security codes and personal mail never leave your Gmail.
+- 🚀 **CI/CD** — every push to `main` is tested, then deployed to Cloudflare and Apps Script, with a smoke test at the end.
 
 ## Get started
 
@@ -143,97 +142,75 @@ The Gmail filter on the user's side is the **primary privacy boundary** — the 
 
 1. **DM the bot** → [@dusaanebot](https://t.me/dusaanebot) → `/start`.
 2. **`/register your.email@gmail.com`** — the bot emails you a 3-step Gmail auto-forwarding setup (add forwarding address → verify → create filter) with a one-tap **Verify forwarding address** button.
-3. **First valid forward arrives**. The bot provisions your own Google Sheet, shares it with you as editor, and DMs you the link.
+3. **Forward any bank email (or paste a bank SMS)** — your first transaction activates the account and its card arrives.
 
-From here, every matching transaction email auto-forwards; you get a Telegram notification within the hour. Full flow details: [User onboarding](#user-onboarding).
+From here, every matching transaction email auto-forwards; its card arrives within about 5 minutes. Full flow details: [User onboarding](#user-onboarding).
 
 ### 🛠 As an operator (self-host)
 
-Want to host it for your friend group? One Apps Script deploy serves everyone — they self-onboard with `/start`. Roughly 15 minutes if you've used clasp before. Expand the section below for the full 10-step setup.
+Want to host it for your friend group? One deployment serves everyone — they self-onboard with `/start`.
 
 <details>
-<summary><b>Self-host setup (10 steps)</b></summary>
+<summary><b>Self-host setup</b></summary>
 
 #### Prerequisites
 
-- Dedicated Gmail account for the bot (this is where all tenant forwards land)
-- Telegram bot token, Azure OpenAI API key, Cloudflare account (free, for the Telegram proxy Worker)
-- Node.js + `npm install -g @google/clasp`
+- A dedicated Gmail account for the bot (all forwards land here)
+- A Telegram bot token ([@BotFather](https://t.me/BotFather)), an Azure OpenAI deployment, a Cloudflare account
+- Node.js 24 and `npm install -g @google/clasp`
 
 #### One-time setup
 
-1. **Bot Gmail account** — create `dusaanebot.inbox@gmail.com` (or your own address — update `BOT_INBOX_EMAIL` in [Constants.js](Constants.js) if different).
-2. **Apps Script project** — `clasp login` as the bot Gmail → `clasp create --type standalone --title "dus-aane-bot" --rootDir .`.
-3. **Secrets (`AConfig.js`, gitignored)** — create it locally with these constants:
-   ```js
-   const BOT_TOKEN = "...";
-   const ADMIN_CHAT_ID = "..."; // admin / founder chat id (tenant 0)
-   const SCRIPT_APP_URL = "https://script.google.com/macros/s/.../exec";
-   const WORKER_PROXY_URL = "https://your-worker.workers.dev";
-   const ADMIN_SHEET_ID = "..."; // admin sheet — hosts the Tenants registry + tenant 0's data
-   const TEMPLATE_SHEET_ID = ""; // filled in step 6 below
-   const GROUP_TEMPLATE_SHEET_ID = ""; // filled in step 7 below; leave blank to disable group features
-   const AZURE_OPENAI_ENDPOINT = "...";
-   const AZURE_OPENAI_API_KEY = "...";
-   const AZURE_OPENAI_DEPLOYMENT_NAME = "...";
-   const AZURE_OPENAI_API_VERSION = "2024-08-01-preview";
-   const WEBHOOK_SECRET = "..."; // random [A-Za-z0-9_-]{32,}; same value as the Worker secret
-   ```
-4. `clasp push` → open the project in the script editor → authorize all OAuth scopes (Gmail, Sheets, Drive, URL fetch).
-5. Deploy as Web App (execute as bot account, access: Anyone) → note the `/exec` URL + deployment ID.
-6. **Create the template sheet** — in the script editor, run `adminCreateTemplateSheet()`. It copies your admin sheet structure, clears the data, and logs the new sheet ID. Put that ID in `AConfig.js` as `TEMPLATE_SHEET_ID` and in the GitHub secret.
-7. **Create the group-sheet template** (optional; needed for the Groups feature) — run `adminCreateGroupTemplateSheet()`. It creates a fresh blank spreadsheet pre-loaded with the per-share group schema and logs its ID. Put that ID in `AConfig.js` as `GROUP_TEMPLATE_SHEET_ID` and in the GitHub secret.
-8. **Cloudflare Worker** — set the `APPS_SCRIPT_URL` and `WEBHOOK_SECRET` secrets, `wrangler deploy` (or use the GitHub Actions workflow).
-9. **Bot wiring** — from the script editor, run `setTelegramWebhook()` (points Telegram at the worker and registers `WEBHOOK_SECRET` as its secret token) and `setTelegramCommands()` (registers the slash-menu). Re-run `setTelegramWebhook()` whenever the secret changes; until then the Worker rejects updates (Telegram retries them, nothing is lost).
-10. **Triggers** — run `installEmailTrigger()` once (5-minute `triggerEmailProcessing`). Optionally add a weekly trigger for `sendParserDigest` (parser stats DM to the admin).
+1. **Fork** this repo. If you use a different bot inbox, change `BOT_INBOX_EMAIL` in [Constants.js](Constants.js) and [worker/src/app/constants.js](worker/src/app/constants.js).
+2. **Apps Script project** — `clasp login` as the bot Gmail → `clasp create --type standalone --title "dus-aane-bot" --rootDir .` → `clasp push` → open the script editor and authorize the scopes (Gmail, Gmail send, Sheets, Drive, URL fetch). Deploy it as a **Web App** (execute as the bot account, access: Anyone) and note the `/exec` URL and deployment id.
+3. **Cloudflare** — create the database (`npx wrangler d1 create dus-aane-bot`) and put its id in [worker/wrangler.toml](worker/wrangler.toml). Create an API token with Workers, D1 and Queues edit rights. Deploy once (`npx wrangler deploy` in `worker/`) to get the Worker's URL.
+4. **GitHub secrets** — `BOT_TOKEN`, `WEBHOOK_SECRET` and `INTERNAL_SECRET` (random, `[A-Za-z0-9_-]{32,}`), `GROUP_CHAT_ID` (your Telegram chat id, for admin messages), `AZURE_OPENAI_ENDPOINT` / `_API_KEY` / `_DEPLOYMENT_NAME` / `_API_VERSION`, `WORKER_PROXY_URL` (Worker URL), `SCRIPT_APP_URL` (`/exec` URL), `CLASP_TOKEN` (contents of `~/.clasprc.json`), `DEPLOYMENT_ID`, `CLOUDFLARE_API_TOKEN`.
+5. **Push to `main`** (or run **Actions → Deploy**). CI applies the D1 schema, deploys the Worker and Apps Script, points Telegram's webhook at the Worker and runs a smoke test.
+6. **Gmail trigger** — in the script editor, run `installEmailTrigger()` once.
 
-That's it — the bot is live. Share it by giving people the Telegram handle; they self-onboard with `/start`.
+That's it — share the bot's Telegram handle; people self-onboard with `/start`. Day-to-day running, diagnosis and secret rotation: [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 #### Updating the bank sender allowlist
 
-Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank. The `scripts/gen-gmail-filter.js` script regenerates the Gmail filter query from that list, but **users don't need to re-paste their filter** when you add a sender — their existing filter just won't match the new sender until they re-paste. The bot auto-sends the fresh query on `/register` so new tenants always get the latest.
+Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank (`scripts/gen-gmail-filter.js` prints the resulting filter). Existing users' filters won't match the new sender until they re-paste the filter from a fresh setup email (`/account` → Resend setup). See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#adding-a-new-bank) for adding a parser template too.
 
 </details>
 
 ## User onboarding
 
-This is the detailed flow once the bot is deployed.
-
 **From Telegram:**
 
-1. `/start` — bot shows the welcome.
+1. `/start` — the bot shows the welcome.
 2. `/register your.name@gmail.com` — the bot:
-   - Reserves a pending tenant slot keyed to your chat + email.
-   - Emails `your.name@gmail.com` a 3-step auto-forwarding setup (add forwarding address → verify → create filter), with a one-tap **Verify forwarding address** button that auto-confirms the Gmail verification code.
-   - DMs an ack with a manual-forward fallback (forward any bank email to `dusaanebot.inbox@gmail.com`) so you can start using it immediately.
-3. **First valid forward arrives** (manual or filter-driven). The bot:
-   - Provisions a new Google Sheet (a copy of the template).
-   - Shares it with `your.name@gmail.com` as editor.
-   - DMs you a "first transaction is in" confirmation; Google emails you a share notification with the sheet link.
-4. `/account` — view status; tap **📬 Resend auto-forwarding setup** if you lost the email.
-
-From here, every matching transaction email auto-forwards; you get a Telegram notification within about 5 minutes. Bank SMS can be pasted into the chat any time.
+   - Reserves your account (pending) keyed to your chat and email.
+   - Emails `your.name@gmail.com` a 3-step auto-forwarding setup, with a one-tap **Verify forwarding address** button that auto-confirms Gmail's verification code.
+   - Replies with a manual fallback: forward any bank email to `dusaanebot.inbox@gmail.com`, or paste a bank SMS.
+3. **First transaction arrives** (forwarded or pasted) — your account activates and you get a welcome. If someone added you to a group before you registered, you join it now.
+4. `/account` — view status and registered emails; tap **📬 Resend auto-forwarding setup** if you lost the email.
 
 ## Commands
 
-| Command                           | Description                                                                                              |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `/start`                          | Welcome + onboarding instructions                                                                        |
-| `/register [email]`               | Claim a Gmail address; emails the auto-forwarding setup steps. Bare `/register` prompts for the address. |
-| `/account`                        | Show tenant status, registered emails, sheet status; one-tap resend of the auto-forwarding setup email   |
-| `/recent [N] [user]`              | Recent transactions with optional filters                                                                |
-| `/stats`                          | Analytics dashboard — monthly / trends / who owes                                                        |
-| `/ask <question>`                 | AI-powered spending queries (e.g., "food spending last month")                                           |
-| `/help`                           | Show commands                                                                                            |
-| `/backfill 10m`                   | Backfill last N minutes/hours (compact: `10m`, `2h`, `3d`, `1w`)                                         |
-| `/backfill 3 days`                | Backfill last N days/weeks/months                                                                        |
-| `/backfill YYYY-MM-DD YYYY-MM-DD` | Backfill a date range                                                                                    |
+| Command                                              | Description                                                                                              |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/start`                                             | Welcome + onboarding instructions                                                                        |
+| `/register [email]`                                  | Claim a Gmail address; emails the auto-forwarding setup steps. Bare `/register` prompts for the address. |
+| `/account`                                           | Status, registered emails, one-tap resend of the setup email                                             |
+| `/recent [N]`                                        | Recent transactions                                                                                      |
+| `/stats`                                             | Dashboard — recent, weekly / monthly trends                                                              |
+| `/ask <question>`                                    | Ask about your spending in plain English (e.g. "food spending last month"); 5 a day                      |
+| `/export [YYYY-MM \| from to]`                       | CSV of your transactions, with an **Open in Google Sheets** button                                       |
+| `/backfill 10m` / `3 days` / `YYYY-MM-DD YYYY-MM-DD` | Re-read forwarded mail from a period                                                                     |
+| `/deletemydata`                                      | Delete your account and data (asks first)                                                                |
+| `/cancel`                                            | Cancel a pending prompt                                                                                  |
+| `/help`                                              | Show commands                                                                                            |
+
+**In a group** (after adding the bot as admin): `/start` sets the group up (or re-syncs members), `/stats` shows who owes whom, `/settle @name 500` records a cash payment, `/account` shows the group's setup, `/help`.
 
 ### Transaction cards
 
 Each transaction notification is a two-line card with:
 
-- **Split with <group>** — one row per group you're in; opens the split modes.
+- **Split with <group>** — one row per group you're in; opens the split and settle options.
 - **🏷 <merchant> ▾** — rename the merchant; future transactions from the same payee use the new name.
 - **📂 <category> ▾** — pick a category; future transactions from that merchant default to it.
 - **⋯** — overflow: **🔄 Re-read** (parser-read cards, once) or **⚠️ Report error**, plus **🗑️ Delete** (hidden on split cards — tap **↩️ Make personal again** first).
@@ -247,174 +224,68 @@ Send one or more bank SMS as a plain message in your DM with the bot. Separate s
 ## Under the hood
 
 <details>
-<summary><b>Data model</b> — sheet schemas, per-share group rows, shared registry tabs</summary>
-
-Each personal tenant's spreadsheet has a transactions tab (first tab) and a `MyMerchants` tab:
-
-| Tab              | Columns                                                                                                                                         | Purpose                                                   |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| **Transactions** | Email Date, Txn Date, Merchant, Amount, Category, Type, User, Message ID, Currency, Group Ref, Group Message ID, Parsed By, Source Text, Status | One row per transaction                                   |
-| **MyMerchants**  | Pattern, Name, Category                                                                                                                         | This user's 🏷 / 📂 corrections; win over shared defaults |
-
-- `Message ID` is the Gmail id, or `sms-<hash>` for pasted SMS (the dedupe key either way).
-- `Group Ref = "<group_chat_id>:<Tx ID>"` and `Group Message ID` (Telegram id of the group notification) are set when a transaction is split; blank otherwise.
-- `Parsed By` is the parser template id or `llm` (`|rr` suffix once Re-read was used); `Source Text` keeps the raw text for pasted SMS only; `Status = review` marks unconfirmed "Check this" rows, which analytics ignore.
-- Message ID and every column from Group Ref on are **hidden by default**; existing sheets get the new columns added automatically on the next write.
-  Group tenants get their own spreadsheet with the **per-share β schema** — one row per share, so a 4-way split is 4 rows linked by the same Tx ID:
-
-| Columns                                                                                                                    | Purpose           |
-| -------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| Email Date, Tx Date, Merchant, Amount, Currency, Paid By, Share Holder, Share Amount, Tx ID, Category, Tx Type, Message ID | One row per share |
-
-`Tx Type = "Settlement"` (with `Category = "Settlement"`) marks settlement rows that _reduce_ what the payer owes the share-holder, instead of adding to the debt.
-
-The admin sheet (pointed at by `ADMIN_SHEET_ID`) hosts **shared registry + mapping** tabs used across all tenants:
-
-| Tab                    | Columns                                                                                                                                         | Purpose                                                                         |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| **Tenants**            | chat_id, name, emails, sheet_id, status, created_at, notes, last_forward_at, last_nag_at, nag_count, chat_type, group_members, primary_currency | Registry — maps Telegram chat / forwarder gmail / group chat → tenant sheet     |
-| **MerchantResolution** | Raw Pattern, Resolved Name                                                                                                                      | Raw bank strings (`FLIPKART_MWS_MERCH`) → clean names (`Flipkart`)              |
-| **CategoryOverrides**  | Merchant, Category                                                                                                                              | Default category per merchant                                                   |
-| **ParserEvents**       | time, chat_id, channel, template_id, event, fields_changed, message_id                                                                          | Parser telemetry (no amounts, merchants or text) — drives auto-disable + digest |
-
-`chat_type` is one of `personal` or `group`. For groups, `group_members` is a CSV of the member chat_ids (max 4) and `primary_currency` is the default currency for `/settle` and FX display.
-
-**Why `MerchantResolution` and `CategoryOverrides` are shared:** banks send the same raw patterns to every tenant, so an admin-curated table gives new tenants a pre-trained bot on day 1. User taps never write there — they go to the user's own `MyMerchants` tab, so one user's corrections (and UPI payee names) never reach anyone else.
-
-</details>
-
-<details>
-<summary><b>Architecture</b> — request paths, tenant routing, tool-calling rationale</summary>
+<summary><b>Architecture</b> — request paths, isolation, why tool calling</summary>
 
 ```mermaid
 flowchart LR
     Bank[User's bank] --> UGmail[User's Gmail]
-    UGmail -->|filter forward| Inbox[dusaanebot.inbox@gmail.com]
+    UGmail -->|filter forward| Inbox[Bot inbox]
     Inbox -->|5-min poll| AS[Apps Script]
-    AS -->|extract + categorise| Sheet[(Tenant Sheet)]
-    AS -->|DM with buttons| TG[Telegram]
-
-    User[User] -->|webhook| CF[Cloudflare Worker]
-    CF -->|proxy| AS
-    AS -->|reply| TG
+    AS -->|signed POST /ingest/email| W[Cloudflare Worker]
+    User[User] -->|Telegram webhook| W
+    W <--> D1[(D1)]
+    W -->|slow work| Q[Queue] --> W
+    W -->|cards, answers| TG[Telegram]
+    W -->|signed actions: setup email,<br/>email body, export sheet| AS
 ```
 
-- **Inbound email path** is async via Gmail polling; no webhook from Cloudflare.
-- **Inbound Telegram path** goes through the Worker proxy so Apps Script 302 redirects don't retry webhooks. The Worker checks Telegram's `X-Telegram-Bot-Api-Secret-Token` header and forwards with `?k=<WEBHOOK_SECRET>`, which `doPost` verifies — the public `/exec` URL ignores anything else.
-- **Per-message tenant routing** — `extractForwarderEmail(msg)` reads `X-Forwarded-For` (Gmail filter auto-forward) first, falls back to `From:` (manual forwards). That email keys into the Tenants registry.
-- **`/backfill`** is deferred to an async time-based trigger (it self-schedules in 5-minute chunks until the range is done — well over Telegram's 60s webhook budget). `/ask` runs inline since its full round-trip (sheet read + 1–3 LLM iterations) is ~5–15s, comfortably under the webhook limit; skipping the trigger queue saves the 1–30s schedule wait that dominated `/ask` perceived latency.
-- **`/ask`** shows a `sendChatAction("typing")` indicator in the chat header while the LLM loop runs; the indicator is re-emitted before each iteration since Telegram auto-clears it after ~5s.
+- **Telegram → Worker.** The webhook carries Telegram's secret-token header; quick taps are answered straight away, while anything that waits on the LLM or Apps Script (`/ask`, pasted SMS, `/export`, Re-read) runs from a Cloudflare Queue so it isn't cut off.
+- **Email → Apps Script → Worker.** Apps Script owns the bot's Gmail: it filters new mail and posts each email to the Worker, labelling it only once the Worker accepts it (failures retry for about a day). It also sends the setup email, re-fetches email bodies for Re-read, and creates Export-to-Sheet copies. Both directions are HMAC-signed with a shared secret.
+- **Isolation.** Every D1 query is scoped to the caller's Telegram chat id; group data is only visible to that group's members.
+- **Scheduled jobs.** One daily cron sends the Friday weekly summary, Tuesday reminders to inactive users, a Monday parser report to the admin, and purges expired state.
 
-### Tool-calling (MCP-like pattern)
+### Tool calling (MCP-like pattern)
 
 Both extraction and `/ask` use OpenAI function calling. Tools are defined once, the LLM decides when to call them, and only the tool's response (not the full dataset) enters the context.
 
-**Why not RAG or context injection?** Transaction data is structured — embedding rows into a vector DB adds cost with no benefit, and stuffing all merchant→category mappings into the prompt floods the context window. Tool calling stays at ~600 base tokens regardless of data volume.
+**Why not RAG or context injection?** Transaction data is structured — embedding rows into a vector DB adds cost with no benefit, and stuffing all merchant→category mappings into the prompt floods the context window.
 
-**Extraction — 1 tool** (`get_merchant_category`): the LLM categorises well-known merchants directly; calls the tool only for unfamiliar ones. Self-optimises: common merchants cost 1 round-trip, rare ones cost 2.
+**Extraction — 1 tool** (`get_merchant_category`): the LLM categorises well-known merchants directly; calls the tool only for unfamiliar ones.
 
-**`/ask` — 6 tools**:
-
-| Tool                     | Description                                                                |
-| ------------------------ | -------------------------------------------------------------------------- |
-| `get_spending_summary`   | Spend (excl. card bills, transfers out, investments) + credits by currency |
-| `get_category_breakdown` | Spending grouped by category                                               |
-| `get_top_merchants`      | Top N merchants by spend amount                                            |
-| `get_user_spend`         | Per-user spending totals                                                   |
-| `get_split_summary`      | Split vs personal totals, settlement calc                                  |
-| `search_transactions`    | Filter by merchant, category, user, amount, type, date range               |
-
-The LLM chains up to 3 tool calls per query.
+**`/ask` — 9 tools**: `get_spending_summary`, `get_category_breakdown`, `get_top_merchants`, `get_user_spend`, `search_transactions`, `get_groups`, `update_transaction`, `split_transaction`, and `ask_user` (asks you a follow-up question; reply to it to continue).
 
 </details>
 
 <details>
-<summary><b>Project structure</b> — file tree with one-line purposes</summary>
+<summary><b>Data model</b> — D1 tables</summary>
 
-```
-├── Code.js                 # Webhook endpoint, async dispatch, time-based triggers
-├── Backfill.js             # /backfill parser, command handler, chunked orchestration
-├── Nudge.js                # Dormant-tenant nudge: shouldNudge + weekly trigger handler
-├── Constants.js            # Categories, column mappings, bank sender allowlists, Gmail query
-├── AIProviders.js          # Azure OpenAI tool-calling client
-├── TransactionProcessor.js # Email pipeline: parser/LLM extraction, validation, merchant resolution, saving
-├── Parser.js               # Deterministic email/SMS parser + shared validation (plain JS, no Apps Script APIs)
-├── BankTemplates.js        # Per-bank message templates with test samples (data only)
-├── ParserTelemetry.js      # parser.mode / disabled templates, ParserEvents log, auto-disable, weekly digest
-├── SmsPaste.js             # SMS paste → parse/LLM → card, dedupe
-├── PendingInput.js         # Expiring "waiting for your reply" flags
-├── BotHandlers.js          # Command / callback handlers, Re-read + review cards
-├── TelegramUtils.js        # Telegram API, message formatting, retry/backoff
-├── GoogleSheetUtils.js     # Sheet CRUD, MyMerchants + shared merchant tabs, bulk scripts
-├── Analytics.js            # /stats data + formatters, split settlement
-├── AskTools.js             # /ask tool definitions, executor, system prompt
-├── TenantRegistry.js       # Tenants tab CRUD, tenant lookup helpers
-├── Onboarding.js           # /start, /register, /account, sheet provisioning, setup email
-├── Groups.js               # group provisioning, member onboarding, split/settle/stats UI + writes
-├── GroupSheet.js           # group-sheet β-schema headers + open helper
-├── AdminHelpers.js         # adminCreateTemplateSheet, adminProvisionTenantSheet, seed helpers
-├── worker/src/index.js     # Cloudflare Worker proxy
-└── .github/workflows/deploy.yml  # CI/CD pipeline
-```
+| Table                                                                  | Holds                                                                                                                                    |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenants`, `tenant_emails`                                             | Users (Telegram chat) and groups; registered forwarder emails                                                                            |
+| `transactions`                                                         | One row per payment: date, amount (integer ×100), currency, direction, kind, merchant, category, account last 4, reference, status       |
+| `transaction_sources`                                                  | How each transaction arrived (Gmail id or SMS hash, parser template); an email and an SMS of the same payment are two sources of one row |
+| `splits`, `split_shares`, `settlements`                                | Group splits, each member's share, and settlements                                                                                       |
+| `group_members`, `group_invites`                                       | Group membership (join order matters for old cards) and invites for not-yet-registered people                                            |
+| `merchant_rules`                                                       | Name / category rules: each user's own (win for them) and shared defaults                                                                |
+| `ask_usage`, `backfill_jobs`, `settings`, `parser_events`, `ephemeral` | `/ask` quota, backfill progress, parser mode, parser telemetry (no amounts or text), short-lived prompts                                 |
+
+Schema: [worker/migrations](worker/migrations). What's stored and for how long: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 </details>
 
 <details>
-<summary><b>CI/CD</b> — GitHub Actions pipeline + required secrets</summary>
+<summary><b>Project structure</b></summary>
 
-GitHub Actions on push to `main`:
-
-1. Prettier format check
-2. Generate `AConfig.js` from GitHub secrets
-3. `clasp push --force` to Apps Script
-4. `clasp deploy` with deployment ID
-5. Deploy Cloudflare Worker via wrangler
-
-**Required GitHub Secrets**: `CLASP_TOKEN`, `DEPLOYMENT_ID`, `APPS_SCRIPT_URL`, plus every variable in `AConfig.js` (see step 3 of self-host above) — in particular `PROD_SHEET_ID`, `TEMPLATE_SHEET_ID`, `GROUP_TEMPLATE_SHEET_ID` and `WEBHOOK_SECRET` (also pushed to the Worker; the Worker deploy step fails if it's missing). Secret names remain `GROUP_CHAT_ID` and `PROD_SHEET_ID`; the deploy step maps them to `ADMIN_CHAT_ID` and `ADMIN_SHEET_ID` in the generated file.
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#layout).
 
 </details>
 
 <details>
-<summary><b>Troubleshooting</b> — common operator issues</summary>
+<summary><b>Troubleshooting</b></summary>
 
-### Bot not responding
-
-- Run `setTelegramWebhook()` from the script editor; check the webhook URL points at the Worker.
-- Check Apps Script → Executions for errors.
-- Verify `BOT_TOKEN` is valid (`GET https://api.telegram.org/bot<token>/getMe`).
-
-### Transactions not showing up
-
-- Check the bot inbox — is the forward actually landing? If not, the user's Gmail filter isn't matching. Regenerate via `node scripts/gen-gmail-filter.js` and re-paste.
-- Run `/checknow`-style manual trigger: from the script editor, run `triggerEmailProcessing` — it processes everything since the last run without waiting for the next 5-minute trigger.
-- Check `Tenants` tab — is the user's email registered against their `chat_id`? Multi-forwarder setups need `upsertPendingTenant(chatId, email)` for each.
-- Check Apps Script logs for `[extractTransactions] No tenant for <email>` lines — that's a forward from an unregistered address.
-
-### Tenant stuck in PENDING (no sheet provisioned)
-
-- Activation requires a successful first forward from the registered email. Check the bot inbox: did any forward arrive?
-- The forward's sender (auto-forward `X-Forwarded-For`, or manual-forward `From:`) must match the `/register`-ed email exactly.
-- Tenant can `/account` → **Resend auto-forwarding setup** to get the email again.
-- Check Apps Script logs for `[extractTransactions] No tenant for <email>` lines — that's a forward from an address not in any tenant's email list.
-
-### "I couldn't create your sheet" (Dutch / localized Drive error)
-
-- `TEMPLATE_SHEET_ID` in `AConfig.js` / CI secret is wrong or the script account can't access it.
-- Run `adminCreateTemplateSheet()` from the script editor, copy the logged ID, update `TEMPLATE_SHEET_ID` secret, redeploy.
-
-### Wrong category on a transaction
-
-- Use the **📂** pill on the card — it fixes the row and teaches that user's future transactions (via their `MyMerchants` tab).
-- For shared defaults: edit `CategoryOverrides` manually, then run `applyCategoryOverridesToMainSheet()`.
-
-### Parser read something wrong
-
-- Users tap **⋯ → 🔄 Re-read**; accepted re-reads are logged to the admin sheet's `ParserEvents` tab.
-- A template with 3 accepted re-reads in 7 days is auto-disabled (its messages go to the LLM) and the admin gets a DM. Fix the template in `BankTemplates.js` and remove its id from the `parser.disabledTemplates` script property.
-- `parser.mode` script property: `shadow` (default — LLM result is saved, parser result is only compared and logged), `on` (confident parser reads skip the LLM), `off`.
+See [docs/OPERATIONS.md](docs/OPERATIONS.md#diagnosis) — the **Diagnose** workflow shows the webhook state, D1 activity and what happened to each recent forwarded email.
 
 </details>
-
 ## Contributing
 
 See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
@@ -429,7 +300,7 @@ MIT. The code is open — audit it, fork it, self-host it.
 
 ## Acknowledgments
 
-- Azure OpenAI for transaction extraction
+- Azure OpenAI for transaction extraction and `/ask`
 - Telegram Bot API
-- Google Apps Script
-- Cloudflare Workers
+- Cloudflare Workers, D1 and Queues
+- Google Apps Script (Gmail polling)
