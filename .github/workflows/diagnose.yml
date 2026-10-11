@@ -69,3 +69,6 @@ jobs:
           echo "parser events:";             q "SELECT channel, event, COUNT(*) AS n FROM parser_events WHERE ts > $since GROUP BY 1, 2"
           echo "latest email source (min ago):"; q "SELECT (CAST(strftime('%s','now') AS INTEGER) * 1000 - MAX(received_at)) / 60000 AS minutes_ago FROM transaction_sources WHERE source = 'email'"
           echo "tenants by status:";         q "SELECT kind, status, COUNT(*) AS n FROM tenants GROUP BY 1, 2"
+          echo "parser outcomes by template:"; q "SELECT channel, template_id, event, COUNT(*) AS n FROM parser_events WHERE ts > $since GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
+          echo "fields that differed (shadow / re-read):"; q "SELECT template_id, event, fields_changed, COUNT(*) AS n FROM parser_events WHERE ts > $since AND fields_changed IS NOT NULL GROUP BY 1, 2, 3 ORDER BY 4 DESC"
+          echo "who read each saved source:"; q "SELECT source, CASE WHEN parsed_by IS NULL THEN '(imported)' WHEN parsed_by = 'llm' THEN 'llm' ELSE 'parser' END AS reader, COUNT(*) AS n FROM transaction_sources WHERE received_at > $since GROUP BY 1, 2"
