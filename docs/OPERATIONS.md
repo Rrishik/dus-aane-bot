@@ -67,6 +67,33 @@ Users can take their own copy at any time with `/export`.
 
 Staging can't receive forwarded email (Apps Script only talks to the production Worker); use pasted SMS.
 
+## Admin dashboard
+
+`https://admin.healthvault.online` — a read-only dashboard (a separate Worker, `dus-aane-bot-admin`, reading the same D1 database). It shows:
+
+- users, groups and transactions per day; items awaiting review;
+- ingestion health: the Telegram webhook, the Gmail poller's last run, retry list and last Worker failure, recent bot-inbox mail and what happened to it;
+- parser accuracy per reader (each bank template, the generic rules, and the LLM): saves, shadow agreement, corrections (accepted Re-reads + ✏️ Fix) and correction rate, and which fields differed;
+- per-user and per-group counts under masked ids (`u-1a2b3c`).
+
+It never shows amounts, merchants, names, emails or message text.
+
+**Access.** Cloudflare Access (Zero Trust) asks for a login before any request reaches the Worker, and the Worker re-checks Access's signed token on every request — it refuses everything if the Access settings are missing. The Worker has no `workers.dev` URL. The site on the bare `healthvault.online` (GitHub Pages) is unaffected; only an `admin` DNS record is added.
+
+**One-time setup:**
+
+1. **API token** — add to `CLOUDFLARE_API_TOKEN` (Cloudflare → My Profile → API Tokens → edit), for zone `healthvault.online`: _Zone → Zone → Read_, _Zone → DNS → Edit_, _Zone → Workers Routes → Edit_. Then run **Actions → Admin dashboard**; it deploys the Worker on `admin.healthvault.online` (refusing every request until step 2–3).
+2. **Access application** — Cloudflare → Zero Trust (pick a team name on first visit; the Free plan is enough) → Access → Applications → **Add an application → Self-hosted**: domain `admin.healthvault.online`; session e.g. 24 h; policy **Allow** → _Emails_ → your address. Login method: one-time PIN works out of the box. Save, then copy the application's **Application Audience (AUD) Tag**.
+3. **Secrets** —
+   ```powershell
+   gh secret set ACCESS_TEAM_DOMAIN --body "<team>.cloudflareaccess.com"
+   gh secret set ACCESS_AUD          # paste the AUD tag
+   gh secret set ADMIN_EMAILS --body "you@example.com"
+   gh workflow run admin.yml
+   ```
+
+To add another admin, add their email to both the Access policy and `ADMIN_EMAILS`. The workflow ends by checking that `/api/summary` answers with a login redirect or 403 when not signed in.
+
 ## Apps Script
 
 The Apps Script project needs only the 5-minute `triggerEmailProcessing` trigger (and short-lived `continueWorkerBackfill` triggers during `/backfill`). Any other trigger is removed automatically on the next poller run. If the email trigger is ever missing, run `installEmailTrigger()` once from the script editor.

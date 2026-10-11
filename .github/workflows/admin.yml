@@ -1,0 +1,72 @@
+name: Admin dashboard
+
+# Deploys the read-only admin dashboard (admin.healthvault.online), kept
+# separate from the bot's Deploy so a dashboard problem never blocks it.
+# See docs/OPERATIONS.md → Admin dashboard for the one-time Access setup.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "worker/src/**"
+      - "worker/wrangler.admin.toml"
+      - ".github/workflows/admin.yml"
+  workflow_dispatch:
+
+concurrency: admin
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      W: npx --yes wrangler@4.81.1
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - run: npm ci
+        working-directory: .
+
+      - run: npx vitest run worker/test/admin.test.js
+        working-directory: .
+
+      - name: Deploy the admin Worker
+        run: $W deploy --config wrangler.admin.toml
+
+      # Empty values are skipped; the Worker refuses every request until the
+      # Access settings are present.
+      - name: Upload secrets
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.SCRIPT_APP_URL }}
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          BOT_ORIGIN: ${{ secrets.WORKER_PROXY_URL }}
+          ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
+          ACCESS_AUD: ${{ secrets.ACCESS_AUD }}
+          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
+        run: |
+          node -e '
+            const keys = ["APPS_SCRIPT_URL", "INTERNAL_SECRET", "BOT_TOKEN", "BOT_ORIGIN", "ACCESS_TEAM_DOMAIN", "ACCESS_AUD", "ADMIN_EMAILS"];
+            const out = Object.fromEntries(keys.filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
+            const missing = keys.filter((k) => !process.env[k]);
+            if (missing.length) console.log("::warning::Not set yet: " + missing.join(", "));
+            require("fs").writeFileSync("admin-secrets.json", JSON.stringify(out));'
+          $W secret bulk admin-secrets.json --config wrangler.admin.toml
+          rm -f admin-secrets.json
+
+      # Without a login the dashboard must not answer with data: either
+      # Access redirects to its login page, or the Worker refuses (403).
+      - name: Check it's locked
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" https://admin.healthvault.online/api/summary || true)
+          echo "Unauthenticated /api/summary → HTTP $code"
+          case "$code" in
+            302|401|403) echo "Locked." ;;
+            *) echo "::error::Expected a redirect or 403 without login, got $code"; exit 1 ;;
+          esac

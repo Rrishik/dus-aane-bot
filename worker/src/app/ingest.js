@@ -148,13 +148,13 @@ export async function ingest(ctx, input) {
 
   const id = await insertTransaction(db, tenantId, txn, source, ctx.now());
 
-  if (parsedBy !== PARSED_BY_LLM) {
-    await logParserEvent(
-      db,
-      { tenantId, channel, templateId: parsedBy, event: "saved", sourceRef: input.sourceRef },
-      ctx.now()
-    );
-  }
+  // Logged for every reader (template id or "llm") so user fixes can be
+  // turned into a correction rate for each.
+  await logParserEvent(
+    db,
+    { tenantId, channel, templateId: parsedBy, event: "saved", sourceRef: input.sourceRef },
+    ctx.now()
+  );
   if (!input.silent) await sendCard(ctx, input.tenant, id);
   if (txn.status === "confirmed" && !input.silent) await touchActivity(db, tenantId, ctx.now());
   return { status: txn.status === "review" ? "review" : "saved", transactionId: id };

@@ -1,0 +1,21 @@
+# Admin dashboard (read-only) on admin.healthvault.online, behind Cloudflare
+# Access. Deployed by .github/workflows/admin.yml. No workers.dev or preview
+# URLs: the custom domain (where Access applies) is the only way in.
+name = "dus-aane-bot-admin"
+main = "src/admin/index.js"
+compatibility_date = "2024-01-01"
+workers_dev = false
+preview_urls = false
+
+routes = [{ pattern = "admin.healthvault.online", custom_domain = true }]
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+
+# Same database as the bot; the dashboard only runs SELECTs.
+[[d1_databases]]
+binding = "DB"
+database_name = "dus-aane-bot"
+database_id = "e7b12ae1-a783-4a2f-875e-a6128ffc226f"

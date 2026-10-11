@@ -117,7 +117,10 @@ describe("ingest — email", () => {
     const [t] = await listTransactions(ctx.db, "111");
     expect((await getSources(ctx.db, "111", t.id))[0]).toMatchObject({ parsed_by: "llm", raw_text: null });
     expect(t.forwarder).toBe("alice");
-    expect(await events(ctx)).toEqual([{ event: "shadow_match", template_id: "generic_v1" }]);
+    expect(await events(ctx)).toEqual([
+      { event: "shadow_match", template_id: "generic_v1" },
+      { event: "saved", template_id: "llm" }
+    ]);
   });
 
   it("on mode skips the LLM for confident parses", async () => {

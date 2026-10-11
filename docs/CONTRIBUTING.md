@@ -15,6 +15,7 @@ worker/
   src/db/               # D1 data layer — every query is scoped by tenant id
   src/parser/           # Deterministic parser: templates.js (data) + parser.js (rules, validation)
   src/llm/, src/telegram/  # Azure OpenAI and Telegram clients
+  src/admin/            # Read-only admin dashboard (separate Worker, wrangler.admin.toml)
   migrations/           # D1 schema (NNNN_*.sql)
   scripts/              # set-webhook.mjs, smoke.mjs (run by CI)
   test/                 # Worker tests (Node + node:sqlite)
