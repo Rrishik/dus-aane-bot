@@ -60,7 +60,9 @@ export async function handleAdmin(request, env, { fetchImpl = (...a) => fetch(..
   const auth = await verifyAccess(request, env, { fetchImpl, now });
   if (!auth.ok) {
     console.warn("[admin] denied:", auth.reason);
-    return respond("Forbidden", "text/plain; charset=utf-8", 403);
+    // The reason names which check failed (never secret values); Access has
+    // already stopped anyone who isn't on its policy.
+    return respond("Forbidden: " + auth.reason, "text/plain; charset=utf-8", 403);
   }
   if (request.method !== "GET") return respond("Method not allowed", "text/plain; charset=utf-8", 405);
 

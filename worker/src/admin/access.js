@@ -40,14 +40,35 @@ export function resetAccessCache() {
   certsCache = { url: null, at: 0, keys: [] };
 }
 
+// Accepts "team.cloudflareaccess.com", "https://team.cloudflareaccess.com/"
+// or just "team".
+export function normalizeTeamDomain(value) {
+  let t = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "");
+  if (t && !t.includes(".")) t += ".cloudflareaccess.com";
+  return t;
+}
+
+export function parseAdminEmails(value) {
+  return String(value || "")
+    .split(/[,\s;]+/)
+    .map((s) =>
+      s
+        .trim()
+        .replace(/^["'<]+|["'>]+$/g, "")
+        .toLowerCase()
+    )
+    .filter(Boolean);
+}
+
 // → { ok: true, email } or { ok: false, reason }.
 export async function verifyAccess(request, env, { fetchImpl = (...a) => fetch(...a), now = Date.now() } = {}) {
-  const team = String(env.ACCESS_TEAM_DOMAIN || "").trim();
+  const team = normalizeTeamDomain(env.ACCESS_TEAM_DOMAIN);
   const aud = String(env.ACCESS_AUD || "").trim();
-  const allowed = String(env.ADMIN_EMAILS || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+  const allowed = parseAdminEmails(env.ADMIN_EMAILS);
   if (!team || !aud || !allowed.length) return { ok: false, reason: "not configured" };
 
   const token = tokenFrom(request);

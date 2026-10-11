@@ -70,3 +70,25 @@ jobs:
             302|401|403) echo "Locked." ;;
             *) echo "::error::Expected a redirect or 403 without login, got $code"; exit 1 ;;
           esac
+
+      # Access's login redirect names its team domain and the application's
+      # AUD tag; compare them with the secrets (match / no match only).
+      - name: Check the Access settings
+        env:
+          ACCESS_TEAM_DOMAIN: ${{ secrets.ACCESS_TEAM_DOMAIN }}
+          ACCESS_AUD: ${{ secrets.ACCESS_AUD }}
+          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
+        run: |
+          node --input-type=module -e '
+            import { normalizeTeamDomain, parseAdminEmails } from "./src/admin/access.js";
+            const res = await fetch("https://admin.healthvault.online/", { redirect: "manual" });
+            const loc = res.headers.get("location");
+            if (res.status !== 302 || !loc) { console.log("::warning::Access is not in front of the dashboard yet (HTTP " + res.status + ")"); process.exit(0); }
+            const login = new URL(loc);
+            const checks = {
+              "team domain matches Access": normalizeTeamDomain(process.env.ACCESS_TEAM_DOMAIN) === login.host,
+              "AUD tag matches the application": (process.env.ACCESS_AUD || "").trim() === login.searchParams.get("kid"),
+              "ADMIN_EMAILS has valid addresses": parseAdminEmails(process.env.ADMIN_EMAILS).every((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) && parseAdminEmails(process.env.ADMIN_EMAILS).length > 0
+            };
+            for (const [k, v] of Object.entries(checks)) console.log((v ? "✅ " : "❌ ") + k);
+            if (Object.values(checks).includes(false)) process.exit(1);'

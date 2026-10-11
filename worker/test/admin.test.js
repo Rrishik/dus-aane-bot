@@ -113,7 +113,25 @@ describe("Access check", () => {
   ])("rejects: %s", async (_name, makeToken) => {
     const res = await get("/api/summary", { env: ENV(testContext().db), token: await makeToken() });
     expect(res.status).toBe(403);
-    expect(await res.text()).toBe("Forbidden");
+    expect(await res.text()).toMatch(/^Forbidden: [a-z ]+$/);
+  });
+
+  it("names the failed check", async () => {
+    const env = ENV(testContext().db);
+    const body = async (token) => (await get("/", { env, token })).text();
+    expect(await body(await sign(kp, claims({ email: "friend@example.com" })))).toBe("Forbidden: not an admin");
+    expect(await body(await sign(kp, claims({ aud: ["x"] })))).toBe("Forbidden: wrong audience");
+  });
+
+  it("tolerates common ways of entering the settings", async () => {
+    const token = await sign(kp, claims());
+    for (const team of ["https://" + TEAM + "/", TEAM.toUpperCase(), "acme"]) {
+      for (const emails of ['"admin@example.com"', "<Admin@Example.com>", "x@y.z; admin@example.com"]) {
+        resetAccessCache();
+        const env = { ...ENV(testContext().db), ACCESS_TEAM_DOMAIN: team, ADMIN_EMAILS: emails };
+        expect((await get("/", { env, token })).status).toBe(200);
+      }
+    }
   });
 
   it("accepts a valid token from the header or the CF_Authorization cookie, and caches the keys", async () => {
