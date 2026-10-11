@@ -6,7 +6,8 @@ import { getTransaction, getSources } from "../src/db/transactions.js";
 import { getMerchantRules } from "../src/db/merchantRules.js";
 import { createSplit } from "../src/db/splits.js";
 import { getDisabledTemplates, logParserEvent } from "../src/db/settings.js";
-import { shortenMerchantPattern } from "../src/app/cardActions.js";
+import { shortenMerchantPattern, parseAmountInput } from "../src/app/cardActions.js";
+import { categoriesFor } from "../src/app/constants.js";
 
 const HDFC_SMS =
   "Sent Rs.250.00 From HDFC Bank A/C *1234 To SWIGGY On 07/10/26 Ref 628012345678 Not You? Call 18002586161";
@@ -104,16 +105,18 @@ describe("🏷 tag", () => {
 });
 
 describe("⋯ menu, back and delete", () => {
-  it("offers Re-read for parser rows and Report once re-read", async () => {
+  const menu = (ctx) => lastMarkup(ctx).inline_keyboard.map((r) => r.map((b) => b.callback_data.split("_")[0]));
+
+  it("offers Re-read for parser rows, Fix, Report and Delete", async () => {
     const { ctx, id } = await withCard();
     await handleUpdate(ctx, tap("help_" + id));
-    expect(lastMarkup(ctx).inline_keyboard[0].map((b) => b.callback_data)).toEqual(["rr_" + id, "del_" + id]);
+    expect(menu(ctx)).toEqual([["rr", "fix"], ["report", "del"], ["back"]]);
     await handleUpdate(ctx, tap("rrk_" + id));
     await handleUpdate(ctx, tap("help_" + id));
-    expect(lastMarkup(ctx).inline_keyboard[0].map((b) => b.callback_data)).toEqual(["report_" + id, "del_" + id]);
+    expect(menu(ctx)).toEqual([["fix"], ["report", "del"], ["back"]]);
   });
 
-  it("split transactions hide and refuse delete", async () => {
+  it("split transactions hide Fix and Delete and refuse them", async () => {
     const { ctx, id } = await withCard();
     await seedTenant(ctx, "222");
     await seedGroup(ctx, "-100", ["111", "222"]);
@@ -125,10 +128,13 @@ describe("⋯ menu, back and delete", () => {
       shares: [{ holderId: "222", amountMinor: 12500 }]
     });
     await handleUpdate(ctx, tap("help_" + id));
-    expect(lastMarkup(ctx).inline_keyboard[0].map((b) => b.callback_data)).toEqual(["report_" + id]);
+    expect(menu(ctx)).toEqual([["report"], ["back"]]);
     await handleUpdate(ctx, tap("delyes_" + id));
     expect(sent(ctx).at(-1)).toMatch(/Make it personal again first/);
     expect((await getTransaction(ctx.db, "111", id)).status).toBe("confirmed");
+    await handleUpdate(ctx, tap("flip_" + id));
+    expect(sent(ctx).at(-1)).toMatch(/Make it personal again first, then fix it/);
+    expect((await getTransaction(ctx.db, "111", id)).direction).toBe("debit");
     await handleUpdate(ctx, tap("back_" + id));
     expect(lastMarkup(ctx).inline_keyboard[0][0].callback_data).toBe("gun:" + id);
   });
@@ -168,6 +174,66 @@ describe("⋯ menu, back and delete", () => {
     expect(lastMarkup(ctx).inline_keyboard[0][0].text).toBe("📩 Reported — thanks!");
     const evt = await ctx.db.prepare("SELECT event, template_id FROM parser_events WHERE event = 'report'").first();
     expect(evt).toEqual({ event: "report", template_id: "hdfc_upi_sent_sms_v1" });
+  });
+});
+
+describe("✏️ Fix", () => {
+  const fixEvents = (ctx) =>
+    ctx.db
+      .prepare("SELECT template_id, fields_changed FROM parser_events WHERE event = 'user_fix' ORDER BY rowid")
+      .all()
+      .then((r) => r.results);
+
+  it("flips debit ↔ credit, re-guessing a category that no longer fits, and logs the fix", async () => {
+    const { ctx, id } = await withCard();
+    await handleUpdate(ctx, tap("fix_" + id));
+    expect(lastMarkup(ctx).inline_keyboard[0].map((b) => [b.text, b.callback_data])).toEqual([
+      ["🟢 It was money in", "flip_" + id],
+      ["💰 Amount", "amt_" + id]
+    ]);
+    await handleUpdate(ctx, tap("flip_" + id));
+    const t = await getTransaction(ctx.db, "111", id);
+    expect(t.direction).toBe("credit");
+    expect(categoriesFor("credit").concat([null])).toContain(t.category);
+    expect(t.kind).not.toBe("spend");
+    expect(lastEdit(ctx)[2]).toMatch(/^🟢 /);
+    expect(await fixEvents(ctx)).toEqual([{ template_id: "hdfc_upi_sent_sms_v1", fields_changed: "transaction_type" }]);
+  });
+
+  it("corrects the amount from a reply, and rejects junk", async () => {
+    const { ctx, id } = await withCard();
+    await handleUpdate(ctx, tap("amt_" + id, 321));
+    expect(sent(ctx).at(-1)).toMatch(/Currently ₹250/);
+    await handleUpdate(ctx, reply("about 300"));
+    expect(sent(ctx).at(-1)).toMatch(/not an amount/);
+    await handleUpdate(ctx, reply("₹1,250.50"));
+    expect((await getTransaction(ctx.db, "111", id)).amount_minor).toBe(125050);
+    expect(lastEdit(ctx)[1]).toBe(321);
+    expect(lastEdit(ctx)[2]).toMatch(/₹1251/);
+    expect(await fixEvents(ctx)).toEqual([{ template_id: "hdfc_upi_sent_sms_v1", fields_changed: "amount" }]);
+  });
+
+  it("/cancel leaves the amount alone", async () => {
+    const { ctx, id } = await withCard();
+    await handleUpdate(ctx, tap("amt_" + id));
+    await handleUpdate(ctx, reply("/cancel"));
+    expect(sent(ctx).at(-1)).toMatch(/Amount unchanged/);
+    await handleUpdate(ctx, reply("999"));
+    expect((await getTransaction(ctx.db, "111", id)).amount_minor).toBe(25000);
+  });
+
+  it("parses amounts", () => {
+    expect(["1250", "1,250.5", "Rs. 99", "INR 10.25", "₹0.5"].map(parseAmountInput)).toEqual([
+      125000, 125050, 9900, 1025, 50
+    ]);
+    expect(["", "0", "-5", "12.345", "1e5", "999999999"].map(parseAmountInput)).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]);
   });
 });
 

@@ -1,5 +1,5 @@
 // Text formatting shared by cards, commands and digests (legacy Markdown).
-import { CATEGORY_SHORT_NAMES, CURRENCY_SYMBOLS, TAG_MAX_LEN, TIMEZONE } from "./constants.js";
+import { CATEGORY_SHORT_NAMES, CURRENCY_SYMBOLS, TAG_MAX_LEN } from "./constants.js";
 import { fromMinor } from "../util/money.js";
 
 // Legacy Markdown only treats _ * [ ` as special.
@@ -43,25 +43,15 @@ export function pillLabel(value, fallback) {
   return v.length > TAG_MAX_LEN ? v.substring(0, TAG_MAX_LEN - 1) + "…" : v;
 }
 
-const DATE_TIME = new Intl.DateTimeFormat("en-GB", {
-  timeZone: TIMEZONE,
-  day: "2-digit",
-  month: "short",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false
-});
 const DAY_MONTH = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "short" });
-
-// "07 Oct 2026, 13:45" in IST.
-export function formatDateTime(ms) {
-  const p = Object.fromEntries(DATE_TIME.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
-  return p.day + " " + p.month + " " + p.year + ", " + p.hour + ":" + p.minute;
-}
 
 // ISO "2026-10-07" → "7 Oct".
 export function formatDayMonth(iso) {
   const [y, m, d] = iso.split("-").map(Number);
   return DAY_MONTH.format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+// ISO "2026-10-07" → "7 Oct 2026".
+export function formatLongDate(iso) {
+  return formatDayMonth(iso) + " " + String(iso).slice(0, 4);
 }

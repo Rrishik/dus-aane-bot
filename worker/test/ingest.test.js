@@ -51,7 +51,7 @@ describe("ingest — SMS", () => {
 
     const card = ctx.tg.of("sendMessage")[0];
     expect(card.args[0]).toBe("111");
-    expect(card.args[1]).toMatch(/^🔴 \*Swiggy\* — ₹250\n🗓 07 Oct 2026, 13:30$/);
+    expect(card.args[1]).toMatch(/^🔴 \*Swiggy\* — ₹250\n🗓 7 Oct 2026$/);
     expect(card.args[2].reply_markup.inline_keyboard.at(-1).map((b) => b.text)).toEqual([
       "🏷 Swiggy ▾",
       "📂 Food ▾",
@@ -216,9 +216,26 @@ describe("ingest — merchant rules and cards", () => {
   it("group members get a Split button per group on the card", async () => {
     const { ctx, tenant } = await setup();
     await seedTenant(ctx, "222");
+    await seedTenant(ctx, "333");
+    await seedGroup(ctx, "-100", ["111", "222", "333"], "Flat");
+    await seedGroup(ctx, "-200", ["111", "222"], "Trip");
+    const res = await ingest(ctx, sms(tenant));
+    const rows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
+    expect(rows.slice(0, 2)).toEqual([
+      [{ text: "👥 Split with Flat ▾", callback_data: "gnav:" + res.transactionId + ":-100" }],
+      [{ text: "👥 Split with Trip ▾", callback_data: "gnav:" + res.transactionId + ":-200" }]
+    ]);
+  });
+
+  it("in a single two-person group, 50-50 is one tap away", async () => {
+    const { ctx, tenant } = await setup();
+    await seedTenant(ctx, "222", { name: "Bob" });
     await seedGroup(ctx, "-100", ["111", "222"], "Flat");
     const res = await ingest(ctx, sms(tenant));
     const rows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
-    expect(rows[0]).toEqual([{ text: "👥 Split with Flat ▾", callback_data: "gnav:" + res.transactionId + ":-100" }]);
+    expect(rows[0]).toEqual([
+      { text: "👥 50-50 with Bob", callback_data: "gsp:" + res.transactionId + ":-100:50" },
+      { text: "More ▾", callback_data: "gnav:" + res.transactionId + ":-100" }
+    ]);
   });
 });

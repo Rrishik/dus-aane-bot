@@ -2,7 +2,7 @@
 // Callback data carries the transaction id (26-char ULID); group callbacks
 // use ":" separators, card callbacks "_".
 import { CATEGORY_EMOJIS } from "./constants.js";
-import { escapeMarkdown, money, pillLabel, shortCategoryName, formatDateTime } from "./format.js";
+import { escapeMarkdown, money, pillLabel, shortCategoryName, formatLongDate } from "./format.js";
 
 // txn: transactions row. opts: { user, extraLine }.
 export function cardText(txn, opts = {}) {
@@ -11,7 +11,7 @@ export function cardText(txn, opts = {}) {
   const header = txn.merchant
     ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount
     : emoji + " *" + amount + " " + (txn.direction === "debit" ? "Debited" : "Credited") + "*";
-  const lines = [header, "🗓 " + escapeMarkdown(formatDateTime(txn.created_at))];
+  const lines = [header, "🗓 " + escapeMarkdown(formatLongDate(txn.occurred_on))];
   if (opts.user) lines.push("👤 " + escapeMarkdown(opts.user));
   if (txn.status === "review") {
     lines.push("⚠️ *Check this* — " + escapeMarkdown(txn.review_note || "not counted until you save it"));
@@ -28,11 +28,21 @@ export function pillsRow(txnId, merchant, category) {
   ];
 }
 
-// groups: tenants rows of the groups the payer belongs to.
-export function level0Keyboard(txn, groups) {
-  const rows = (groups || []).map((g) => [
-    { text: "👥 Split with " + (g.name || "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
-  ]);
+// groups: tenants rows of the groups the payer belongs to. quickSplit
+// ({ groupId, otherName }) puts the common case — 50-50 in a 2-person
+// group — one tap away, with the full menu next to it.
+export function level0Keyboard(txn, groups, quickSplit) {
+  const rows = (groups || []).map((g) =>
+    quickSplit && quickSplit.groupId === g.id
+      ? [
+          {
+            text: "👥 50-50 with " + pillLabel(quickSplit.otherName, "partner"),
+            callback_data: "gsp:" + txn.id + ":" + g.id + ":50"
+          },
+          { text: "More ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
+        ]
+      : [{ text: "👥 Split with " + (g.name || "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id }]
+  );
   rows.push(pillsRow(txn.id, txn.merchant, txn.category));
   return { inline_keyboard: rows };
 }
@@ -53,13 +63,34 @@ export function reviewKeyboard(txnId, canReread) {
   return { inline_keyboard: [row] };
 }
 
-export function helpMenuKeyboard(txnId, { canReread = false, canDelete = true } = {}) {
-  const first = canReread
-    ? { text: "🔄 Re-read", callback_data: "rr_" + txnId }
-    : { text: "⚠️ Report error", callback_data: "report_" + txnId };
-  const row = [first];
-  if (canDelete) row.push({ text: "🗑️ Delete", callback_data: "del_" + txnId });
-  return { inline_keyboard: [row, [{ text: "← Back", callback_data: "back_" + txnId }]] };
+// ⋯ menu. canEdit is false while the transaction is split into a group
+// (changing or deleting it would move other people's balances).
+export function helpMenuKeyboard(txnId, { canReread = false, canEdit = true } = {}) {
+  const rows = [];
+  const first = [];
+  if (canReread) first.push({ text: "🔄 Re-read", callback_data: "rr_" + txnId });
+  if (canEdit) first.push({ text: "✏️ Fix", callback_data: "fix_" + txnId });
+  if (first.length) rows.push(first);
+  const second = [{ text: "⚠️ Report error", callback_data: "report_" + txnId }];
+  if (canEdit) second.push({ text: "🗑️ Delete", callback_data: "del_" + txnId });
+  rows.push(second);
+  rows.push([{ text: "← Back", callback_data: "back_" + txnId }]);
+  return { inline_keyboard: rows };
+}
+
+export function fixMenuKeyboard(txn) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: txn.direction === "debit" ? "🟢 It was money in" : "🔴 It was money out",
+          callback_data: "flip_" + txn.id
+        },
+        { text: "💰 Amount", callback_data: "amt_" + txn.id }
+      ],
+      [{ text: "← Back", callback_data: "help_" + txn.id }]
+    ]
+  };
 }
 
 export function deleteConfirmKeyboard(txnId) {
@@ -96,8 +127,8 @@ export function canReread(sources, isSplit) {
 }
 
 // The default keyboard for a card in its current state.
-export function keyboardFor(txn, { sources, groups, isSplit }) {
+export function keyboardFor(txn, { sources, groups, isSplit, quickSplit }) {
   if (txn.status === "review") return reviewKeyboard(txn.id, canReread(sources, isSplit));
   if (isSplit) return postSplitKeyboard(txn);
-  return level0Keyboard(txn, groups);
+  return level0Keyboard(txn, groups, quickSplit);
 }

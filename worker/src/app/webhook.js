@@ -13,7 +13,7 @@ import {
 import { handleBackfill } from "./backfill.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
-import { handleTagReply, handleCancel } from "./cardActions.js";
+import { handleTagReply, handleAmountReply, handleCancel } from "./cardActions.js";
 import { handleAsk, handleAskResume, handlePendingAsk } from "./ask.js";
 import { handleExport, handleDeleteMyData } from "./data.js";
 import { isUsable, gateText } from "./onboarding.js";
@@ -53,8 +53,9 @@ const GROUP_COMMANDS = {
   "/settle": handleGroupSettle
 };
 
-// Plain-text flows that run before SMS paste: /ask replies, 🏷 tag, bare /ask.
-const PLAIN_TEXT_STEPS = [handleAskResume, handleTagReply, handlePendingAsk];
+// Plain-text flows that run before SMS paste: /ask replies, 🏷 tag, 💰 amount,
+// bare /ask.
+const PLAIN_TEXT_STEPS = [handleAskResume, handleTagReply, handleAmountReply, handlePendingAsk];
 
 export function commandOf(text) {
   return String(text || "")

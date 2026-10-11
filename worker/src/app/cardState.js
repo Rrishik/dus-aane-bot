@@ -1,6 +1,6 @@
 // Everything needed to render a transaction card in its current state.
 import { getTransaction, getSources } from "../db/transactions.js";
-import { getTenant, groupsForMember } from "../db/tenants.js";
+import { getTenant, groupsForMember, getGroupMembers } from "../db/tenants.js";
 import { escapeMarkdown } from "./format.js";
 import { getSplitForTransaction, getSettlementForTransaction } from "../db/splits.js";
 import { cardText, keyboardFor, canReread } from "./cards.js";
@@ -45,10 +45,23 @@ export async function loadCardState(ctx, tenantId, txnId) {
     settlement,
     isSplit,
     linkLine,
+    quickSplit: isSplit ? null : await quickSplitFor(ctx, tid, groups),
     // 👤 only helps tenants with more than one forwarder.
     user: emailCount > 1 ? txn.forwarder : null,
     canReread: canReread(sources, isSplit)
   };
+}
+
+// In exactly one group, of two people: offer "50-50 with <them>" directly.
+async function quickSplitFor(ctx, tid, groups) {
+  if (groups.length !== 1) return null;
+  const members = await getGroupMembers(ctx.db, groups[0].id);
+  if (members.length !== 2 || !members.includes(tid)) return null;
+  const other = await getTenant(
+    ctx.db,
+    members.find((m) => m !== tid)
+  );
+  return { groupId: groups[0].id, otherName: (other && other.name) || "partner" };
 }
 
 export function renderCard(state, extraLine) {

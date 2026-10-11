@@ -1,14 +1,14 @@
-// Card button actions (personal chats): tag, category, ⋯ menu, back,
-// delete, report, Re-read and review Save/Discard.
+// Card button actions (personal chats): tag, category, ⋯ menu, fix
+// (direction / amount), back, delete, report, Re-read and review Save/Discard.
 import { updateTransaction, softDeleteTransaction, updateSource } from "../db/transactions.js";
 import { upsertMerchantRule } from "../db/merchantRules.js";
 import { touchActivity } from "../db/tenants.js";
 import { logParserEvent, countParserEvents, disableTemplate } from "../db/settings.js";
 import { putEphemeral, takeEphemeral } from "../db/ephemeral.js";
-import { validateExtraction, diffExtractions, guessCategory } from "../parser/index.js";
+import { validateExtraction, diffExtractions, guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { getMerchantRules } from "../db/merchantRules.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
-import { categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard } from "./cards.js";
+import { categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard, fixMenuKeyboard } from "./cards.js";
 import { categoriesFor, TAG_MAX_LEN } from "./constants.js";
 import { escapeMarkdown, money, formatDayMonth } from "./format.js";
 import { extractWithLlm } from "./extraction.js";
@@ -32,6 +32,43 @@ export function shortenMerchantPattern(raw) {
 
 async function notFound(ctx, chatId) {
   await ctx.tg.sendMessage(chatId, "❌ *Transaction not found.*");
+}
+
+// Changing a split transaction would move other people's balances.
+async function refuseIfSplit(ctx, chatId, messageId, state) {
+  if (!state.isSplit) return false;
+  await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then fix it.*");
+  await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
+  return true;
+}
+
+// A user's correction is the strongest accuracy signal for whoever read the
+// message (a parser template or the LLM). Field names only.
+async function logUserFix(ctx, chatId, state, fields) {
+  const src = state.sources[0] || {};
+  await logParserEvent(
+    ctx.db,
+    {
+      tenantId: chatId,
+      channel: src.source,
+      templateId: src.parsed_by || "llm",
+      event: "user_fix",
+      fieldsChanged: fields,
+      sourceRef: src.source_ref
+    },
+    ctx.now()
+  );
+}
+
+// "1,250.50", "₹1250", "Rs. 99" → minor units, or null.
+export function parseAmountInput(text) {
+  const s = String(text || "")
+    .trim()
+    .replace(/^(?:₹|rs\.?|inr)\s*/i, "")
+    .replace(/,/g, "");
+  if (!/^\d+(?:\.\d{1,2})?$/.test(s)) return null;
+  const minor = toMinor(Number(s));
+  return minor > 0 && minor <= toMinor(PARSER_MAX_AMOUNT) ? minor : null;
 }
 
 async function editCard(ctx, chatId, messageId, state, extraLine, keyboard) {
@@ -107,7 +144,40 @@ const ACTIONS = {
     await ctx.tg.editMessageReplyMarkup(
       chatId,
       messageId,
-      helpMenuKeyboard(state.txn.id, { canReread: state.canReread, canDelete: !state.isSplit })
+      helpMenuKeyboard(state.txn.id, { canReread: state.canReread, canEdit: !state.isSplit })
+    );
+  },
+
+  async fix(ctx, { chatId, messageId, state }) {
+    if (await refuseIfSplit(ctx, chatId, messageId, state)) return;
+    await ctx.tg.editMessageReplyMarkup(chatId, messageId, fixMenuKeyboard(state.txn));
+  },
+
+  // Money in ↔ money out. The category is kept when it fits the new
+  // direction, otherwise re-guessed.
+  async flip(ctx, { chatId, messageId, state }) {
+    if (await refuseIfSplit(ctx, chatId, messageId, state)) return;
+    const t = state.txn;
+    const direction = t.direction === "debit" ? "credit" : "debit";
+    const category = categoriesFor(direction).includes(t.category)
+      ? t.category
+      : guessCategory(t.merchant, direction === "credit" ? "Credit" : "Debit") || null;
+    const kind = defaultKind(direction, category);
+    await updateTransaction(ctx.db, chatId, t.id, { direction, category, kind }, ctx.now());
+    Object.assign(t, { direction, category, kind });
+    await editCard(ctx, chatId, messageId, state);
+    await logUserFix(ctx, chatId, state, ["transaction_type"]);
+  },
+
+  async amt(ctx, { chatId, userId, messageId, state }) {
+    if (await refuseIfSplit(ctx, chatId, messageId, state)) return;
+    await setPending(ctx, "amount", userId, { txnId: state.txn.id, messageId });
+    await ctx.tg.sendMessage(
+      chatId,
+      "💰 *Correct amount*\nCurrently " +
+        money(state.txn.amount_minor, state.txn.currency) +
+        ". Reply with the right amount, or /cancel.",
+      { reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. 1250.50" } }
     );
   },
 
@@ -388,10 +458,42 @@ export async function handleCancel(ctx, m) {
     await ctx.tg.sendMessage(m.chatId, "↩️ *Tag unchanged.*");
     return;
   }
+  if (await takePending(ctx, "amount", m.userId)) {
+    await ctx.tg.sendMessage(m.chatId, "↩️ *Amount unchanged.*");
+    return;
+  }
   const others = await Promise.all([takePending(ctx, "ask", m.chatId), takePending(ctx, "register", m.chatId)]);
   await ctx.tg.sendMessage(m.chatId, others.some(Boolean) ? "↩️ Cancelled." : "Nothing to cancel.", {
     parse_mode: null
   });
+}
+
+// Plain-text reply after ⋯ → ✏️ Fix → 💰 Amount. Returns true if consumed.
+export async function handleAmountReply(ctx, m) {
+  const pending = await getPending(ctx, "amount", m.userId);
+  if (!pending) return false;
+  const amountMinor = parseAmountInput(m.text);
+  if (amountMinor === null) {
+    await ctx.tg.sendMessage(m.chatId, "❌ *That's not an amount.* Try `1250` or `1250.50`, or /cancel.");
+    return true;
+  }
+  await clearPending(ctx, "amount", m.userId);
+  const state = await loadCardState(ctx, m.chatId, pending.txnId);
+  if (!state || state.txn.status === "deleted") {
+    await notFound(ctx, m.chatId);
+    return true;
+  }
+  if (state.isSplit) {
+    await ctx.tg.sendMessage(m.chatId, "↩️ *Make it personal again first, then fix it.*");
+    return true;
+  }
+  if (amountMinor !== state.txn.amount_minor) {
+    await updateTransaction(ctx.db, m.chatId, state.txn.id, { amountMinor }, ctx.now());
+    state.txn.amount_minor = amountMinor;
+    await logUserFix(ctx, m.chatId, state, ["amount"]);
+  }
+  if (pending.messageId) await editCard(ctx, m.chatId, pending.messageId, state);
+  return true;
 }
 
 // Plain-text reply after a 🏷 tap. Returns true if consumed.

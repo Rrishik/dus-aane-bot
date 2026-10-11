@@ -208,7 +208,7 @@ describe("split / settle / undo from the DM card", () => {
     const edits = ctx.tg.of("editMessageText").map((c) => c.args);
     expect(edits.find((a) => a[0] === "-100" && a[2].includes("split reverted"))).toBeTruthy();
     expect(edits.find((a) => a[0] === "-100" && a[1] === pinId && a[2].includes("All settled up"))).toBeTruthy();
-    expect(edits.at(-1)[3].reply_markup.inline_keyboard[0][0].callback_data).toBe("gnav:" + id + ":-100");
+    expect(edits.at(-1)[3].reply_markup.inline_keyboard[0][0].callback_data).toBe("gsp:" + id + ":-100:50");
   });
 
   it("undo keeps the split when the group post can't be edited", async () => {

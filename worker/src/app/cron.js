@@ -56,6 +56,7 @@ export function formatParserDigest(summary, mode, disabled) {
     const shadow = (s.shadow_match || 0) + (s.shadow_mismatch || 0);
     if (shadow) parts.push("shadow agree " + Math.round(((s.shadow_match || 0) / shadow) * 100) + "% of " + shadow);
     if (s.report) parts.push("reports " + s.report);
+    if (s.user_fix) parts.push("user fixes " + s.user_fix);
     lines.push("• `" + id + "` — " + parts.join(", "));
   }
   if (disabled.length) lines.push("\nDisabled: " + disabled.map((d) => "`" + d + "`").join(", "));

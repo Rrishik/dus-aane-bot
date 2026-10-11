@@ -161,7 +161,7 @@ describe("/recent and /stats", () => {
     await addTxn(ctx, "111", { merchant: "Pending", status: "review" });
     await handleUpdate(ctx, msg("111", "/recent"));
     expect(texts(ctx)[0]).toMatch(
-      /^📅 \*Recent Transactions\*\n\n🔴 \*Bob's\* ₹450 · Food\n {3}_07 Oct 2026, 13:30_\n\n🔴 \*Old\*/
+      /^📅 \*Recent Transactions\*\n\n🔴 \*Bob's\* ₹450 · Food\n {3}_6 Oct 2026_\n\n🔴 \*Old\* ₹450 · Food\n {3}_1 Oct 2026_/
     );
     expect(texts(ctx)[0]).not.toMatch(/Pending/);
     await handleUpdate(ctx, msg("111", "/recent 10 bob"));

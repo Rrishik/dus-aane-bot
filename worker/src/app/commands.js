@@ -2,7 +2,7 @@
 import { getTenant, getTenantEmails, registerEmail } from "../db/tenants.js";
 import { listTransactions } from "../db/transactions.js";
 import { BOT_INBOX_EMAIL } from "./constants.js";
-import { escapeMarkdown, money, shortCategoryName, formatDateTime } from "./format.js";
+import { escapeMarkdown, money, shortCategoryName, formatLongDate } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { callAppsScript } from "./appsScript.js";
 import { setPending, takePending } from "./pending.js";
@@ -192,7 +192,7 @@ export async function recentMessage(ctx, tenantId, { limit = 5, user = null } = 
       money(r.amount_minor, r.currency) +
       escapeMarkdown(cat) +
       "\n   _" +
-      escapeMarkdown(formatDateTime(r.created_at)) +
+      escapeMarkdown(formatLongDate(r.occurred_on)) +
       "_\n";
   });
   return msg;

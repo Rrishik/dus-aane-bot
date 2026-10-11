@@ -221,10 +221,10 @@ Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank (`s
 
 Each transaction notification is a two-line card with:
 
-- **Split with <group>** — one row per group you're in; opens the split and settle options.
+- **Split with <group>** — one row per group you're in; opens the split and settle options. In a single two-person group the card offers **👥 50-50 with <them>** directly, with **More ▾** for the rest.
 - **🏷 <merchant> ▾** — rename the merchant; future transactions from the same payee use the new name.
 - **📂 <category> ▾** — pick a category; future transactions from that merchant default to it.
-- **⋯** — overflow: **🔄 Re-read** (parser-read cards, once) or **⚠️ Report error**, plus **🗑️ Delete** (hidden on split cards — tap **↩️ Make personal again** first).
+- **⋯** — overflow: **🔄 Re-read** (parser-read cards, once), **✏️ Fix** (money in ↔ out, or the amount), **⚠️ Report error** and **🗑️ Delete**. Fix and Delete are hidden on split cards — tap **↩️ Make personal again** first.
 
 **⚠️ Check this** cards (low-confidence reads, failed validation, suspected duplicates) show **✅ Save / 🔄 Re-read / ✖ Discard** instead and don't count in `/stats` or `/ask` until saved.
 
