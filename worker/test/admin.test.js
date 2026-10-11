@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { handleAdmin } from "../src/admin/index.js";
 import { resetAccessCache } from "../src/admin/access.js";
 import { summarizeTemplate } from "../src/admin/queries.js";
+import { maskSample } from "../src/admin/cases.js";
 import { testContext, seedTenant, seedGroup, llmTxn, NOW } from "./helpers/app.js";
 import { ingest } from "../src/app/ingest.js";
 import { createSplit } from "../src/db/splits.js";
@@ -38,6 +39,7 @@ const claims = (o = {}) => ({
 
 let kp;
 const EMAIL_BODY = "Rs.250.00 has been debited from account **1234 to VPA swiggy@ybl SWIGGY on 07-10-26.";
+const BODIES = { promo: "Dear Alice Sharma, a special offer on your card: apply now!" };
 
 let other;
 const calls = [];
@@ -48,10 +50,29 @@ function fetchStub({ appsScript, telegram } = {}) {
     if (String(url).startsWith("https://script.example")) {
       if (appsScript === "down") return new Response("nope", { status: 500 });
       const { action, payload } = JSON.parse(init.body);
+      if (action === "get_email_bodies") {
+        const { messageIds } = JSON.parse(payload);
+        return Response.json({
+          ok: true,
+          messages: Object.fromEntries(
+            messageIds.map((id) => [
+              id,
+              id === "gone"
+                ? { error: "message not found" }
+                : {
+                    text: BODIES[id] || EMAIL_BODY,
+                    receivedAt: NOW,
+                    sender: "alerts@hdfcbank.net",
+                    subject: "Alert"
+                  }
+            ])
+          )
+        });
+      }
       if (action === "get_email_body") {
         const { messageId } = JSON.parse(payload);
         if (messageId === "gone") return Response.json({ ok: false, error: "message not found" });
-        return Response.json({ ok: true, text: EMAIL_BODY, receivedAt: NOW });
+        return Response.json({ ok: true, text: BODIES[messageId] || EMAIL_BODY, receivedAt: NOW });
       }
       return Response.json({
         ok: true,
@@ -334,5 +355,86 @@ describe("parser cases", () => {
     expect((await get("/api/case?id=abc", { env, token })).status).toBe(400);
     expect((await get("/api/case?id=999", { env, token })).status).toBe(404);
     expect((await get("/api/case?id=" + id, { env })).status).toBe(403);
+  });
+});
+
+describe("parser replay", () => {
+  async function seeded() {
+    const ctx = testContext({
+      llmReplies: [
+        llmTxn({ transaction_type: "Credit" }),
+        llmTxn({ amount: 99, merchant: "Card upgrade" }),
+        llmTxn({ amount: 500 })
+      ]
+    });
+    const alice = await seedTenant(ctx, "111", { email: "alice@x.com", name: "Alice Sharma" });
+    await ingest(ctx, { tenant: alice, source: "email", sourceRef: "m1", text: EMAIL_BODY, receivedAt: NOW - 3000 });
+    await ingest(ctx, {
+      tenant: alice,
+      source: "email",
+      sourceRef: "promo",
+      text: BODIES.promo,
+      receivedAt: NOW - 2000
+    });
+    await ingest(ctx, {
+      tenant: alice,
+      source: "email",
+      sourceRef: "gone",
+      text: "Rs 500 debited",
+      receivedAt: NOW - 1000
+    });
+    return ctx;
+  }
+
+  it("re-reads stored emails in pages and compares with what was saved", async () => {
+    const ctx = await seeded();
+    const env = ENV(ctx.db);
+    const token = await sign(kp, claims());
+    const first = await (await get("/api/replay?offset=0&limit=2", { env, token })).json();
+    expect(first.total).toBe(3);
+    expect(first.items.map((i) => i.outcome)).toEqual(["unavailable", "missed"]);
+    expect(first.items[1]).toMatchObject({ reason: "ignored: promo", sender: "alerts@hdfcbank.net", savedBy: "llm" });
+    const second = await (await get("/api/replay?offset=2&limit=2", { env, token })).json();
+    expect(second.items).toEqual([
+      expect.objectContaining({
+        outcome: "disagree",
+        template: "generic_v1",
+        changed: ["transaction_type"],
+        saved: expect.objectContaining({ transaction_type: "Credit" }),
+        parser: expect.objectContaining({ transaction_type: "Debit" })
+      })
+    ]);
+    expect(second.items[0].user).toMatch(/^u-[0-9a-f]{6}$/);
+  });
+
+  it("opens a replayed email with a masked sample for sharing", async () => {
+    const ctx = await seeded();
+    const env = ENV(ctx.db);
+    const token = await sign(kp, claims());
+    const { items } = await (await get("/api/replay?limit=2", { env, token })).json();
+    const c = await (await get("/api/case?source=" + items[1].sourceId, { env, token })).json();
+    expect(c).toMatchObject({ event: "replay", text: BODIES.promo, parser: { read: false, reason: "ignored: promo" } });
+    expect(c.sample).toBe("Dear Customer, a special offer on your card: apply now!");
+    expect((await get("/api/case?source=999", { env, token })).status).toBe(404);
+  });
+
+  it("reports an Apps Script failure for the batch", async () => {
+    const ctx = await seeded();
+    const res = await get("/api/replay", {
+      env: ENV(ctx.db),
+      token: await sign(kp, claims()),
+      fetchImpl: fetchStub({ appsScript: "down" })
+    });
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toMatch(/get_email_bodies/);
+  });
+
+  it("masks digits, links, addresses, greetings and the user's name", () => {
+    expect(
+      maskSample(
+        "Hi Alice,\nTo: alice@gmail.com\nRs.1,250.00 debited from a/c XX1234 by ALICE SHARMA. See https://bank.example/t?id=9 or mail care@hdfcbank.net",
+        "Alice Sharma"
+      )
+    ).toBe("Hi Customer,\nTo: x\nRs.9,999.99 debited from a/c XX9999 by NAME NAME. See <link> or mail x@hdfcbank.net");
   });
 });

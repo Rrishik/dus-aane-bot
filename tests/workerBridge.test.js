@@ -131,9 +131,18 @@ describe("Worker → Apps Script actions", () => {
 
   it("dispatches actions and reports errors as JSON", () => {
     const mailed = [];
+    const m1 = {
+      ...fakeMessage("m1", { body: "hello" }),
+      getFrom: () => "Me <me@gmail.com>",
+      getSubject: () => "Debit alert"
+    };
     const { api } = load({
-      messages: { m1: fakeMessage("m1", { body: "hello" }) },
-      extra: { mailSetupInstructions: (...a) => mailed.push(a) }
+      messages: { m1 },
+      extra: {
+        mailSetupInstructions: (...a) => mailed.push(a),
+        isBankFromHeader: (f) => /hdfcbank/.test(f),
+        extractForwardedFrom: () => "HDFC Bank <Alerts@HDFCBank.net>"
+      }
     });
     const run = (body) => JSON.parse(api.handleWorkerAction(body).text);
     const realNow = Date.now;
@@ -151,6 +160,13 @@ describe("Worker → Apps Script actions", () => {
         error: "message not found"
       });
       expect(run(signAction("rm_rf", {}))).toEqual({ ok: false, error: "unknown action" });
+      expect(run(signAction("get_email_bodies", { messageIds: ["m1", "nope"] }))).toEqual({
+        ok: true,
+        messages: {
+          m1: { text: "hello", receivedAt: NOW, sender: "alerts@hdfcbank.net", subject: "Debit alert" },
+          nope: { error: "message not found" }
+        }
+      });
       expect(run(signAction("get_email_body", { messageId: "m1" }, NOW, "wrong"))).toEqual({
         ok: false,
         error: "unauthorized"

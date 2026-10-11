@@ -1,10 +1,11 @@
 // Admin dashboard Worker (admin.healthvault.online). Read-only: D1
-// aggregates, single parser cases in full, and live checks of the Gmail
-// poller (Apps Script) and the Telegram webhook. Every request must carry a
-// valid Cloudflare Access token.
+// aggregates, single parser cases in full, parser replay over stored emails,
+// and live checks of the Gmail poller (Apps Script) and the Telegram webhook.
+// Every request must carry a valid Cloudflare Access token.
 import { verifyAccess } from "./access.js";
 import { collectSummary } from "./queries.js";
-import { loadCase } from "./cases.js";
+import { loadCase, loadSourceCase } from "./cases.js";
+import { replayBatch } from "./replay.js";
 import { HTML, CSS, JS } from "./page.js";
 import { callAppsScript } from "../app/appsScript.js";
 
@@ -22,6 +23,11 @@ const SECURITY_HEADERS = {
 
 function respond(body, type, status = 200) {
   return new Response(body, { status, headers: { "Content-Type": type, ...SECURITY_HEADERS } });
+}
+
+function positiveInt(v) {
+  const n = Number(v);
+  return v && Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 async function pollerStatus(env, fetchImpl, now) {
@@ -82,13 +88,29 @@ export async function handleAdmin(request, env, { fetchImpl = (...a) => fetch(..
     return respond(JSON.stringify({ email: auth.email, summary, ops: { poller, webhook } }), "application/json");
   }
   if (url.pathname === "/api/case") {
-    const id = Number(url.searchParams.get("id"));
-    if (!Number.isSafeInteger(id) || id <= 0) return respond('{"error":"bad id"}', "application/json", 400);
+    const id = positiveInt(url.searchParams.get("id"));
+    const sourceId = positiveInt(url.searchParams.get("source"));
+    if (!id && !sourceId) return respond('{"error":"bad id"}', "application/json", 400);
     const ctx = { env, now: () => now, fetch: fetchImpl };
-    const c = await loadCase(env.DB, id, (messageId) => callAppsScript(ctx, "get_email_body", { messageId }));
+    const fetchEmail = (messageId) => callAppsScript(ctx, "get_email_body", { messageId });
+    const c = id ? await loadCase(env.DB, id, fetchEmail) : await loadSourceCase(env.DB, sourceId, fetchEmail);
     if (!c) return respond('{"error":"not found"}', "application/json", 404);
-    console.log("[admin] case", id, "viewed by", auth.email);
+    console.log("[admin]", id ? "case " + id : "source " + sourceId, "viewed by", auth.email);
     return respond(JSON.stringify(c), "application/json");
+  }
+  if (url.pathname === "/api/replay") {
+    const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+    const limit = positiveInt(url.searchParams.get("limit")) || 15;
+    const ctx = { env, now: () => now, fetch: fetchImpl };
+    try {
+      const res = await replayBatch(env.DB, { offset, limit }, async (messageIds) => {
+        return (await callAppsScript(ctx, "get_email_bodies", { messageIds })).messages || {};
+      });
+      if (offset === 0) console.log("[admin] parser replay started by", auth.email);
+      return respond(JSON.stringify(res), "application/json");
+    } catch (e) {
+      return respond(JSON.stringify({ error: (e && e.message) || "replay failed" }), "application/json", 502);
+    }
   }
   return respond("Not found", "text/plain; charset=utf-8", 404);
 }

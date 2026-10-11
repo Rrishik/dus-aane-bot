@@ -87,6 +87,13 @@ pre { margin: 0; padding: 10px 12px; background: var(--card); border: 1px solid 
 .legend i.b { background: var(--accent2); }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; } dt { color: var(--muted); } dd { margin: 0; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin: 10px 0 0; }
+.progress i { display: block; height: 100%; background: var(--accent); }
+#replay .kpis { margin-top: 14px; }
+details.sample { border: 0; padding: 0; margin-top: 10px; background: none; }
+details.sample summary { font-weight: 400; font-size: 12px; }
+details.sample .row { margin-bottom: 8px; }
 `;
 
 export const JS = `"use strict";
@@ -200,7 +207,29 @@ function caseDetail(c) {
   return el("div", { class: "case" },
     el("div", {}, el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Field"), el("th", {}, "Saved"), el("th", {}, "Parser now"))), el("tbody", {}, rows)),
       notes.map((n) => el("p", { class: "note" }, n))),
-    el("div", {}, c.text != null ? el("pre", {}, c.text) : el("p", { class: "muted" }, c.textError || "No message text.")));
+    el("div", {}, c.text != null ? el("pre", {}, c.text) : el("p", { class: "muted" }, c.textError || "No message text."),
+      c.sample ? sampleBox(c.sample) : null));
+}
+
+function sampleBox(sample) {
+  const status = el("span", { class: "muted" });
+  const copy = el("button", { type: "button", onclick: async () => {
+    try { await navigator.clipboard.writeText(sample); status.textContent = "Copied — check it before sharing."; }
+    catch (_) { status.textContent = "Copy failed; select the text below."; }
+  } }, "Copy masked sample");
+  return el("details", { class: "sample" }, el("summary", {}, "Masked sample", el("span", { class: "muted" }, " · digits, links, addresses and names hidden")),
+    el("div", { class: "row" }, copy, status), el("pre", {}, sample));
+}
+
+async function loadDetail(cell, url, stillOpen) {
+  try {
+    const res = await fetch(url, { credentials: "same-origin" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const c = await res.json();
+    if (stillOpen()) cell.replaceChildren(caseDetail(c));
+  } catch (e) {
+    cell.replaceChildren(el("p", { class: "bad" }, "Couldn't load: " + e.message));
+  }
 }
 
 async function toggleCase(id) {
@@ -208,15 +237,125 @@ async function toggleCase(id) {
   renderCases();
   if (state.openCase == null) return;
   const cell = document.getElementById("case-" + id);
-  if (!cell) return;
-  try {
-    const res = await fetch("/api/case?id=" + id, { credentials: "same-origin" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const c = await res.json();
-    if (state.openCase === id) cell.replaceChildren(caseDetail(c));
-  } catch (e) {
-    cell.replaceChildren(el("p", { class: "bad" }, "Couldn't load the case: " + e.message));
+  if (cell) await loadDetail(cell, "/api/case?id=" + id, () => state.openCase === id);
+}
+
+// Parser replay: pages through /api/replay; results stay in this tab.
+const REPLAY_BATCH = 15, REPLAY_PARALLEL = 2, REPLAY_SHOWN = 200;
+const OUTCOMES = { disagree: ["Disagreed", "bad"], missed: ["Missed", "warn"], unavailable: ["Unavailable", "muted"], agree: ["Agreed", "ok"] };
+const rp = { running: false, stop: false, total: null, next: 0, items: [], error: null, started: 0, filter: "disagree", sender: null, open: null };
+const domain = (s) => (s && s.includes("@") ? s.split("@")[1] : s || "(unknown)");
+const money = (v) => (v ? (v.transaction_type === "Credit" ? "+" : "−") + v.currency + " " + v.amount + " · " + v.transaction_date : "—");
+
+async function runReplay() {
+  if (rp.running) { rp.stop = true; return; }
+  Object.assign(rp, { running: true, stop: false, total: null, next: 0, items: [], error: null, started: Date.now(), open: null });
+  renderReplay();
+  async function worker() {
+    while (!rp.stop && (rp.total == null || rp.next < rp.total)) {
+      const offset = rp.next; rp.next += REPLAY_BATCH;
+      let body = null, err = null;
+      for (let attempt = 0; attempt < 2 && !body; attempt++) {
+        try {
+          const res = await fetch("/api/replay?offset=" + offset + "&limit=" + REPLAY_BATCH, { credentials: "same-origin" });
+          const j = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(j.error || "HTTP " + res.status);
+          body = j;
+        } catch (e) { err = e; }
+      }
+      if (!body) { rp.error = "Stopped at " + offset + ": " + err.message; rp.stop = true; break; }
+      rp.total = body.total;
+      rp.items.push(...body.items);
+      renderReplay();
+      if (!body.items.length) break;
+    }
   }
+  const first = worker();
+  await new Promise((r) => setTimeout(r, 300));
+  await Promise.all([first, ...Array.from({ length: REPLAY_PARALLEL - 1 }, worker)]);
+  rp.running = false;
+  renderReplay();
+}
+
+function tally(items, key) {
+  const m = new Map();
+  for (const i of items) {
+    const k = key(i); if (k == null) continue;
+    const t = m.get(k) || { key: k, n: 0, read: 0, agree: 0, disagree: 0, missed: 0, unavailable: 0 };
+    t.n++; t[i.outcome]++; if (i.outcome === "agree" || i.outcome === "disagree") t.read++;
+    m.set(k, t);
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n);
+}
+
+function renderReplay() {
+  const host = $("#replay"); if (!host) return;
+  const items = rp.items, done = items.length, total = rp.total;
+  const avail = items.filter((i) => i.outcome !== "unavailable");
+  const read = avail.filter((i) => i.outcome === "agree" || i.outcome === "disagree");
+  const agree = read.filter((i) => i.outcome === "agree").length;
+  const head = el("div", { class: "row" },
+    el("button", { type: "button", onclick: runReplay }, rp.running ? "Stop" : done ? "Run again" : "Run replay"),
+    el("span", { class: "muted" }, rp.running ? "Re-reading " + done + (total != null ? " / " + total : "") + " · " + Math.round((Date.now() - rp.started) / 1000) + " s"
+      : done ? done + " emails re-read" : "Re-reads every stored email with today's parser and compares it with what was saved. Nothing is stored."),
+    rp.error ? el("span", { class: "bad" }, rp.error) : null);
+  const parts = [head];
+  if (rp.running && total) parts.push(el("div", { class: "progress" }, el("i", { style: { width: Math.round((done / total) * 100) + "%" } })));
+  if (done) {
+    parts.push(el("div", { class: "kpis" }, [
+      [pct(avail.length ? read.length / avail.length : null), "coverage", read.length + " of " + avail.length + " read by the parser"],
+      [pct(read.length ? agree / read.length : null), "agreement", agree + " of " + read.length + " match what was saved"],
+      [avail.length - read.length, "missed", "no parser read"],
+      [done - avail.length, "unavailable", "email no longer in the inbox"]
+    ].map(([v, l, sub]) => el("div", { class: "kpi" }, el("b", {}, v), el("span", {}, l), el("span", {}, sub)))));
+    const rate = (t) => pct(t.read ? t.agree / t.read : null);
+    parts.push(el("div", { class: "grid2" },
+      el("div", {}, el("h3", {}, "By reader"), table([
+        { label: "Template", get: (r) => r.key },
+        { label: "Read", num: true, get: (r) => r.read },
+        { label: "Disagreed", num: true, get: (r) => r.disagree, cls: (r) => (r.disagree ? "bad" : "") },
+        { label: "Agreement", num: true, get: rate, cls: (r) => (r.read && r.agree / r.read >= 0.99 ? "ok" : r.read ? "warn" : "") }
+      ], tally(read, (i) => i.template))),
+      el("div", {}, el("h3", {}, "By sender"), table([
+        { label: "Sender", get: (r) => r.key },
+        { label: "Emails", num: true, get: (r) => r.n - r.unavailable },
+        { label: "Read", num: true, get: (r) => r.read },
+        { label: "Missed", num: true, get: (r) => r.missed, cls: (r) => (r.missed ? "warn" : "") },
+        { label: "Agreement", num: true, get: rate }
+      ], tally(avail, (i) => domain(i.sender)).slice(0, 15), {
+        rowAttrs: (r) => ({ class: "click" + (rp.sender === r.key ? " open" : ""), title: "Show only this sender",
+          onclick: () => { rp.sender = rp.sender === r.key ? null : r.key; rp.open = null; renderReplay(); } })
+      }))));
+    const pool = items.filter((i) => !rp.sender || domain(i.sender) === rp.sender);
+    const counts = {}; for (const i of pool) counts[i.outcome] = (counts[i.outcome] || 0) + 1;
+    const shown = pool.filter((i) => i.outcome === rp.filter);
+    parts.push(el("h3", {}, "Emails"), el("div", { class: "filters" },
+      Object.keys(OUTCOMES).map((k) => el("button", { type: "button", "aria-pressed": String(rp.filter === k),
+        onclick: () => { rp.filter = k; rp.open = null; renderReplay(); } }, OUTCOMES[k][0] + " " + (counts[k] || 0))),
+      rp.sender ? el("button", { type: "button", "aria-pressed": "true", title: "Clear sender filter", onclick: () => { rp.sender = null; renderReplay(); } }, rp.sender + " ✕") : null));
+    parts.push(table([
+      { label: "Received", get: (r) => day(r.receivedAt), title: (r) => stamp(r.receivedAt) },
+      { label: "Sender", get: (r) => domain(r.sender) },
+      { label: "Subject", get: (r) => (r.subject || "").slice(0, 48), title: (r) => r.subject },
+      { label: "Saved", get: (r) => money(r.saved) },
+      { label: "Parser", get: (r) => (r.parser ? money(r.parser) : r.reason) },
+      { label: "Differs", get: (r) => (r.changed || []).join(", ") }
+    ], shown.slice(0, REPLAY_SHOWN), {
+      empty: "None.",
+      rowAttrs: (r) => r.outcome === "unavailable" ? {} : { class: "click" + (rp.open === r.sourceId ? " open" : ""), tabindex: "0",
+        onclick: () => toggleReplay(r.sourceId), onkeydown: (e) => { if (e.key === "Enter") toggleReplay(r.sourceId); } },
+      after: (r, span) => rp.open === r.sourceId ? el("tr", { class: "detail" }, el("td", { colspan: span, id: "src-" + r.sourceId }, el("span", { class: "muted" }, "Loading…"))) : null
+    }));
+    if (shown.length > REPLAY_SHOWN) parts.push(el("p", { class: "note muted" }, "Showing " + REPLAY_SHOWN + " of " + shown.length + "."));
+  }
+  host.replaceChildren(el("h2", {}, "Parser replay"), ...parts);
+}
+
+async function toggleReplay(id) {
+  rp.open = rp.open === id ? null : id;
+  renderReplay();
+  const cell = rp.open != null && document.getElementById("src-" + id);
+  if (cell) await loadDetail(cell, "/api/case?source=" + id, () => rp.open === id);
 }
 
 function renderCases() {
@@ -292,6 +431,8 @@ function render(d) {
     el("h3", {}, "Cases"),
     el("div", { id: "cases" })));
   renderCases();
+  app.append(el("section", { id: "replay" }));
+  renderReplay();
 
   app.append(fold("users", "Users", s.users.length, table([
     { label: "User", get: (r) => r.id },

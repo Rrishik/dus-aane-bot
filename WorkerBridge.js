@@ -66,6 +66,30 @@ var WORKER_ACTIONS = {
     if (!msg) throw new Error("message not found");
     return { text: msg.getPlainBody() || "", receivedAt: msg.getDate().getTime() };
   },
+  // Parser replay: up to 25 bodies per call, with the original sender (the
+  // bank, even for manual forwards) and subject.
+  get_email_bodies: function (p) {
+    var ids = (p.messageIds || []).slice(0, 25);
+    var messages = {};
+    ids.forEach(function (id) {
+      try {
+        var msg = GmailApp.getMessageById(String(id));
+        if (!msg) throw new Error("message not found");
+        var from = msg.getFrom() || "";
+        var sender = isBankFromHeader(from) ? from : extractForwardedFrom(msg) || from;
+        var addr = String(sender).match(/<([^>]+)>/);
+        messages[id] = {
+          text: msg.getPlainBody() || "",
+          receivedAt: msg.getDate().getTime(),
+          sender: (addr ? addr[1] : String(sender).trim()).toLowerCase(),
+          subject: msg.getSubject() || ""
+        };
+      } catch (e) {
+        messages[id] = { error: (e && e.message) || "unreadable" };
+      }
+    });
+    return { messages: messages };
+  },
   // Rewrites the tenant's export sheet (created on first use) and shares it
   // with their registered emails.
   export_to_sheet: function (p) {

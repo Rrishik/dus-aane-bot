@@ -75,9 +75,10 @@ Staging can't receive forwarded email (Apps Script only talks to the production 
 - ingestion health: the Telegram webhook, the Gmail poller's last run, retry list and last Worker failure, recent bot-inbox mail and what happened to it;
 - parser accuracy per reader (each bank template, the generic rules, and the LLM): saves, shadow agreement, corrections (accepted Re-reads + ✏️ Fix) and correction rate;
 - **cases**: each disagreement, parser miss, correction and report in the window. Clicking one shows the original message (email fetched live from the bot inbox, or the stored SMS), the saved values next to the parser's read with today's templates, and the differing fields highlighted;
+- **parser replay** (button): re-reads every stored email transaction with today's parser, 15 at a time through Apps Script's `get_email_bodies`, and compares the result with what was saved (the LLM's read plus user fixes). It shows coverage, agreement, results by template and by sender (where templates are missing), and the emails that disagreed or were missed. Results stay in the browser tab; nothing is written. Use it before switching `parser.mode` to `on` and after adding templates;
 - per-user and per-group counts under masked ids (`u-1a2b3c`).
 
-The overview shows only counts and statuses. Opening a case shows that message in full, including amounts, merchants and account digits; each opened case is logged in the Worker's logs with the admin's email.
+The overview shows only counts and statuses. Opening a case or a replayed email shows that message in full, including amounts, merchants and account digits; each one opened (and each replay started) is logged in the Worker's logs with the admin's email. **Masked sample** gives a copy with digits, links, email addresses, greetings and the user's name hidden — for writing a template. Check it before sharing, and commit only synthetic samples (see `worker/src/parser/templates.js`).
 
 **Access.** Cloudflare Access (Zero Trust) asks for a login before any request reaches the Worker, and the Worker re-checks Access's signed token on every request — it refuses everything if the Access settings are missing. The Worker has no `workers.dev` URL. The site on the bare `healthvault.online` (GitHub Pages) is unaffected; only an `admin` DNS record is added.
 

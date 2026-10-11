@@ -79,7 +79,7 @@ Nothing else leaves. No third-party analytics or SDKs.
 
 - **You** — your own transactions (in the chat, `/ask`, `/export`), and splits / balances in groups you're a member of.
 - **Group members** — the split notifications, balances and settlements of that group. Not your personal transactions.
-- **The admin** (whoever runs the deployment) — has access to the D1 database, the bot inbox and the bot's Google account, so technically to everything above. The admin dashboard shows counts, statuses and parser statistics under masked user ids. To check and improve the parser, the admin can also open individual cases where the parser and the LLM disagreed, a read was corrected, or you reported an error: that view shows the original email or SMS and the saved transaction (amount, merchant, account digits, reference), still under a masked user id. If you don't trust the admin, self-host.
+- **The admin** (whoever runs the deployment) — has access to the D1 database, the bot inbox and the bot's Google account, so technically to everything above. The admin dashboard shows counts, statuses and parser statistics under masked user ids. To check and improve the parser, the admin can also re-read stored emails with the parser and open individual messages (for example where the parser and the LLM disagreed, a read was corrected, or you reported an error): that view shows the original email or SMS and the saved transaction (amount, merchant, account digits, reference), still under a masked user id. If you don't trust the admin, self-host.
 - **Nobody else.**
 
 ## Retention
