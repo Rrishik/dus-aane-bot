@@ -4,7 +4,13 @@
 // orchestrator tools, and (in Stage 2) the Telegram Mini App REST API so
 // validation, rule learning, untagged backfilling, card edits, group split
 // posts, and personal DM pins stay consistent everywhere.
-import { getTransaction, updateTransaction, listUntaggedTransactions } from "../db/transactions.js";
+import {
+  getTransaction,
+  updateTransaction,
+  softDeleteTransaction,
+  listUntaggedTransactions
+} from "../db/transactions.js";
+import { getSplitForTransaction, getSettlementForTransaction } from "../db/splits.js";
 import { getMerchantRules, resolveMerchant, upsertMerchantRule } from "../db/merchantRules.js";
 import { guessCategory } from "../parser/index.js";
 import { refreshCardMessage } from "./cardState.js";
@@ -215,4 +221,39 @@ export async function batchMutateTransactions(ctx, tenantId, items = []) {
     auto_filled: autoFilled,
     results
   };
+}
+
+// Soft-delete a personal transaction in D1 and remove its DM card bubble from
+// Telegram (falling back to a tombstone edit if older than Telegram's 48h
+// delete window). Refuses while split/settled in a group.
+export async function removeTransaction(ctx, tenantId, txnId, { cardMessageId = null, tombstone = null } = {}) {
+  const tid = String(tenantId);
+  const txn = txnId && (await getTransaction(ctx.db, tid, txnId));
+  if (!txn || txn.status === "deleted") {
+    return { ok: false, error: "Transaction not found for transaction_id: " + txnId };
+  }
+  const [split, settlement] = await Promise.all([
+    getSplitForTransaction(ctx.db, txn.id),
+    getSettlementForTransaction(ctx.db, txn.id)
+  ]);
+  if (split || settlement) {
+    return { ok: false, isSplit: true, error: "Make it personal again first, then delete." };
+  }
+
+  const wasConfirmed = txn.status === "confirmed";
+  await softDeleteTransaction(ctx.db, tid, txn.id, ctx.now());
+  if (wasConfirmed) await refreshPersonalPin(ctx, tid);
+
+  const msgId = Number(cardMessageId || txn.card_message_id || 0);
+  let cardRemoved = false;
+  if (msgId) {
+    try {
+      await ctx.tg.deleteMessage(tid, msgId);
+      cardRemoved = true;
+    } catch (_) {
+      const fallback = tombstone || (wasConfirmed ? "🗑️ *Transaction deleted*" : "✖ *Discarded*");
+      await ctx.tg.editMessageText(tid, msgId, fallback).catch(() => {});
+    }
+  }
+  return { ok: true, transaction_id: txn.id, cardRemoved };
 }

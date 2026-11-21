@@ -289,6 +289,11 @@ describe("/ask", () => {
     expect((await run("list_untagged_transactions", {})).count).toBe(0);
     expect(await run("show_dashboard", {})).toMatchObject({ ok: true });
     expect(await run("get_account_status", {})).toMatchObject({ ok: true, status: "active" });
+    expect(classifyFastAgent("delete duplicate swiggy")).toBe("ledger");
+    expect(classifyFastAgent("delete my data")).toBe("account");
+    const del = await run("delete_transaction", { transaction_id: id });
+    expect(del).toEqual({ ok: true, transaction_id: id, card_deleted: true });
+    expect((await getTransaction(ctx.db, "111", id)).status).toBe("deleted");
     expect(await run("nope")).toEqual({ error: "Unknown tool: nope" });
   });
 

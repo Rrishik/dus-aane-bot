@@ -4,7 +4,7 @@ import { listUntaggedTransactions, isUntaggedTransaction } from "../db/transacti
 import { getTenant, getTenantEmails, groupsForMember, getGroupMembers } from "../db/tenants.js";
 import { groupBalances } from "../db/splits.js";
 import { refreshCardMessage } from "./cardState.js";
-import { mutateTransaction, batchMutateTransactions } from "./ledger.js";
+import { mutateTransaction, batchMutateTransactions, removeTransaction } from "./ledger.js";
 import { ensurePersonalPin } from "./personalPin.js";
 import { splitTransaction, undoGroupLink, simplifyDebts, recordCashSettlement, memberName } from "./groups.js";
 import { monthlyTrends, weeklyTrends } from "./analytics.js";
@@ -132,6 +132,14 @@ export const LEDGER_TOOLS = [
       }
     },
     ["items"]
+  ),
+  fn(
+    "delete_transaction",
+    "Delete (soft-delete) a personal transaction and remove its DM card message. Refuses if split into a group (undo_split first). Always confirm transaction_id via search_transactions or list_untagged_transactions first.",
+    {
+      transaction_id: { type: "string", description: "The transaction_id to delete." }
+    },
+    ["transaction_id"]
   ),
   fn(
     "ingest_transaction_text",
@@ -412,6 +420,13 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       const res = await batchMutateTransactions(ctx, tid, args.items);
       if (res.updated > 0) invalidateCache();
       return res;
+    },
+
+    async delete_transaction(args) {
+      const res = await removeTransaction(ctx, tid, args.transaction_id);
+      if (!res.ok) return res;
+      invalidateCache();
+      return { ok: true, transaction_id: res.transaction_id, card_deleted: res.cardRemoved };
     },
 
     async ingest_transaction_text(args) {

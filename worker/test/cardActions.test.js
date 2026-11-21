@@ -219,16 +219,55 @@ describe("⋯ menu, back and delete", () => {
     expect(lastMarkup(ctx).inline_keyboard[0][0].callback_data).toBe("gun:" + id);
   });
 
-  it("delete asks to confirm, then soft-deletes and tombstones the card", async () => {
+  it("delete asks to confirm, removes the card bubble (with >48h tombstone fallback), and supports 0-LLM swipe-reply 'del'", async () => {
     const { ctx, id } = await withCard();
     await handleUpdate(ctx, tap("del_" + id));
     expect(lastMarkup(ctx).inline_keyboard[0].map((b) => b.callback_data)).toEqual(["delyes_" + id, "back_" + id]);
     await handleUpdate(ctx, tap("delyes_" + id));
     expect((await getTransaction(ctx.db, "111", id)).status).toBe("deleted");
-    expect(lastEdit(ctx)[2]).toBe("🗑️ *Transaction deleted*");
+    expect(ctx.tg.of("deleteMessage").some((c) => c.args[0] === "111" && c.args[1] === 100)).toBe(true);
     expect(lastToast(ctx)[1]).toBe("🗑️ Transaction deleted");
     await handleUpdate(ctx, tap("help_" + id));
     expect(lastToast(ctx)[1]).toBe("❌ Transaction not found");
+
+    // >48h fallback: when deleteMessage throws, falls back to tombstone edit.
+    const tenant = await ctx.db.prepare("SELECT * FROM tenants WHERE id='111'").first();
+    const rOld = await ingest(ctx, {
+      tenant,
+      source: "sms",
+      sourceRef: "sms-old",
+      text: "Sent Rs.120.00 From HDFC Bank A/C *1234 To SWIGGY On 07/10/26 Ref 628099990001 Not You? Call 18002586161"
+    });
+    const oldCardId = (await getTransaction(ctx.db, "111", rOld.transactionId)).card_message_id;
+    const origDel = ctx.tg.deleteMessage;
+    ctx.tg.deleteMessage = async () => {
+      throw new Error("message can't be deleted");
+    };
+    await handleUpdate(ctx, tap("delyes_" + rOld.transactionId, oldCardId));
+    expect(lastEdit(ctx)[2]).toBe("🗑️ *Transaction deleted*");
+    ctx.tg.deleteMessage = origDel;
+
+    // 0-LLM swipe-reply "del" removes both DB row and card bubble + reacts 👍.
+    const rSwipe = await ingest(ctx, {
+      tenant,
+      source: "sms",
+      sourceRef: "sms-swipe-del",
+      text: "Sent Rs.180.00 From HDFC Bank A/C *1234 To SWIGGY On 07/10/26 Ref 628099990002 Not You? Call 18002586161"
+    });
+    const swipeCardId = (await getTransaction(ctx.db, "111", rSwipe.transactionId)).card_message_id;
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 888,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "del",
+        reply_to_message: { message_id: swipeCardId }
+      }
+    });
+    expect(ctx.llm.calls).toHaveLength(0);
+    expect((await getTransaction(ctx.db, "111", rSwipe.transactionId)).status).toBe("deleted");
+    expect(ctx.tg.of("deleteMessage").some((c) => c.args[1] === swipeCardId)).toBe(true);
+    expect(ctx.tg.of("setMessageReaction").at(-1).args).toEqual(["111", 888, "👍"]);
   });
 
   it("other tenants' transactions are not found", async () => {
@@ -386,7 +425,7 @@ describe("Re-read", () => {
 });
 
 describe("review cards", () => {
-  it("Save confirms the row; Discard removes it", async () => {
+  it("Save confirms the row; Discard removes the DB row and deletes the card bubble", async () => {
     const { ctx, id } = await withCard({ text: "Rs. 92.50 was spent on your card" });
     expect((await getTransaction(ctx.db, "111", id)).status).toBe("review");
     await handleUpdate(ctx, tap("rvok_" + id));
@@ -395,8 +434,9 @@ describe("review cards", () => {
 
     const tenant = await ctx.db.prepare("SELECT * FROM tenants WHERE id='111'").first();
     const r2 = await ingest(ctx, { tenant, source: "sms", sourceRef: "sms-2", text: "Rs. 10 was spent on your card" });
-    await handleUpdate(ctx, tap("rvno_" + r2.transactionId));
+    const r2CardId = (await getTransaction(ctx.db, "111", r2.transactionId)).card_message_id;
+    await handleUpdate(ctx, tap("rvno_" + r2.transactionId, r2CardId));
     expect((await getTransaction(ctx.db, "111", r2.transactionId)).status).toBe("deleted");
-    expect(lastEdit(ctx)[2]).toBe("✖ *Discarded*");
+    expect(ctx.tg.of("deleteMessage").some((c) => c.args[1] === r2CardId)).toBe(true);
   });
 });

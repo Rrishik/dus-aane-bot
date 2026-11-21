@@ -330,8 +330,9 @@ export async function settleTransaction(ctx, { payerId, txnId, groupId, target: 
   return { ok: true, txn: state.txn, group, targetName };
 }
 
-// Undo a split or settlement. Strikes through the group post first; if that
-// edit fails (48h edit limit, bot removed) nothing is deleted.
+// Undo a split or settlement. Deletes the group post first (falling back to a
+// strikethrough edit if delete isn't allowed); if neither works (48h limit,
+// bot removed) nothing is deleted.
 export async function undoGroupLink(ctx, { payerId, txnId }) {
   const state = await loadCardState(ctx, payerId, txnId);
   if (!state) return { ok: false, error: "Transaction not found." };
@@ -339,15 +340,22 @@ export async function undoGroupLink(ctx, { payerId, txnId }) {
   if (!link) return { ok: false, error: "Not a group split." };
   const group = await getTenant(ctx.db, link.group_id);
   if (link.group_message_id) {
+    let handled = false;
     try {
-      await ctx.tg.editMessageText(
-        link.group_id,
-        link.group_message_id,
-        "<s>✂️ " + escapeHtml(state.txn.merchant || "(transaction)") + " — split reverted</s>",
-        { parse_mode: "HTML" }
-      );
-    } catch (e) {
-      return { ok: false, error: "Couldn't edit the group message (older than 48h?). Nothing was changed." };
+      await ctx.tg.deleteMessage(link.group_id, link.group_message_id);
+      handled = true;
+    } catch (_) {}
+    if (!handled) {
+      try {
+        await ctx.tg.editMessageText(
+          link.group_id,
+          link.group_message_id,
+          "<s>✂️ " + escapeHtml(state.txn.merchant || "(transaction)") + " — split reverted</s>",
+          { parse_mode: "HTML" }
+        );
+      } catch (_) {
+        return { ok: false, error: "Couldn't edit the group message (older than 48h?). Nothing was changed." };
+      }
     }
   }
   if (state.split) await deleteSplit(ctx.db, link.group_id, link.id);

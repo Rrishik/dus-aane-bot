@@ -1,13 +1,13 @@
 // Personal DM card actions: inline buttons (tag, category, ⋯ menu, fix,
 // delete, report, review Save/Discard), pending tag/amount replies, and the
 // deterministic 0-LLM swipe-reply-to-card shortcut.
-import { findTransactionByCardMessage, updateTransaction, softDeleteTransaction } from "../db/transactions.js";
+import { findTransactionByCardMessage, updateTransaction } from "../db/transactions.js";
 import { getMerchantRules, resolveMerchant } from "../db/merchantRules.js";
 import { touchActivity } from "../db/tenants.js";
 import { logParserEvent } from "../db/settings.js";
 import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { loadCardState, defaultKeyboard, editCard } from "./cardState.js";
-import { mutateTransaction } from "./ledger.js";
+import { mutateTransaction, removeTransaction } from "./ledger.js";
 import { reread, rereadAccept, rereadKeep } from "./reread.js";
 import { cancelOpenConversation } from "./orchestrator.js";
 import { refreshPersonalPin } from "./personalPin.js";
@@ -177,14 +177,12 @@ const ACTIONS = {
   },
 
   async delyes(ctx, { chatId, messageId, state, ack }) {
-    if (state.isSplit) {
-      await ack.toast("↩️ Make it personal again first, then delete.", true);
-      await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
+    const res = await removeTransaction(ctx, chatId, state.txn.id, { cardMessageId: messageId });
+    if (!res.ok) {
+      await ack.toast("↩️ " + res.error, true);
+      if (res.isSplit) await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
       return;
     }
-    await softDeleteTransaction(ctx.db, chatId, state.txn.id, ctx.now());
-    await ctx.tg.editMessageText(chatId, messageId, "🗑️ *Transaction deleted*");
-    await refreshPersonalPin(ctx, chatId);
     await ack.toast("🗑️ Transaction deleted");
   },
 
@@ -241,8 +239,14 @@ const ACTIONS = {
   },
 
   async rvno(ctx, { chatId, messageId, state, ack }) {
-    await softDeleteTransaction(ctx.db, chatId, state.txn.id, ctx.now());
-    await ctx.tg.editMessageText(chatId, messageId, "✖ *Discarded*");
+    const res = await removeTransaction(ctx, chatId, state.txn.id, {
+      cardMessageId: messageId,
+      tombstone: "✖ *Discarded*"
+    });
+    if (!res.ok) {
+      await ack.toast("❌ " + res.error, true);
+      return;
+    }
     if (ack) await ack.toast("✖ Discarded");
   }
 };
@@ -387,8 +391,10 @@ const CATEGORY_ALIASES = {
   reimbursement: "Refund"
 };
 
+const DELETE_REPLY_RE = /^(?:del|delete|remove|discard|🗑\uFE0F?)$/i;
+
 const CONVERSATIONAL_REPLY_RE =
-  /[?]|^(?:split|settle|undo|delete|remove|discard|how|what|why|when|where|who|show|list|export|cancel|make\s+it|change\s+amount|fix)\b/i;
+  /[?]|^(?:split|settle|undo|how|what|why|when|where|who|show|list|export|cancel|make\s+it|change\s+amount|fix)\b/i;
 
 export function matchCategoryToken(raw, direction) {
   const token = String(raw || "").trim();
@@ -403,7 +409,9 @@ export function matchCategoryToken(raw, direction) {
 
 export function parseCardQuickReply(text, direction, rules = []) {
   const s = String(text || "").trim();
-  if (!s || s.length > 50 || /\n/.test(s) || CONVERSATIONAL_REPLY_RE.test(s)) return null;
+  if (!s || s.length > 50 || /\n/.test(s)) return null;
+  if (DELETE_REPLY_RE.test(s)) return { action: "delete" };
+  if (CONVERSATIONAL_REPLY_RE.test(s)) return null;
 
   const catOnly = matchCategoryToken(s, direction);
   if (catOnly) return { merchant: null, category: catOnly };
@@ -433,7 +441,24 @@ export async function handleCardReply(ctx, m) {
   if (!txn || txn.status === "deleted") return false;
   const rules = await getMerchantRules(ctx.db, m.chatId);
   const parsed = parseCardQuickReply(m.text, txn.direction, rules);
-  if (!parsed || (!parsed.merchant && !parsed.category)) return false;
+  if (!parsed) return false;
+
+  if (parsed.action === "delete") {
+    const res = await removeTransaction(ctx, m.chatId, txn.id, { cardMessageId: m.replyTo.message_id });
+    if (!res.ok) {
+      if (res.isSplit) {
+        await ctx.tg.sendMessage(m.chatId, "↩️ *Make it personal again first, then delete.*");
+        return true;
+      }
+      return false;
+    }
+    if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
+      await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
+    }
+    return true;
+  }
+
+  if (!parsed.merchant && !parsed.category) return false;
 
   const res = await mutateTransaction(
     ctx,

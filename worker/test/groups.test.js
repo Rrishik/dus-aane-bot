@@ -199,21 +199,36 @@ describe("split / settle / undo from the DM card", () => {
     expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("Already split");
   });
 
-  it("undo strikes the group post, deletes the split and refreshes the pin", async () => {
+  it("undo deletes the group post (or strikes it through if >48h), deletes the split and refreshes the pin", async () => {
     const { ctx, id } = await groupWithCard();
     await handleUpdate(ctx, tap("gsp:" + id + ":-100:p100"));
+    const splitPostId = (await getSplitForTransaction(ctx.db, id)).group_message_id;
     const pinId = Number((await getTenant(ctx.db, "-100")).pin_message_id);
     await handleUpdate(ctx, tap("gun:" + id));
     expect(await getSplitForTransaction(ctx.db, id)).toBeNull();
+    expect(ctx.tg.of("deleteMessage").some((c) => c.args[0] === "-100" && c.args[1] === splitPostId)).toBe(true);
     const edits = ctx.tg.of("editMessageText").map((c) => c.args);
-    expect(edits.find((a) => a[0] === "-100" && a[2].includes("split reverted"))).toBeTruthy();
     expect(edits.find((a) => a[0] === "-100" && a[1] === pinId && a[2].includes("All settled up"))).toBeTruthy();
     expect(edits.at(-1)[3].reply_markup.inline_keyboard[0][0].callback_data).toBe("gsp:" + id + ":-100:50");
+
+    // Fallback when deleteMessage is rejected: strikes through via editMessageText.
+    await handleUpdate(ctx, tap("gsp:" + id + ":-100:50"));
+    ctx.tg.deleteMessage = async () => {
+      throw new Error("message can't be deleted");
+    };
+    await handleUpdate(ctx, tap("gun:" + id));
+    expect(await getSplitForTransaction(ctx.db, id)).toBeNull();
+    expect(ctx.tg.of("editMessageText").some((c) => c.args[0] === "-100" && c.args[2].includes("split reverted"))).toBe(
+      true
+    );
   });
 
-  it("undo keeps the split when the group post can't be edited", async () => {
+  it("undo keeps the split when the group post can neither be deleted nor edited", async () => {
     const { ctx, id } = await groupWithCard();
     await handleUpdate(ctx, tap("gsp:" + id + ":-100:50"));
+    ctx.tg.deleteMessage = async () => {
+      throw new Error("message can't be deleted");
+    };
     ctx.tg.editMessageText = async () => {
       throw new Error("message can't be edited");
     };
