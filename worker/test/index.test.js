@@ -108,13 +108,12 @@ describe("utilities", () => {
   });
 
   it("defaultKind maps categories to kinds", () => {
-    expect(defaultKind("debit", "Food & Dining")).toBe("spend");
-    expect(defaultKind("debit", "CC Bill Payment")).toBe("card_payment");
-    expect(defaultKind("debit", "Transfer Out")).toBe("transfer");
-    expect(defaultKind("debit", "Investment")).toBe("investment");
-    expect(defaultKind("credit", "Salary")).toBe("income");
+    expect(defaultKind("debit", "Food")).toBe("spend");
+    expect(defaultKind("debit", "Transfer")).toBe("transfer");
+    expect(defaultKind("debit", "Invest")).toBe("investment");
+    expect(defaultKind("credit", "Income")).toBe("income");
     expect(defaultKind("credit", "Refund")).toBe("refund");
-    expect(defaultKind("credit", "Transfer In")).toBe("transfer");
+    expect(defaultKind("credit", "Transfer")).toBe("transfer");
   });
 
   it("date helpers shift ISO dates across months and use IST for 'today'", () => {

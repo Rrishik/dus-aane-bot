@@ -4,7 +4,6 @@ import { getTransaction, listUntaggedTransactions, isUntaggedTransaction } from 
 import { mutateTransaction } from "./ledger.js";
 import { cardText } from "./cards.js";
 import { CATEGORIES, CREDIT_CATEGORIES, CATEGORY_EMOJIS, categoriesFor } from "./constants.js";
-import { shortCategoryName } from "./format.js";
 
 function tagStepperKeyboard(txn) {
   const cats = txn.direction === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
@@ -13,13 +12,13 @@ function tagStepperKeyboard(txn) {
   if (missingMerchant && txn.category) {
     rows.push([
       { text: "🏷 Name merchant", callback_data: "tag_" + txn.id },
-      { text: "✓ Keep as " + shortCategoryName(txn.category), callback_data: "tagqm_" + txn.id }
+      { text: "✓ Keep as " + txn.category, callback_data: "tagqm_" + txn.id }
     ]);
   }
   for (let i = 0; i < cats.length; i += 3) {
     rows.push(
       cats.slice(i, i + 3).map((c, j) => ({
-        text: (CATEGORY_EMOJIS[c] ? CATEGORY_EMOJIS[c] + " " : "") + shortCategoryName(c),
+        text: (CATEGORY_EMOJIS[c] ? CATEGORY_EMOJIS[c] + " " : "") + c,
         callback_data: "tagqc_" + txn.id + "_" + (i + j)
       }))
     );
@@ -35,7 +34,7 @@ export async function handleTagQueueCallback(ctx, { chatId, messageId, action, p
   if (action === "tagqm") {
     const txn = await getTransaction(ctx.db, chatId, payload);
     if (txn && txn.status === "confirmed" && !txn.merchant) {
-      const fallbackName = shortCategoryName(txn.category) || (txn.direction === "credit" ? "Credit" : "Expense");
+      const fallbackName = txn.category || (txn.direction === "credit" ? "Credit" : "Expense");
       await mutateTransaction(ctx, chatId, txn.id, { merchant: fallbackName });
       if (ack) await ack.toast("✓ Kept as " + fallbackName);
     }

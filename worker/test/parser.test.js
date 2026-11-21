@@ -163,9 +163,12 @@ describe("helpers", () => {
   });
 
   it("guessCategory matches merchant keywords per direction", () => {
-    expect(api.guessCategory("Swiggy", "Debit")).toBe("Food & Dining");
-    expect(api.guessCategory("Netflix.com", "Debit")).toBe("Subscriptions");
-    expect(api.guessCategory("Acme Salary", "Credit")).toBe("Salary");
+    expect(api.guessCategory("Swiggy", "Debit")).toBe("Food");
+    expect(api.guessCategory("Netflix.com", "Debit")).toBe("Bills");
+    expect(api.guessCategory("BookMyShow", "Debit")).toBe("Fun");
+    expect(api.guessCategory("IndianOil Petrol", "Debit")).toBe("Travel");
+    expect(api.guessCategory("Acme Salary", "Credit")).toBe("Income");
+    expect(api.guessCategory("Amazon Cashback", "Credit")).toBe("Refund");
     expect(api.guessCategory("Random Shop", "Debit")).toBe("");
   });
 

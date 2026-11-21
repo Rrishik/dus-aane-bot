@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createTestD1, migrationFiles } from "./helpers/d1.js";
 
 const NOW = 1791460000000;
+const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../migrations");
 
 async function tenant(db, id, kind) {
   await db
@@ -32,7 +36,7 @@ function txnInsert(db, over) {
 
 describe("migrations", () => {
   it("are numbered and apply cleanly to an empty database", async () => {
-    expect(migrationFiles()).toEqual(["0001_init.sql", "0002_card_message_idx.sql"]);
+    expect(migrationFiles()).toEqual(["0001_init.sql", "0002_card_message_idx.sql", "0003_simplify_categories.sql"]);
     var db = createTestD1();
     var indexes = (
       await db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name").all()
@@ -60,6 +64,50 @@ describe("migrations", () => {
         "ephemeral"
       ])
     );
+  });
+
+  it("0003_simplify_categories rewrites legacy categories and card_payment kind cleanly", async () => {
+    var db = createTestD1();
+    await tenant(db, "111");
+    var legacy = [
+      ["t-food", "debit", "spend", "Food & Dining", "Food", "spend"],
+      ["t-fuel", "debit", "spend", "Fuel", "Travel", "spend"],
+      ["t-subs", "debit", "spend", "Subscriptions", "Bills", "spend"],
+      ["t-bills", "debit", "spend", "Bills & Utilities", "Bills", "spend"],
+      ["t-cc", "debit", "card_payment", "CC Bill Payment", "Transfer", "transfer"],
+      ["t-health", "debit", "spend", "Healthcare", "Health", "spend"],
+      ["t-ent", "debit", "spend", "Entertainment", "Fun", "spend"],
+      ["t-edu", "debit", "spend", "Education", "Shopping", "spend"],
+      ["t-inv", "debit", "investment", "Investment", "Invest", "investment"],
+      ["t-tout", "debit", "transfer", "Transfer Out", "Transfer", "transfer"],
+      ["t-sal", "credit", "income", "Salary", "Income", "income"],
+      ["t-int", "credit", "income", "Interest/Dividend", "Income", "income"],
+      ["t-cb", "credit", "refund", "Cashback", "Refund", "refund"],
+      ["t-reimb", "credit", "refund", "Reimbursement", "Refund", "refund"],
+      ["t-tin", "credit", "transfer", "Transfer In", "Transfer", "transfer"]
+    ];
+    for (var [id, dir, kind, oldCat] of legacy) {
+      await db
+        .prepare(
+          "INSERT INTO transactions (id, tenant_id, occurred_on, amount_minor, currency, direction, kind, category, created_at, updated_at) VALUES (?, '111', '2026-10-07', 1000, 'INR', ?, ?, ?, ?, ?)"
+        )
+        .bind(id, dir, kind, oldCat, NOW, NOW)
+        .run();
+      await db
+        .prepare("INSERT INTO merchant_rules (tenant_id, pattern, category, updated_at) VALUES ('111', ?, ?, ?)")
+        .bind(id, oldCat, NOW)
+        .run();
+    }
+    await db.exec(readFileSync(resolve(MIGRATIONS_DIR, "0003_simplify_categories.sql"), "utf8"));
+    for (var [id, , , , wantCat, wantKind] of legacy) {
+      expect(await db.prepare("SELECT category, kind FROM transactions WHERE id = ?").bind(id).first()).toEqual({
+        category: wantCat,
+        kind: wantKind
+      });
+      expect(await db.prepare("SELECT category FROM merchant_rules WHERE pattern = ?").bind(id).first()).toEqual({
+        category: wantCat
+      });
+    }
   });
 });
 

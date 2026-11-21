@@ -3,7 +3,7 @@
 import { CATEGORIES, CREDIT_CATEGORIES, FREE_ASK_LIMIT } from "./constants.js";
 import { shiftIsoDate } from "../util/dates.js";
 
-const NON_SPEND = ["CC Bill Payment", "Transfer Out", "Investment"];
+const NON_SPEND = ["Transfer", "Invest"];
 
 const CURRENCY_RULE =
   "- Format currency amounts with the symbol and a rounded whole number, no thousands separator or decimals (e.g. ₹1234, $550, €99). Currency symbols: INR=₹, USD=$, EUR=€, GBP=£, JPY/CNY=¥, AUD=A$, CAD=C$, SGD=S$, HKD=HK$, NZD=NZ$. For others use 3-letter code prefix (e.g. AED 500).\n" +
@@ -64,7 +64,7 @@ export function ledgerSystemPrompt(today) {
     "- When multiple plausible rows match, call ask_user to disambiguate before mutating.\n" +
     "- When the user categorizes multiple items in one message (e.g. 'Rahul is Food, Kirana is Groceries'), call batch_update_transactions.\n" +
     "- Only call ingest_transaction_text when the user pasted a genuine bank/card payment alert that wasn't auto-saved. If a message like 'paid 500 to Rahul' matches an existing untagged ₹500 row from today, tag that row instead of creating a duplicate.\n" +
-    "- Briefly confirm what changed (e.g. 'Tagged Rahul Sharma as Food & Dining')."
+    "- Briefly confirm what changed (e.g. 'Tagged Rahul Sharma as Food')."
   );
 }
 
@@ -128,7 +128,7 @@ const ACCOUNT_RE =
 const GROUP_RE =
   /^(?:\/?settle\b)|(?:\b(?:split|50[-\/]50|who\s+owes|owe(?:s|d)?\s+(?:me|whom|bob|alice)?|group\s+balance|settle(?:\s+up|\s+with)?|settled\s+with|simplify\s+debts?|make\s+.+\s+personal|undo\s+split)\b)/i;
 const LEDGER_RE =
-  /\b(?:untagged|uncategorized|categorize|recategorize|re-?tag|tag\s+(?:this|that|it|the|my)?|mark\s+.+\s+as\b|change\s+.*category|update\s+transaction)\b|\bmake\s+\S+\s+(?:shopping|groceries|food|healthcare|fuel|entertainment|travel|bills|education|investment|subscriptions|transfer|salary|refund|cashback|reimbursement)\b/i;
+  /\b(?:untagged|uncategorized|categorize|recategorize|re-?tag|tag\s+(?:this|that|it|the|my)?|mark\s+.+\s+as\b|change\s+.*category|update\s+transaction)\b|\bmake\s+\S+\s+(?:food|groceries|shopping|travel|bills|health|fun|invest|transfer|income|refund)\b/i;
 const ALERT_WORDS_RE = /\b(?:debited|credited|charged|withdrawn|utr|rrn|avl\s*bal|card\s+ending)\b/i;
 const ANALYTICS_RE =
   /^(?:\/?(?:stats|recent)\b)|(?:\b(?:how\s+much|total\s+spend|top\s+merchants?|category\s+breakdown|spending|trends?|compare|recent|latest\s+transactions?|what\s+did\s+i\s+spend|spent\s+on|food\s+spend)\b)/i;

@@ -1,15 +1,12 @@
 // Default transaction kind from direction + category. Users and merchant
 // rules can override it; analytics count only kind = 'spend' as spend.
 const DEBIT_KINDS = {
-  "CC Bill Payment": "card_payment",
-  "Transfer Out": "transfer",
-  Investment: "investment"
+  Transfer: "transfer",
+  Invest: "investment"
 };
 const CREDIT_KINDS = {
   Refund: "refund",
-  Cashback: "refund",
-  Reimbursement: "refund",
-  "Transfer In": "transfer"
+  Transfer: "transfer"
 };
 
 export function defaultKind(direction, category) {

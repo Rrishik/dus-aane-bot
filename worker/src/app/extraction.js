@@ -9,7 +9,7 @@ export const EXTRACTION_TOOLS = [
     function: {
       name: "get_merchant_category",
       description:
-        "Look up the default category for a merchant. Call this when you are unsure about the category for a merchant. Do NOT call for well-known merchants where the category is obvious (e.g., Amazon=Shopping, Swiggy=Food & Dining).",
+        "Look up the default category for a merchant. Call this when you are unsure about the category for a merchant. Do NOT call for well-known merchants where the category is obvious (e.g., Amazon=Shopping, Swiggy=Food).",
       parameters: {
         type: "object",
         properties: { merchant: { type: "string", description: "The merchant name extracted from the message" } },
@@ -42,7 +42,7 @@ export function extractionSystemPrompt() {
     CATEGORIES.join(", ") +
     "\n- Credit (when confident): one of: " +
     CREDIT_CATEGORIES.join(", ") +
-    '\n- IMPORTANT: Return "" (empty string) for category when merchant is "", an individual person\'s name (e.g., "Rahul Sharma"), an opaque corporate/UPI handle (e.g., "Bundl Tech", "Sri Enterprises"), or when get_merchant_category returns null and the business type is not obvious from the merchant name itself. Never guess "Shopping" or "Transfer Out" as a fallback — leaving it "" lets the user tag it accurately.\n\n' +
+    '\n- IMPORTANT: Return "" (empty string) for category when merchant is "", an individual person\'s name (e.g., "Rahul Sharma"), an opaque corporate/UPI handle (e.g., "Bundl Tech", "Sri Enterprises"), or when get_merchant_category returns null and the business type is not obvious from the merchant name itself. Never guess "Shopping" or "Transfer" as a fallback — leaving it "" lets the user tag it accurately.\n\n' +
     "If the message is NOT a transaction (surveys, OTPs, marketing, feedback, declined transactions, alerts with no monetary value), return:\n" +
     '{"not_a_transaction": true, "reason": "brief reason"}\n\n' +
     "Use the get_merchant_category tool when you see an unfamiliar merchant/company name that might have a saved mapping. " +

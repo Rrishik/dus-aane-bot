@@ -2,7 +2,7 @@
 import { getTenant, getTenantEmails, registerEmail } from "../db/tenants.js";
 import { listTransactions } from "../db/transactions.js";
 import { BOT_INBOX_EMAIL } from "./constants.js";
-import { escapeMarkdown, money, shortCategoryName, formatLongDate } from "./format.js";
+import { escapeMarkdown, money, formatLongDate } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { ensurePersonalPin } from "./personalPin.js";
 import { callAppsScript } from "./appsScript.js";
@@ -125,7 +125,7 @@ export async function recentMessage(ctx, tenantId, { limit = 5, user = null } = 
   }
   let msg = "📅 *Recent Transactions*" + (user ? " (user: " + escapeMarkdown(user) + ")" : "") + "\n";
   rows.forEach((r) => {
-    const cat = r.category ? " · " + shortCategoryName(r.category) : " · _untagged_";
+    const cat = r.category ? " · " + r.category : " · _untagged_";
     msg +=
       "\n" +
       (r.direction === "debit" ? "🔴" : "🟢") +

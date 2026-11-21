@@ -92,7 +92,7 @@ export const llmTxn = (o) =>
     merchant: "Swiggy",
     amount: 250,
     currency: "INR",
-    category: "Food & Dining",
+    category: "Food",
     transaction_type: "Debit",
     ...o
   });

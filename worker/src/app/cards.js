@@ -2,7 +2,7 @@
 // Callback data carries the transaction id (26-char ULID); group callbacks
 // use ":" separators, card callbacks "_".
 import { CATEGORY_EMOJIS, categoriesFor } from "./constants.js";
-import { escapeMarkdown, money, pillLabel, shortCategoryName, formatDayMonth } from "./format.js";
+import { escapeMarkdown, money, pillLabel, formatDayMonth } from "./format.js";
 
 // txn: transactions row. opts: { user, extraLine }.
 export function cardText(txn, opts = {}) {
@@ -29,18 +29,11 @@ export function pillsRow(txnId, merchant, category) {
   ];
 }
 
-const QUICK_DEBIT_CATEGORIES = [
-  "Food & Dining",
-  "Groceries",
-  "Shopping",
-  "Travel",
-  "Bills & Utilities",
-  "Entertainment"
-];
-const QUICK_CREDIT_CATEGORIES = ["Transfer In", "Refund", "Reimbursement", "Salary", "Cashback", "Interest/Dividend"];
+const QUICK_DEBIT_CATEGORIES = ["Food", "Groceries", "Shopping", "Travel", "Bills", "Health"];
+const QUICK_CREDIT_CATEGORIES = ["Income", "Refund", "Transfer"];
 
 // Compact 1-row emoji strip shown on arrival when a confirmed transaction has
-// no category yet (6 icons on a single horizontal row).
+// no category yet (up to 6 icons on a single horizontal row).
 export function quickCategoryRows(txnId, direction) {
   const all = categoriesFor(direction);
   const picks = (direction === "credit" ? QUICK_CREDIT_CATEGORIES : QUICK_DEBIT_CATEGORIES).filter((c) =>
@@ -48,7 +41,7 @@ export function quickCategoryRows(txnId, direction) {
   );
   return [
     picks.slice(0, 6).map((c) => ({
-      text: CATEGORY_EMOJIS[c] || shortCategoryName(c),
+      text: CATEGORY_EMOJIS[c] || c,
       callback_data: "cat_" + txnId + "_" + all.indexOf(c)
     }))
   ];

@@ -9,14 +9,7 @@ import { listUntaggedTransactions } from "../db/transactions.js";
 import { groupBalances } from "../db/splits.js";
 import { simplifyDebts } from "./groups.js";
 import { CATEGORY_EMOJIS } from "./constants.js";
-import {
-  escapeMarkdown,
-  currencySymbol,
-  formatAmountCompact,
-  formatMonthYear,
-  money,
-  shortCategoryName
-} from "./format.js";
+import { escapeMarkdown, currencySymbol, formatAmountCompact, formatMonthYear, money } from "./format.js";
 import { istDate, shiftIsoDate } from "../util/dates.js";
 import { fromMinor } from "../util/money.js";
 
@@ -92,7 +85,7 @@ export function formatPersonalPin(data) {
           (c) =>
             (CATEGORY_EMOJIS[c.category] || "•") +
             " " +
-            escapeMarkdown(shortCategoryName(c.category)) +
+            escapeMarkdown(c.category) +
             " ₹" +
             formatAmountCompact(fromMinor(c.minor))
         )

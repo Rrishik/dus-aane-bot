@@ -93,10 +93,9 @@ export async function ingest(ctx, input) {
   }
   if (!allowed.includes(category)) category = guessCategory(resolved.merchant, d.transaction_type) || null;
   // Generic alerts with no merchant cannot have a confident spend/transfer
-  // category unless explicitly a card bill payment, salary, refund, cashback,
-  // interest/dividend, or investment.
+  // category unless explicitly an investment, income, or refund.
   if (!resolved.merchant && !resolved.category && category) {
-    const keepWithoutMerchant = ["CC Bill Payment", "Investment", "Salary", "Refund", "Cashback", "Interest/Dividend"];
+    const keepWithoutMerchant = ["Invest", "Income", "Refund"];
     if (!keepWithoutMerchant.includes(category)) category = null;
   }
 

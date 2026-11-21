@@ -26,7 +26,7 @@ import { getTransaction } from "../db/transactions.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { MAX_GROUP_MEMBERS } from "./constants.js";
-import { MONTHS, escapeMarkdown, money, currencySymbol, formatAmount, shortCategoryName } from "./format.js";
+import { MONTHS, escapeMarkdown, money, currencySymbol, formatAmount } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { fromMinor, toMinor } from "../util/money.js";
 
@@ -205,7 +205,7 @@ function splitNotification(txn, payerName, holders, shares, nameOf) {
     txn.merchant ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount : emoji + " *" + amount + "*"
   ];
   const date = escapeMarkdown(longDate(txn.occurred_on));
-  lines.push(txn.category ? "📂 " + escapeMarkdown(shortCategoryName(txn.category)) + " · " + date : "🗓 " + date);
+  lines.push(txn.category ? "📂 " + escapeMarkdown(txn.category) + " · " + date : "🗓 " + date);
   lines.push("👤 *" + escapeMarkdown(payerName) + "* paid");
   lines.push(
     "👥 " +

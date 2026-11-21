@@ -8,7 +8,7 @@ import { listEffectiveTransactions } from "../db/analytics.js";
 import { listUntaggedTransactions } from "../db/transactions.js";
 import { weekRangeFor, weeklyDigestData, formatWeeklyMessage } from "./analytics.js";
 import { refreshPersonalPin } from "./personalPin.js";
-import { escapeMarkdown, money, shortCategoryName, formatDayMonth } from "./format.js";
+import { escapeMarkdown, money, formatDayMonth } from "./format.js";
 import { istDate, shiftIsoDate } from "../util/dates.js";
 
 const DAY_MS = 86400000;
@@ -148,7 +148,7 @@ export function formatDailyRecap(todayIso, todayRows, untaggedRows) {
     lines.push("");
     for (const r of todayRows.slice(0, 5)) {
       const label = escapeMarkdown(r.merchant || r.merchant_raw || "Untagged");
-      const cat = r.category ? escapeMarkdown(shortCategoryName(r.category)) : "_needs category_";
+      const cat = r.category ? escapeMarkdown(r.category) : "_needs category_";
       lines.push("• *" + label + "* — " + money(r.effective_minor, r.currency) + " · " + cat);
     }
     if (todayRows.length > 5) lines.push("_+" + (todayRows.length - 5) + " more today_");

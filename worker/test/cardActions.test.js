@@ -44,12 +44,12 @@ describe("category picker", () => {
     expect(picker[0].map((b) => b.callback_data)).toEqual(["cat_" + id + "_0", "cat_" + id + "_1", "cat_" + id + "_2"]);
     expect(picker.at(-1)[0].callback_data).toBe("back_" + id);
 
-    await handleUpdate(ctx, tap("cat_" + id + "_12")); // Transfer Out
-    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Transfer Out", kind: "transfer" });
-    expect(lastMarkup(ctx).inline_keyboard.at(-1)[1].text).toBe("📤 ▾");
-    expect(lastToast(ctx)[1]).toBe("📤 Transfer Out");
+    await handleUpdate(ctx, tap("cat_" + id + "_8")); // Transfer
+    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Transfer", kind: "transfer" });
+    expect(lastMarkup(ctx).inline_keyboard.at(-1)[1].text).toBe("💸 ▾");
+    expect(lastToast(ctx)[1]).toBe("💸 Transfer");
     expect(await getMerchantRules(ctx.db, "111")).toEqual([
-      { pattern: "swiggy", name: null, category: "Transfer Out", kind: null, personal: true }
+      { pattern: "swiggy", name: null, category: "Transfer", kind: null, personal: true }
     ]);
   });
 
@@ -64,18 +64,18 @@ describe("category picker", () => {
       "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL 9821 On 07/10/26 Ref 628011112222 Not You? Call 18002586161";
     const { ctx, id } = await withCard({ text: rahulSms });
     const initialRows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
-    expect(initialRows[0].map((b) => b.text)).toEqual(["🍕", "🥦", "🛍", "✈️", "💡", "🎬"]);
+    expect(initialRows[0].map((b) => b.text)).toEqual(["🍕", "🥦", "🛍", "🚕", "🏠", "💊"]);
     expect(initialRows[1].map((b) => b.text)).toEqual(["🏷 Rahul 9821 ▾", "📂 All ▾", "⋯"]);
 
-    // One tap on "🍕" (index 2) sets category, collapses the emoji strip, and teaches shortened pattern.
-    await handleUpdate(ctx, tap("cat_" + id + "_2"));
-    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Food & Dining", kind: "spend" });
+    // One tap on "🍕" (index 0) sets category, collapses the emoji strip, and teaches shortened pattern.
+    await handleUpdate(ctx, tap("cat_" + id + "_0"));
+    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Food", kind: "spend" });
     expect(lastMarkup(ctx).inline_keyboard).toHaveLength(1);
     expect(lastMarkup(ctx).inline_keyboard[0][1].text).toBe("🍕 ▾");
     expect((await getMerchantRules(ctx.db, "111")).map((r) => [r.pattern, r.category])).toEqual(
       expect.arrayContaining([
-        ["rahul 9821", "Food & Dining"],
-        ["rahul", "Food & Dining"]
+        ["rahul 9821", "Food"],
+        ["rahul", "Food"]
       ])
     );
   });
@@ -117,7 +117,7 @@ describe("category picker", () => {
       }
     });
     expect(ctx.llm.calls).toHaveLength(0);
-    expect((await getTransaction(ctx.db, "111", id)).category).toBe("Food & Dining");
+    expect((await getTransaction(ctx.db, "111", id)).category).toBe("Food");
   });
 
   it("tagging an uncategorized row to a known brand auto-fills its category", async () => {
@@ -128,7 +128,7 @@ describe("category picker", () => {
     await handleUpdate(ctx, reply("Starbucks"));
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({
       merchant: "Starbucks",
-      category: "Food & Dining",
+      category: "Food",
       kind: "spend"
     });
   });

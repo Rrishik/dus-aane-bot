@@ -22,7 +22,7 @@ const base = {
   kind: "spend",
   merchantRaw: "SWIGGY",
   merchant: "Swiggy",
-  category: "Food & Dining"
+  category: "Food"
 };
 const smsSource = (ref) => ({
   source: "sms",
@@ -121,7 +121,7 @@ describe("transactions", () => {
     expect(await txns.attachSource(db, "222", id, { source: "email", sourceRef: "g1" })).toBe(false);
     expect(await txns.listTransactions(db, "222")).toEqual([]);
     expect(await txns.findLinkCandidate(db, "222", { ...base, accountLast4: null, reference: null })).toBeNull();
-    expect((await txns.getTransaction(db, "111", id)).category).toBe("Food & Dining");
+    expect((await txns.getTransaction(db, "111", id)).category).toBe("Food");
   });
 
   it("attaches a second source to the same transaction", async () => {

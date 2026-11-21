@@ -45,7 +45,7 @@ async function addTxn(ctx, tenantId, o = {}) {
       direction: "debit",
       kind: "spend",
       merchant: "Swiggy",
-      category: "Food & Dining",
+      category: "Food",
       forwarder: "alice",
       ...o
     },
@@ -188,7 +188,7 @@ describe("analytics", () => {
     await seedTenant(ctx, "222");
     await seedGroup(ctx, "-100", ["111", "222"]);
     await addTxn(ctx, "111", { amountMinor: 10000 });
-    await addTxn(ctx, "111", { amountMinor: 99900, kind: "card_payment", category: "CC Bill Payment" });
+    await addTxn(ctx, "111", { amountMinor: 99900, kind: "transfer", category: "Transfer" });
     const split = await addTxn(ctx, "111", { amountMinor: 60000 });
     await createSplit(ctx.db, {
       transactionId: split,
@@ -209,14 +209,14 @@ describe("analytics", () => {
       currency: "INR",
       transactionId: settle
     });
-    await addTxn(ctx, "111", { amountMinor: 800000, direction: "credit", kind: "income", category: "Salary" });
+    await addTxn(ctx, "111", { amountMinor: 800000, direction: "credit", kind: "income", category: "Income" });
 
     const weeks = await weeklyTrends(ctx.db, "111", NOW);
     const last = weeks.at(-1);
     expect(last.label).toBe("Sep 30");
     expect(last.debitByCurrency).toEqual({ INR: 400 });
     expect(last.creditByCurrency).toEqual({ INR: 8000 });
-    expect(last.categorySpend).toEqual({ "Food & Dining": 400 });
+    expect(last.categorySpend).toEqual({ Food: 400 });
     const months = await monthlyTrends(ctx.db, "111", NOW);
     expect(months.map((m) => m.label)).toEqual(["May 26", "Jun 26", "Jul 26", "Aug 26", "Sep 26", "Oct 26"]);
     expect(formatTrendsMessage(weeks, { title: "T" })).toMatch(/`Sep 30  ████████  ₹400`/);

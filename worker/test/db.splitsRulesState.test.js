@@ -158,7 +158,7 @@ describe("splits + group balances", () => {
 describe("merchant rules", () => {
   it("personal rules come first and win; omitted fields are preserved on upsert", async () => {
     const db = await groupFixture();
-    await upsertMerchantRule(db, null, "swiggy_mws", { name: "Swiggy", category: "Food & Dining" }, NOW);
+    await upsertMerchantRule(db, null, "swiggy_mws", { name: "Swiggy", category: "Food" }, NOW);
     await upsertMerchantRule(db, "111", "Swiggy", { category: "Groceries" }, NOW);
     await upsertMerchantRule(db, "111", "swiggy", { kind: "spend" }, NOW);
     const rules = await getMerchantRules(db, "111");
@@ -171,7 +171,7 @@ describe("merchant rules", () => {
     const rules = [
       { pattern: "bundl", name: "Swiggy", category: null, kind: null, personal: true },
       { pattern: "swiggy", name: null, category: "Groceries", kind: null, personal: true },
-      { pattern: "bundl tech", name: null, category: "Food & Dining", kind: null, personal: false }
+      { pattern: "bundl tech", name: null, category: "Food", kind: null, personal: false }
     ];
     expect(resolveMerchant("BUNDL TECH 123", rules)).toEqual({
       merchant: "Swiggy",

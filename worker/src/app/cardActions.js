@@ -13,7 +13,7 @@ import { cancelOpenConversation } from "./orchestrator.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard, fixMenuKeyboard } from "./cards.js";
 import { CATEGORY_EMOJIS, categoriesFor, TAG_MAX_LEN } from "./constants.js";
-import { escapeMarkdown, money, shortCategoryName } from "./format.js";
+import { escapeMarkdown, money } from "./format.js";
 import { setPending, getPending, takePending, clearPending } from "./pending.js";
 import { toMinor, fromMinor } from "../util/money.js";
 
@@ -340,41 +340,53 @@ export async function handleTagReply(ctx, m) {
 // ─── Deterministic swipe-reply-to-card tagging shortcut ──────────────
 
 const CATEGORY_ALIASES = {
-  food: "Food & Dining",
-  dining: "Food & Dining",
+  food: "Food",
+  dining: "Food",
+  "food & dining": "Food",
   grocery: "Groceries",
   groceries: "Groceries",
   shopping: "Shopping",
   shop: "Shopping",
-  health: "Healthcare",
-  healthcare: "Healthcare",
-  medical: "Healthcare",
-  medicine: "Healthcare",
-  fuel: "Fuel",
-  petrol: "Fuel",
-  entertainment: "Entertainment",
-  movies: "Entertainment",
+  education: "Shopping",
+  health: "Health",
+  healthcare: "Health",
+  medical: "Health",
+  medicine: "Health",
+  pharmacy: "Health",
   travel: "Travel",
   cab: "Travel",
   flight: "Travel",
-  bills: "Bills & Utilities",
-  utilities: "Bills & Utilities",
-  education: "Education",
-  investment: "Investment",
-  invest: "Investment",
-  subscriptions: "Subscriptions",
-  subs: "Subscriptions",
-  subscription: "Subscriptions",
-  "cc bill": "CC Bill Payment",
-  "card bill": "CC Bill Payment",
-  "cc bill payment": "CC Bill Payment",
-  salary: "Salary",
+  fuel: "Travel",
+  petrol: "Travel",
+  transport: "Travel",
+  bills: "Bills",
+  utilities: "Bills",
+  "bills & utilities": "Bills",
+  rent: "Bills",
+  maintenance: "Bills",
+  subscriptions: "Bills",
+  subs: "Bills",
+  subscription: "Bills",
+  fun: "Fun",
+  entertainment: "Fun",
+  movies: "Fun",
+  invest: "Invest",
+  investment: "Invest",
+  transfer: "Transfer",
+  trf: "Transfer",
+  "transfer out": "Transfer",
+  "transfer in": "Transfer",
+  "cc bill": "Transfer",
+  "card bill": "Transfer",
+  "cc bill payment": "Transfer",
+  income: "Income",
+  salary: "Income",
+  interest: "Income",
+  dividend: "Income",
   refund: "Refund",
-  cashback: "Cashback",
-  reimburse: "Reimbursement",
-  reimbursement: "Reimbursement",
-  interest: "Interest/Dividend",
-  dividend: "Interest/Dividend"
+  cashback: "Refund",
+  reimburse: "Refund",
+  reimbursement: "Refund"
 };
 
 const CONVERSATIONAL_REPLY_RE =
@@ -385,13 +397,7 @@ export function matchCategoryToken(raw, direction) {
   if (!token) return null;
   const valid = categoriesFor(direction);
   const lower = token.toLowerCase();
-  if (lower === "transfer" || lower === "trf") {
-    const trf = direction === "credit" ? "Transfer In" : "Transfer Out";
-    return valid.includes(trf) ? trf : null;
-  }
-  const exact = valid.find(
-    (c) => c.toLowerCase() === lower || shortCategoryName(c).toLowerCase() === lower || CATEGORY_EMOJIS[c] === token
-  );
+  const exact = valid.find((c) => c.toLowerCase() === lower || CATEGORY_EMOJIS[c] === token);
   if (exact) return exact;
   const alias = CATEGORY_ALIASES[lower];
   return alias && valid.includes(alias) ? alias : null;

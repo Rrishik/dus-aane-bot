@@ -94,26 +94,24 @@ var _P_MONTHS = {
 var _P_MON = "(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*";
 
 var _P_CATEGORY_KEYWORDS = [
-  ["Food & Dining", /swiggy|zomato|restaurant|cafe|coffee|domino|pizza|eatsure|starbucks|kfc|mcdonald|burger/i],
+  ["Food", /swiggy|zomato|restaurant|cafe|coffee|domino|pizza|eatsure|starbucks|kfc|mcdonald|burger/i],
   ["Groceries", /blinkit|zepto|bigbasket|instamart|grocer|supermarket|dmart|jiomart/i],
-  ["Shopping", /amazon|flipkart|myntra|ajio|meesho|nykaa|croma|decathlon/i],
-  ["Travel", /uber|\bola\b|rapido|irctc|makemytrip|goibibo|indigo|air india|vistara|redbus|cleartrip|\bmetro\b/i],
-  ["Fuel", /petrol|fuel|hpcl|bpcl|indian oil|iocl|\bshell\b/i],
-  ["Subscriptions", /netflix|spotify|prime video|hotstar|youtube|apple\.com|google play|icloud|openai|chatgpt/i],
-  ["Entertainment", /bookmyshow|\bpvr\b|inox|cinema/i],
+  ["Shopping", /amazon|flipkart|myntra|ajio|meesho|nykaa|croma|decathlon|udemy|coursera/i],
   [
-    "Bills & Utilities",
-    /electricity|bescom|airtel|\bjio\b|vodafone|broadband|fibernet|tata power|water bill|gas bill/i
+    "Travel",
+    /uber|\bola\b|rapido|irctc|makemytrip|goibibo|indigo|air india|vistara|redbus|cleartrip|\bmetro\b|petrol|fuel|hpcl|bpcl|indian oil|iocl|\bshell\b/i
   ],
-  ["Healthcare", /pharm|apollo|medplus|1mg|hospital|clinic|practo/i],
-  ["Education", /udemy|coursera|school|college|university/i],
-  ["Investment", /zerodha|groww|upstox|mutual fund|kuvera/i]
+  ["Fun", /bookmyshow|\bpvr\b|inox|cinema|district|steam|playstation|xbox/i],
+  [
+    "Bills",
+    /electricity|bescom|airtel|\bjio\b|vodafone|broadband|fibernet|tata power|water bill|gas bill|mygate|nobroker|netflix|spotify|prime video|hotstar|youtube|apple\.com|google play|icloud|openai|chatgpt/i
+  ],
+  ["Health", /pharm|apollo|medplus|1mg|hospital|clinic|practo|cult\.?fit/i],
+  ["Invest", /zerodha|groww|upstox|mutual fund|kuvera/i]
 ];
 var _P_CREDIT_CATEGORY_KEYWORDS = [
-  ["Salary", /salary/i],
-  ["Refund", /refund|reversal|reversed/i],
-  ["Cashback", /cashback/i],
-  ["Interest/Dividend", /interest|dividend/i]
+  ["Income", /salary|interest|dividend/i],
+  ["Refund", /refund|reversal|reversed|cashback|reimburse/i]
 ];
 
 function normalizeTransactionText(text) {

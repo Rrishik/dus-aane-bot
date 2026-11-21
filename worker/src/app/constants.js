@@ -1,53 +1,21 @@
 // Bot-wide constants: categories, currency symbols, limits.
 
-export const CATEGORIES = [
-  "Shopping",
-  "Groceries",
-  "Food & Dining",
-  "Healthcare",
-  "Fuel",
-  "Entertainment",
-  "Travel",
-  "Bills & Utilities",
-  "Education",
-  "Investment",
-  "Subscriptions",
-  "CC Bill Payment",
-  "Transfer Out"
-];
+export const CATEGORIES = ["Food", "Groceries", "Shopping", "Travel", "Bills", "Health", "Fun", "Invest", "Transfer"];
 
-export const CREDIT_CATEGORIES = ["Salary", "Refund", "Cashback", "Transfer In", "Reimbursement", "Interest/Dividend"];
+export const CREDIT_CATEGORIES = ["Income", "Refund", "Transfer"];
 
 export const CATEGORY_EMOJIS = {
-  Shopping: "🛍",
+  Food: "🍕",
   Groceries: "🥦",
-  "Food & Dining": "🍕",
-  Healthcare: "🏥",
-  Fuel: "⛽",
-  Entertainment: "🎬",
-  Travel: "✈️",
-  "Bills & Utilities": "💡",
-  Education: "🎓",
-  Investment: "📈",
-  Subscriptions: "📱",
-  "CC Bill Payment": "💳",
-  "Transfer Out": "📤",
-  Salary: "💼",
-  Refund: "🔄",
-  Cashback: "🎁",
-  "Transfer In": "📥",
-  Reimbursement: "🧾",
-  "Interest/Dividend": "🏦"
-};
-
-export const CATEGORY_SHORT_NAMES = {
-  "Food & Dining": "Food",
-  "Bills & Utilities": "Bills",
-  "CC Bill Payment": "CC Bill",
-  "Interest/Dividend": "Interest",
-  Reimbursement: "Reimburse",
-  "Transfer In": "Transfer",
-  "Transfer Out": "Transfer"
+  Shopping: "🛍",
+  Travel: "🚕",
+  Bills: "🏠",
+  Health: "💊",
+  Fun: "🎬",
+  Invest: "📈",
+  Transfer: "💸",
+  Income: "💼",
+  Refund: "↩️"
 };
 
 export const CURRENCY_SYMBOLS = {

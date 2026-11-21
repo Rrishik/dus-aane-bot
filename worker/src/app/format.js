@@ -1,5 +1,5 @@
 // Text formatting shared by cards, commands and digests (legacy Markdown).
-import { CATEGORY_SHORT_NAMES, CURRENCY_SYMBOLS, TAG_MAX_LEN } from "./constants.js";
+import { CURRENCY_SYMBOLS, TAG_MAX_LEN } from "./constants.js";
 import { fromMinor } from "../util/money.js";
 
 // Legacy Markdown only treats _ * [ ` as special.
@@ -31,10 +31,6 @@ export function currencySymbol(code) {
 
 export function money(amountMinor, currency) {
   return currencySymbol(currency) + formatAmount(fromMinor(amountMinor));
-}
-
-export function shortCategoryName(cat) {
-  return CATEGORY_SHORT_NAMES[cat] || cat;
 }
 
 export function pillLabel(value, fallback) {

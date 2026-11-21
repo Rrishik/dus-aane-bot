@@ -40,7 +40,7 @@ describe("ingest — SMS", () => {
       direction: "debit",
       kind: "spend",
       merchant: "Swiggy",
-      category: "Food & Dining",
+      category: "Food",
       account_last4: "1234",
       reference: "628012345678",
       status: "confirmed",
@@ -195,7 +195,7 @@ describe("ingest — linking the same payment across email and SMS", () => {
 describe("ingest — merchant rules and cards", () => {
   it("the user's own category and kind beat the LLM; shared rules fill gaps", async () => {
     const { ctx, tenant } = await setup({
-      llmReplies: [llmTxn({ merchant: "BUNDL TECH", category: "Food & Dining" })]
+      llmReplies: [llmTxn({ merchant: "BUNDL TECH", category: "Food" })]
     });
     await upsertMerchantRule(ctx.db, null, "bundl tech", { name: "Swiggy" });
     await upsertMerchantRule(ctx.db, "111", "swiggy", { category: "Groceries", kind: "spend" });
@@ -206,10 +206,10 @@ describe("ingest — merchant rules and cards", () => {
 
   it("transfer categories get a non-spend kind", async () => {
     const { ctx, tenant } = await setup({
-      llmReplies: [llmTxn({ merchant: "HDFC Credit Card", category: "CC Bill Payment", amount: 250 })]
+      llmReplies: [llmTxn({ merchant: "HDFC Credit Card", category: "Transfer", amount: 250 })]
     });
     await ingest(ctx, email(tenant));
-    expect((await listTransactions(ctx.db, "111"))[0].kind).toBe("card_payment");
+    expect((await listTransactions(ctx.db, "111"))[0].kind).toBe("transfer");
   });
 
   it("leaves unknown UPI payees and generic merchantless debits uncategorized so they appear in listUntaggedTransactions", async () => {
@@ -220,7 +220,7 @@ describe("ingest — merchant rules and cards", () => {
       "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL SHARMA On 07/10/26 Ref 628011112222 Not You? Call 18002586161";
     await ingest(ctx, sms(tenant, rahulSms, "sms-rahul"));
     await ingest(ctx, email(tenant, "Rs.250.00 debited from A/C **1234 on 07-10-26.", "g-generic"));
-    await ingest(ctx, sms(tenant)); // Swiggy -> Food & Dining
+    await ingest(ctx, sms(tenant)); // Swiggy -> Food
 
     const untagged = await listUntaggedTransactions(ctx.db, "111");
     expect(untagged.map((r) => [r.merchant, r.category])).toEqual([

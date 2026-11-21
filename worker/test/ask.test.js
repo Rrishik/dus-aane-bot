@@ -174,7 +174,7 @@ describe("/ask", () => {
     replies.push(
       toolCall("route_to_ledger"),
       toolCall("ingest_transaction_text", { text: "Revolut: EUR 14.50 charged at Paul Bakery on 2026-10-07" }),
-      llmTxn({ merchant: "Paul Bakery", amount: 14.5, currency: "EUR", category: "Food & Dining" }),
+      llmTxn({ merchant: "Paul Bakery", amount: 14.5, currency: "EUR", category: "Food" }),
       ""
     );
     await handleUpdate(ctx, msg("Revolut: EUR 14.50 charged at Paul Bakery on 2026-10-07"));
@@ -226,7 +226,7 @@ describe("/ask", () => {
     const before = await getTransaction(ctx.db, "111", id);
     replies.push(
       toolCall("update_transaction", { transaction_id: id, category: "Groceries" }),
-      toolCall("update_transaction", { transaction_id: id, category: "Salary" }),
+      toolCall("update_transaction", { transaction_id: id, category: "Income" }),
       "Updated."
     );
     await handleUpdate(ctx, msg("/ask make swiggy groceries"));
@@ -303,7 +303,7 @@ describe("/ask", () => {
         direction: "debit",
         kind: "transfer",
         merchant: null,
-        category: "Transfer Out"
+        category: "Transfer"
       },
       { source: "email", sourceRef: "g-unk-1" },
       NOW
@@ -318,7 +318,7 @@ describe("/ask", () => {
         direction: "credit",
         kind: "transfer",
         merchant: null,
-        category: "Transfer In"
+        category: "Transfer"
       },
       { source: "email", sourceRef: "g-unk-2" },
       NOW
@@ -350,7 +350,7 @@ describe("/ask", () => {
         date: "2026-10-07",
         amount: 899,
         merchant: "Untagged",
-        category: "Transfer Out",
+        category: "Transfer",
         missing_merchant: true,
         missing_category: false
       }),
@@ -358,7 +358,7 @@ describe("/ask", () => {
         date: "2026-10-06",
         amount: 80,
         merchant: "Untagged",
-        category: "Transfer In",
+        category: "Transfer",
         missing_merchant: true,
         missing_category: false
       })

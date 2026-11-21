@@ -2,14 +2,7 @@
 // kind = 'spend' (card bill payments, transfers and investments excluded).
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { CATEGORY_EMOJIS } from "./constants.js";
-import {
-  MONTHS,
-  escapeMarkdown,
-  formatAmount,
-  formatAmountCompact,
-  currencySymbol,
-  shortCategoryName
-} from "./format.js";
+import { MONTHS, escapeMarkdown, formatAmount, formatAmountCompact, currencySymbol } from "./format.js";
 import { shiftIsoDate, istDate } from "../util/dates.js";
 import { fromMinor } from "../util/money.js";
 
@@ -159,7 +152,7 @@ export function formatTrendsMessage(buckets, { title = "📉 *Spending Trends*",
         msg +=
           (CATEGORY_EMOJIS[d.category] || "•") +
           " " +
-          escapeMarkdown(shortCategoryName(d.category)) +
+          escapeMarkdown(d.category) +
           " " +
           (d.delta > 0 ? "↑" : "↓") +
           " ₹" +

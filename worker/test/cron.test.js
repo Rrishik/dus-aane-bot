@@ -214,7 +214,7 @@ describe("runScheduled", () => {
     edit = ctx.tg.of("editMessageText").at(-1).args;
     expect(edit[2]).toContain("1 of 2 left");
     expect(edit[2]).toContain("Rahul 111");
-    const rahulFoodCall = edit[3].reply_markup.inline_keyboard[0][2].callback_data; // Food (index 2)
+    const rahulFoodCall = edit[3].reply_markup.inline_keyboard[0][0].callback_data; // Food (index 0)
 
     // Categorize Rahul 111 -> Food; shortened rule "rahul" auto-fills Rahul 222 too -> All caught up!
     await handleUpdate(ctx, {
