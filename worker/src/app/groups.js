@@ -14,6 +14,7 @@ import {
 } from "../db/tenants.js";
 import {
   createSplit,
+  getSplitForTransaction,
   deleteSplit,
   setSplitGroupMessage,
   recordSettlement,
@@ -21,6 +22,7 @@ import {
   deleteSettlement,
   groupBalances
 } from "../db/splits.js";
+import { getTransaction } from "../db/transactions.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { MAX_GROUP_MEMBERS } from "./constants.js";
@@ -358,6 +360,29 @@ export async function undoGroupLink(ctx, { payerId, txnId }) {
   else await deleteSettlement(ctx.db, link.group_id, link.id);
   if (group) await refreshBalancesPin(ctx, group);
   return { ok: true };
+}
+
+// Sync merchant / category edits made on a DM card onto its group split post.
+export async function refreshSplitGroupMessage(ctx, tenantId, txnId) {
+  const txn = await getTransaction(ctx.db, tenantId, txnId);
+  if (!txn) return false;
+  const split = await getSplitForTransaction(ctx.db, txn.id);
+  if (!split || !split.group_message_id) return false;
+  const holders = split.shares.map((s) => s.holder_id);
+  const shares = split.shares.map((s) => s.amount_minor);
+  const names = {};
+  for (const id of [split.payer_id, ...holders]) names[id] = await memberName(ctx, split.group_id, id, names);
+  try {
+    await ctx.tg.editMessageText(
+      split.group_id,
+      Number(split.group_message_id),
+      splitNotification(txn, names[split.payer_id], holders, shares, (id) => names[id]),
+      { disable_web_page_preview: true }
+    );
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 // ─── Live balance pin ────────────────────────────────────────────────

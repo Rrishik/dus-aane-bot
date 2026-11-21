@@ -26,7 +26,14 @@ import { setPending, takePending, clearPending } from "./pending.js";
 import { refreshCardMessage } from "./cardState.js";
 import { teachCategoryRules, applyLearnedCategoryToUntagged } from "./cardActions.js";
 import { refreshPersonalPin, ensurePersonalPin } from "./personalPin.js";
-import { splitTransaction, undoGroupLink, simplifyDebts, refreshBalancesPin, memberName } from "./groups.js";
+import {
+  splitTransaction,
+  undoGroupLink,
+  simplifyDebts,
+  refreshBalancesPin,
+  refreshSplitGroupMessage,
+  memberName
+} from "./groups.js";
 import { monthlyTrends, weeklyTrends } from "./analytics.js";
 import { registerEmailForChat, sendSetupEmail } from "./commands.js";
 import { handleBackfill } from "./backfill.js";
@@ -497,6 +504,7 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       await applyLearnedCategoryToUntagged(ctx, tid);
     }
     await refreshCardMessage(ctx, tid, txn.id);
+    await refreshSplitGroupMessage(ctx, tid, txn.id);
     await refreshPersonalPin(ctx, tid);
     invalidateCache();
     return { ok: true, transaction_id: txn.id, changes };
@@ -1106,6 +1114,9 @@ export async function handleAskResume(ctx, m, tenant) {
     }
   }
   if (!convo) return false;
+  if (convo.followUpPromptId) {
+    await ctx.tg.deleteMessage(m.chatId, convo.followUpPromptId).catch(() => {});
+  }
   const reply = convo.askCallId
     ? { role: "tool", tool_call_id: convo.askCallId, content: m.text }
     : { role: "user", content: m.text };
@@ -1144,7 +1155,13 @@ export async function handleAskFollowUp(ctx, chatId, messageId, ack) {
     reply_markup: { force_reply: true, selective: true }
   });
   if (sent && sent.message_id) {
-    await putEphemeral(ctx.db, convoKey(chatId, sent.message_id), convo, CONVO_TTL_SEC, ctx.now());
+    await putEphemeral(
+      ctx.db,
+      convoKey(chatId, sent.message_id),
+      { ...convo, followUpPromptId: sent.message_id },
+      CONVO_TTL_SEC,
+      ctx.now()
+    );
     await putEphemeral(ctx.db, openAskKey(chatId), { messageId: sent.message_id }, CONVO_TTL_SEC, ctx.now());
   }
 }

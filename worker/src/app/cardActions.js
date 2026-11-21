@@ -15,6 +15,7 @@ import { logParserEvent, countParserEvents, disableTemplate } from "../db/settin
 import { putEphemeral, takeEphemeral } from "../db/ephemeral.js";
 import { validateExtraction, diffExtractions, guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { loadCardState, renderCard, defaultKeyboard, refreshCardMessage } from "./cardState.js";
+import { refreshSplitGroupMessage } from "./groups.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { cardText, categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard, fixMenuKeyboard } from "./cards.js";
 import { CATEGORIES, CREDIT_CATEGORIES, CATEGORY_EMOJIS, categoriesFor, TAG_MAX_LEN } from "./constants.js";
@@ -110,7 +111,6 @@ export async function handleCardAction(ctx, { chatId, userId, messageId, action,
 
 const ACTIONS = {
   async tag(ctx, { chatId, userId, messageId, state }) {
-    await setPending(ctx, "tag", userId, { txnId: state.txn.id, messageId });
     const current = state.txn.merchant;
     const prompt = current
       ? "🏷 *Tag merchant*\nCurrently tagged as *" +
@@ -121,8 +121,13 @@ const ACTIONS = {
         escapeMarkdown(current) +
         "."
       : "🏷 *Tag merchant*\nReply with the brand name (up to " + TAG_MAX_LEN + " chars), or /cancel.";
-    await ctx.tg.sendMessage(chatId, prompt, {
+    const sent = await ctx.tg.sendMessage(chatId, prompt, {
       reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. Swiggy" }
+    });
+    await setPending(ctx, "tag", userId, {
+      txnId: state.txn.id,
+      messageId,
+      promptMessageId: sent && sent.message_id ? sent.message_id : null
     });
   },
 
@@ -150,6 +155,7 @@ const ACTIONS = {
     // Teach this user's future transactions from the same merchant / VPA pattern.
     await teachCategoryRules(ctx.db, chatId, state.txn, category, ctx.now());
     const autoFilled = await applyLearnedCategoryToUntagged(ctx, chatId);
+    await refreshSplitGroupMessage(ctx, chatId, state.txn.id);
     await refreshPersonalPin(ctx, chatId);
     if (ack) {
       const emoji = CATEGORY_EMOJIS[category] ? CATEGORY_EMOJIS[category] + " " : "";
@@ -191,14 +197,18 @@ const ACTIONS = {
 
   async amt(ctx, { chatId, userId, messageId, state, ack }) {
     if (await refuseIfSplit(ctx, chatId, messageId, state, ack)) return;
-    await setPending(ctx, "amount", userId, { txnId: state.txn.id, messageId });
-    await ctx.tg.sendMessage(
+    const sent = await ctx.tg.sendMessage(
       chatId,
       "💰 *Correct amount*\nCurrently " +
         money(state.txn.amount_minor, state.txn.currency) +
         ". Reply with the right amount, or /cancel.",
       { reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. 1250.50" } }
     );
+    await setPending(ctx, "amount", userId, {
+      txnId: state.txn.id,
+      messageId,
+      promptMessageId: sent && sent.message_id ? sent.message_id : null
+    });
   },
 
   async back(ctx, { chatId, messageId, state }) {
@@ -483,19 +493,26 @@ export async function autoDisableIfNeeded(ctx, templateId) {
 
 // ─── Tag reply ───────────────────────────────────────────────────────
 
-// /cancel: drop whatever reply the bot is waiting for (tag, amount, open question, register).
+// /cancel: drop whatever reply the bot is waiting for (tag, amount, open question).
 export async function handleCancel(ctx, m) {
-  if (await takePending(ctx, "tag", m.userId)) {
+  const pendingTag = await takePending(ctx, "tag", m.userId);
+  if (pendingTag) {
+    if (pendingTag.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pendingTag.promptMessageId).catch(() => {});
     await ctx.tg.sendMessage(m.chatId, "↩️ *Tag unchanged.*");
     return;
   }
-  if (await takePending(ctx, "amount", m.userId)) {
+  const pendingAmt = await takePending(ctx, "amount", m.userId);
+  if (pendingAmt) {
+    if (pendingAmt.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pendingAmt.promptMessageId).catch(() => {});
     await ctx.tg.sendMessage(m.chatId, "↩️ *Amount unchanged.*");
     return;
   }
   const openAsk = await takeEphemeral(ctx.db, "ask_open:" + m.chatId, ctx.now());
   if (openAsk && openAsk.messageId) {
-    await takeEphemeral(ctx.db, "ask:" + m.chatId + ":" + openAsk.messageId, ctx.now());
+    const convo = await takeEphemeral(ctx.db, "ask:" + m.chatId + ":" + openAsk.messageId, ctx.now());
+    if (convo && convo.followUpPromptId) {
+      await ctx.tg.deleteMessage(m.chatId, convo.followUpPromptId).catch(() => {});
+    }
   }
   const pendingAsk = await takePending(ctx, "ask", m.chatId);
   await ctx.tg.sendMessage(m.chatId, openAsk || pendingAsk ? "↩️ Cancelled." : "Nothing to cancel.", {
@@ -513,6 +530,7 @@ export async function handleAmountReply(ctx, m) {
     return true;
   }
   await clearPending(ctx, "amount", m.userId);
+  if (pending.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pending.promptMessageId).catch(() => {});
   const state = await loadCardState(ctx, m.chatId, pending.txnId);
   if (!state || state.txn.status === "deleted") {
     await notFound(ctx, m.chatId);
@@ -529,6 +547,9 @@ export async function handleAmountReply(ctx, m) {
     await refreshPersonalPin(ctx, m.chatId);
   }
   if (pending.messageId) await editCard(ctx, m.chatId, pending.messageId, state);
+  if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
+    await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
+  }
   return true;
 }
 
@@ -545,6 +566,7 @@ export async function handleTagReply(ctx, m) {
     return true;
   }
   await clearPending(ctx, "tag", m.userId);
+  if (pending.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pending.promptMessageId).catch(() => {});
   const state = await loadCardState(ctx, m.chatId, pending.txnId);
   if (!state) {
     await notFound(ctx, m.chatId);
@@ -575,7 +597,11 @@ export async function handleTagReply(ctx, m) {
     await upsertMerchantRule(ctx.db, m.chatId, previous, fields, ctx.now());
   }
   if (patch.category) await applyLearnedCategoryToUntagged(ctx, m.chatId);
+  await refreshSplitGroupMessage(ctx, m.chatId, state.txn.id);
   await refreshPersonalPin(ctx, m.chatId);
+  if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
+    await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
+  }
   return true;
 }
 
@@ -701,6 +727,7 @@ export async function handleCardReply(ctx, m) {
   }
   const freshState = await loadCardState(ctx, m.chatId, txn.id);
   if (freshState) await editCard(ctx, m.chatId, m.replyTo.message_id, freshState);
+  await refreshSplitGroupMessage(ctx, m.chatId, txn.id);
   await refreshPersonalPin(ctx, m.chatId);
   if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
     await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
@@ -738,6 +765,7 @@ export async function applyLearnedCategoryToUntagged(ctx, tenantId) {
     if (!row.merchant && resolved.merchant) patch.merchant = resolved.merchant;
     await updateTransaction(ctx.db, tenantId, row.id, patch, ctx.now());
     await refreshCardMessage(ctx, tenantId, row.id);
+    await refreshSplitGroupMessage(ctx, tenantId, row.id);
     filled++;
   }
   return filled;

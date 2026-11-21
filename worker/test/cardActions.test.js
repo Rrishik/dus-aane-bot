@@ -141,9 +141,11 @@ describe("🏷 tag", () => {
       text: "Payment of 250 done"
     });
     await handleUpdate(ctx, tap("tag_" + id));
+    const promptMsgId = ctx.tg.of("sendMessage").at(-1).result.message_id;
     expect(ctx.tg.of("sendMessage").at(-1).args[2].reply_markup.force_reply).toBe(true);
 
     await handleUpdate(ctx, reply("Swiggy"));
+    expect(ctx.tg.of("deleteMessage").some((c) => c.args[1] === promptMsgId)).toBe(true);
     expect((await getTransaction(ctx.db, "111", id)).merchant).toBe("Swiggy");
     expect(lastEdit(ctx)[2]).toMatch(/^🔴 \*Swiggy\* — ₹250/);
     const patterns = (await getMerchantRules(ctx.db, "111")).map((r) => [r.pattern, r.name]);

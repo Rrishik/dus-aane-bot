@@ -305,6 +305,26 @@ describe("split / settle / undo from the DM card", () => {
     expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("not a member");
     expect(await getSplitForTransaction(ctx.db, id)).toBeNull();
   });
+
+  it("syncs DM merchant and category edits onto the group chat's split message", async () => {
+    const { ctx, id } = await groupWithCard();
+    await handleUpdate(ctx, tap("gsp:" + id + ":-100:50"));
+    const split = await getSplitForTransaction(ctx.db, id);
+    expect(split.group_message_id).toBeTruthy();
+
+    // Retag merchant + category on the DM card via cat_ and tag_
+    await handleUpdate(ctx, tap("cat_" + id + "_1")); // Groceries
+    await handleUpdate(ctx, tap("tag_" + id));
+    await handleUpdate(ctx, {
+      message: { chat: { id: 111, type: "private" }, from: { id: 111, first_name: "Alice" }, text: "Zepto" }
+    });
+
+    const groupEdits = ctx.tg
+      .of("editMessageText")
+      .filter((c) => c.args[0] === "-100" && c.args[1] === Number(split.group_message_id));
+    expect(groupEdits.at(-1).args[2]).toContain("*Zepto* — ₹900");
+    expect(groupEdits.at(-1).args[2]).toContain("📂 Groceries");
+  });
 });
 
 describe("group commands", () => {

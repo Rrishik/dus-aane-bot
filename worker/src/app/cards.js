@@ -2,16 +2,16 @@
 // Callback data carries the transaction id (26-char ULID); group callbacks
 // use ":" separators, card callbacks "_".
 import { CATEGORY_EMOJIS, categoriesFor } from "./constants.js";
-import { escapeMarkdown, money, pillLabel, shortCategoryName, formatLongDate } from "./format.js";
+import { escapeMarkdown, money, pillLabel, shortCategoryName, formatDayMonth } from "./format.js";
 
 // txn: transactions row. opts: { user, extraLine }.
 export function cardText(txn, opts = {}) {
   const amount = money(txn.amount_minor, txn.currency);
   const emoji = txn.direction === "debit" ? "🔴" : "🟢";
-  const header = txn.merchant
+  const base = txn.merchant
     ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount
     : emoji + " *" + amount + " " + (txn.direction === "debit" ? "Debited" : "Credited") + "*";
-  const lines = [header, "🗓 " + escapeMarkdown(formatLongDate(txn.occurred_on))];
+  const lines = [base + " · _" + escapeMarkdown(formatDayMonth(txn.occurred_on)) + "_"];
   if (opts.user) lines.push("👤 " + escapeMarkdown(opts.user));
   if (txn.status === "review") {
     lines.push("⚠️ *Check this* — " + escapeMarkdown(txn.review_note || "not counted until you save it"));
