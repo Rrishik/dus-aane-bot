@@ -5,7 +5,7 @@ import { getMerchantRules } from "../db/merchantRules.js";
 import { logParserEvent, countParserEvents, disableTemplate } from "../db/settings.js";
 import { putEphemeral, takeEphemeral } from "../db/ephemeral.js";
 import { validateExtraction, diffExtractions, guessCategory } from "../parser/index.js";
-import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
+import { loadCardState, defaultKeyboard, editCard } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { extractWithLlm } from "./extraction.js";
 import { callAppsScript } from "./appsScript.js";
@@ -19,12 +19,6 @@ const AUTO_DISABLE_ACCEPTED = 3;
 const AUTO_DISABLE_WINDOW_MS = 7 * 86400000;
 
 const rereadKey = (chatId, txnId) => "rr:" + chatId + ":" + txnId;
-
-async function editCard(ctx, chatId, messageId, state, extraLine, keyboard) {
-  await ctx.tg.editMessageText(chatId, messageId, renderCard(state, extraLine), {
-    reply_markup: keyboard || defaultKeyboard(state)
-  });
-}
 
 async function sourceText(ctx, src) {
   if (src.source === "sms") return src.raw_text || "";
@@ -56,12 +50,11 @@ export async function reread(ctx, { chatId, messageId, state, ack }) {
     const msg = state.isSplit
       ? "↩️ Make it personal again first, then re-read."
       : "ℹ️ Already re-read. Use ⚠️ Report error if it's still wrong.";
-    if (ack) await ack.toast(msg, true);
-    else await ctx.tg.sendMessage(chatId, msg);
+    await ack.toast(msg, true);
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
     return;
   }
-  if (ack) await ack.toast("🔄 Re-reading message…");
+  await ack.toast("🔄 Re-reading message…");
   await ctx.tg.editMessageReplyMarkup(chatId, messageId, {
     inline_keyboard: [[{ text: "⏳ Re-reading…", callback_data: "back_" + state.txn.id }]]
   });
@@ -135,8 +128,7 @@ export async function reread(ctx, { chatId, messageId, state, ack }) {
 export async function rereadAccept(ctx, { chatId, messageId, state, ack }) {
   const pending = await takeEphemeral(ctx.db, rereadKey(chatId, state.txn.id), ctx.now());
   if (!pending || !pending.fields) {
-    if (ack) await ack.toast("⌛ That re-read expired — tap ⋯ → 🔄 Re-read to try again.", true);
-    else await ctx.tg.sendMessage(chatId, "⌛ *That re-read expired.* Tap ⋯ → 🔄 Re-read to try again.");
+    await ack.toast("⌛ That re-read expired — tap ⋯ → 🔄 Re-read to try again.", true);
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
     return;
   }

@@ -6,7 +6,7 @@ import { getMerchantRules, resolveMerchant } from "../db/merchantRules.js";
 import { touchActivity } from "../db/tenants.js";
 import { logParserEvent } from "../db/settings.js";
 import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
-import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
+import { loadCardState, defaultKeyboard, editCard } from "./cardState.js";
 import { mutateTransaction, shortenMerchantPattern } from "./ledger.js";
 import { reread, rereadAccept, rereadKeep } from "./reread.js";
 import { cancelOpenConversation } from "./orchestrator.js";
@@ -26,8 +26,7 @@ async function notFound(ctx, chatId, ack) {
 
 async function refuseIfSplit(ctx, chatId, messageId, state, ack) {
   if (!state.isSplit) return false;
-  if (ack) await ack.toast("↩️ Make it personal again first, then fix it.", true);
-  else await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then fix it.*");
+  await ack.toast("↩️ Make it personal again first, then fix it.", true);
   await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
   return true;
 }
@@ -57,12 +56,6 @@ export function parseAmountInput(text) {
   if (!/^\d+(?:\.\d{1,2})?$/.test(s)) return null;
   const minor = toMinor(Number(s));
   return minor > 0 && minor <= toMinor(PARSER_MAX_AMOUNT) ? minor : null;
-}
-
-async function editCard(ctx, chatId, messageId, state, extraLine, keyboard) {
-  await ctx.tg.editMessageText(chatId, messageId, renderCard(state, extraLine), {
-    reply_markup: keyboard || defaultKeyboard(state)
-  });
 }
 
 export async function handleCardAction(ctx, { chatId, userId, messageId, action, payload, from, ack }) {
@@ -118,8 +111,7 @@ const ACTIONS = {
     const list = categoriesFor(state.txn.direction);
     const idx = parseInt(arg, 10);
     if (isNaN(idx) || idx < 0 || idx >= list.length) {
-      if (ack) await ack.toast("❌ Invalid category", true);
-      else await ctx.tg.sendMessage(chatId, "❌ *Invalid category*");
+      await ack.toast("❌ Invalid category", true);
       return;
     }
     const category = list[idx];
@@ -127,11 +119,9 @@ const ACTIONS = {
     if (!res.ok) return;
     Object.assign(state.txn, res.txn);
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
-    if (ack) {
-      const emoji = CATEGORY_EMOJIS[category] ? CATEGORY_EMOJIS[category] + " " : "";
-      const extra = res.autoFilled > 0 ? " · +" + res.autoFilled + " auto-tagged" : "";
-      await ack.toast(emoji + category + extra);
-    }
+    const emoji = CATEGORY_EMOJIS[category] ? CATEGORY_EMOJIS[category] + " " : "";
+    const extra = res.autoFilled > 0 ? " · +" + res.autoFilled + " auto-tagged" : "";
+    await ack.toast(emoji + category + extra);
   },
 
   async help(ctx, { chatId, messageId, state }) {
@@ -190,15 +180,14 @@ const ACTIONS = {
 
   async delyes(ctx, { chatId, messageId, state, ack }) {
     if (state.isSplit) {
-      if (ack) await ack.toast("↩️ Make it personal again first, then delete.", true);
-      else await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then delete.*");
+      await ack.toast("↩️ Make it personal again first, then delete.", true);
       await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
       return;
     }
     await softDeleteTransaction(ctx.db, chatId, state.txn.id, ctx.now());
     await ctx.tg.editMessageText(chatId, messageId, "🗑️ *Transaction deleted*");
     await refreshPersonalPin(ctx, chatId);
-    if (ack) await ack.toast("🗑️ Transaction deleted");
+    await ack.toast("🗑️ Transaction deleted");
   },
 
   async report(ctx, { chatId, messageId, state, from, ack }) {

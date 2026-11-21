@@ -3,10 +3,10 @@
 // Public email address that users forward their bank emails to.
 const BOT_INBOX_EMAIL = "dusaanebot.inbox@gmail.com";
 
-// Demo + setup-guide links in the setup email. Replace with the real share
-// URLs after recording / authoring.
-const DEMO_VIDEO_URL = "https://drive.google.com/file/d/REPLACE_WITH_VIDEO_FILE_ID/view";
-const SETUP_GUIDE_URL = "https://drive.google.com/file/d/REPLACE_WITH_GUIDE_FILE_ID/view";
+// Optional demo + setup-guide links in the setup email. Empty strings are
+// omitted cleanly by buildSetupEmailHtml.
+const DEMO_VIDEO_URL = "";
+const SETUP_GUIDE_URL = "https://github.com/Rrishik/dus-aane-bot#user-onboarding";
 
 // Gmail
 // Trigger flow is history-driven (Gmail.Users.History.list) — incremental,

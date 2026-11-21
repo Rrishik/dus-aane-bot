@@ -46,6 +46,11 @@ function getWebAppUrl() {
   }
 }
 
+function _usableUrl(u) {
+  var s = String(u || "").trim();
+  return s && s.indexOf("REPLACE_WITH_") === -1 ? _escHtml(s) : null;
+}
+
 /**
  * Build the auto-forwarding setup email body. Steps 1+2+3 since they all
  * serve the same goal (auto-forward future bank emails) — manually
@@ -57,10 +62,26 @@ function getWebAppUrl() {
 function buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl) {
   var q = _escHtml(query);
   var bot = _escHtml(botInboxEmail);
-  var demo = _escHtml(demoUrl);
-  var guide = _escHtml(guideUrl);
+  var demo = _usableUrl(demoUrl);
+  var guide = _usableUrl(guideUrl);
   var prefillUrl = _escHtml(buildGmailFilterPrefillUrl(query));
   var verify = verifyUrl ? _escHtml(verifyUrl) : null;
+  var footerLinks = [];
+  if (demo) {
+    footerLinks.push(
+      '<a href="' +
+        demo +
+        '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px;margin-right:8px">Watch 60-sec demo</a>'
+    );
+  }
+  if (guide) {
+    footerLinks.push(
+      '<a href="' +
+        guide +
+        '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px">Setup guide</a>'
+    );
+  }
+  var footerBlock = footerLinks.length ? '<p style="margin-top:32px">' + footerLinks.join("") + "</p>" : "";
   var verifyBlock = verify
     ? '<p style="margin:0 0 8px">After clicking <b>Next</b> in step 1, Gmail emails a confirmation code to our inbox. Tap below — we\'ll auto-confirm it.</p>' +
       '<p style="margin:0 0 4px">' +
@@ -105,14 +126,7 @@ function buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl)
     '<p style="margin:8px 0 0;color:#555;font-size:14px">Then <a href="https://mail.google.com/mail/#settings/filters" target="_blank" rel="noopener" style="color:#1a73e8">open filter settings</a> &rarr; <b>Create a new filter</b> &rarr; paste into <b>Has the words</b> &rarr; <b>Create filter</b> &rarr; tick <b>Forward it to</b> <code>' +
     bot +
     "</code> &rarr; <b>Create filter</b>.</p>" +
-    '<p style="margin-top:32px">' +
-    '<a href="' +
-    demo +
-    '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px;margin-right:8px">Watch 60-sec demo</a>' +
-    '<a href="' +
-    guide +
-    '" target="_blank" rel="noopener" style="display:inline-block;padding:10px 16px;background:#fff;color:#1a73e8;border:1px solid #1a73e8;text-decoration:none;border-radius:6px">Setup guide (with screenshots)</a>' +
-    "</p>" +
+    footerBlock +
     "</div>"
   );
 }

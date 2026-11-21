@@ -219,16 +219,6 @@ export const ACCOUNT_TOOLS = [
   ASK_USER_TOOL
 ];
 
-export const ASK_TOOLS = [
-  ...ANALYTICS_TOOLS.filter((t) => t.function.name !== "ask_user"),
-  ...LEDGER_TOOLS.filter(
-    (t) => !["search_transactions", "list_untagged_transactions", "ask_user"].includes(t.function.name)
-  ),
-  ...GROUP_TOOLS.filter((t) => !["search_transactions", "ask_user"].includes(t.function.name)),
-  ...ACCOUNT_TOOLS.filter((t) => t.function.name !== "ask_user"),
-  ASK_USER_TOOL
-];
-
 // ─── Tool implementations (strictly tenant-scoped) ───────────────────
 
 const label = (r) => r.merchant || r.merchant_raw || "Unknown";

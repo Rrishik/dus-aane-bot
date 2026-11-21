@@ -72,6 +72,12 @@ export function defaultKeyboard(state) {
   return keyboardFor(state.txn, state);
 }
 
+export async function editCard(ctx, chatId, messageId, state, extraLine, keyboard) {
+  await ctx.tg.editMessageText(chatId, messageId, renderCard(state, extraLine), {
+    reply_markup: keyboard || defaultKeyboard(state)
+  });
+}
+
 // Re-render a transaction's DM card after a change made elsewhere (/ask).
 export async function refreshCardMessage(ctx, tenantId, txnId) {
   const state = await loadCardState(ctx, tenantId, txnId);

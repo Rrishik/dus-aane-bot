@@ -15,7 +15,6 @@ import {
   handleGroupStart,
   handleGroupHelp,
   handleGroupAccount,
-  handleGroupSheet,
   handleGroupStats,
   handleGroupSettle,
   handleMembershipUpdate
@@ -25,7 +24,6 @@ const GROUP_COMMANDS = {
   "/start": handleGroupStart,
   "/help": handleGroupHelp,
   "/account": handleGroupAccount,
-  "/sheet": handleGroupSheet,
   "/stats": handleGroupStats,
   "/settle": handleGroupSettle
 };

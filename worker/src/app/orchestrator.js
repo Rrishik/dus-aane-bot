@@ -18,36 +18,19 @@ import {
   classifyFastAgent,
   capHitMessage
 } from "./orchestratorPrompts.js";
-import {
-  ANALYTICS_TOOLS,
-  LEDGER_TOOLS,
-  GROUP_TOOLS,
-  ACCOUNT_TOOLS,
-  ASK_TOOLS,
-  askToolExecutor
-} from "./orchestratorTools.js";
+import { ANALYTICS_TOOLS, LEDGER_TOOLS, GROUP_TOOLS, ACCOUNT_TOOLS, askToolExecutor } from "./orchestratorTools.js";
 
-export {
-  ANALYTICS_TOOLS,
-  LEDGER_TOOLS,
-  GROUP_TOOLS,
-  ACCOUNT_TOOLS,
-  ASK_TOOLS,
-  askSystemPrompt,
-  askToolExecutor,
-  classifyFastAgent,
-  capHitMessage
-};
+export { askToolExecutor, classifyFastAgent, capHitMessage };
 
-export const ASK_MAX_ITERATIONS = 6;
-export const ASK_MAX_TURNS = 5;
+const ASK_MAX_ITERATIONS = 6;
+const ASK_MAX_TURNS = 5;
 const CONVO_TTL_SEC = 600;
 const ERROR_TEXT = "❌ Something went wrong. Tap your pinned summary for recent spends, or try again in a moment.";
 
 const convoKey = (chatId, messageId) => "ask:" + chatId + ":" + messageId;
 const openAskKey = (chatId) => "ask_open:" + chatId;
 
-export function buildOrchestratorGraph(executeTool) {
+function buildOrchestratorGraph(executeTool) {
   const analytics = defineAgent({
     name: "analytics",
     description: "Read-only spending summaries, category breakdowns, top merchants, trends, and transaction search.",
@@ -315,8 +298,7 @@ export async function handleAskFollowUp(ctx, chatId, messageId, ack) {
   await ctx.tg.editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] }).catch(() => {});
   const convo = await takeEphemeral(ctx.db, convoKey(chatId, messageId), ctx.now());
   if (!convo) {
-    if (ack) await ack.toast("⌛ That follow-up window expired — just type your question below.", true);
-    else await ctx.tg.sendMessage(chatId, "_That follow-up window has expired. Just send your question directly._");
+    await ack.toast("⌛ That follow-up window expired — just type your question below.", true);
     return;
   }
   const sent = await ctx.tg.sendMessage(chatId, "_What's your follow-up?_", {

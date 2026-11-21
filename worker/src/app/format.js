@@ -43,6 +43,8 @@ export function pillLabel(value, fallback) {
   return v.length > TAG_MAX_LEN ? v.substring(0, TAG_MAX_LEN - 1) + "…" : v;
 }
 
+export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 const DAY_MONTH = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "short" });
 
 // ISO "2026-10-07" → "7 Oct".
@@ -54,4 +56,10 @@ export function formatDayMonth(iso) {
 // ISO "2026-10-07" → "7 Oct 2026".
 export function formatLongDate(iso) {
   return formatDayMonth(iso) + " " + String(iso).slice(0, 4);
+}
+
+// ISO "2026-10-07" → "Oct 2026".
+export function formatMonthYear(iso) {
+  const [y, m] = iso.split("-").map(Number);
+  return MONTHS[m - 1] + " " + y;
 }

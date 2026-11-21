@@ -26,7 +26,7 @@ import { getTransaction } from "../db/transactions.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { MAX_GROUP_MEMBERS } from "./constants.js";
-import { escapeMarkdown, money, currencySymbol, formatAmount, shortCategoryName } from "./format.js";
+import { MONTHS, escapeMarkdown, money, currencySymbol, formatAmount, shortCategoryName } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { fromMinor, toMinor } from "../util/money.js";
 
@@ -34,7 +34,6 @@ const NOT_SET_UP = "👋 This group isn't set up yet. Promote me to admin and ru
 const PIN_SKIP = "skip";
 const PIN_CURRENCY_CAP = 3;
 const IN_STATUSES = ["member", "administrator", "creator", "restricted"];
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function longDate(iso) {
   const [y, m, d] = iso.split("-");
@@ -495,8 +494,7 @@ export async function handleGroupCallback(ctx, cb, ack) {
     if (state)
       await ctx.tg.editMessageText(chatId, messageId, renderCard(state), { reply_markup: defaultKeyboard(state) });
   };
-  const fail = (error) =>
-    ack ? ack.toast("❌ " + error, true) : ctx.tg.sendMessage(chatId, "❌ *" + escapeMarkdown(error) + "*");
+  const fail = (error) => ack.toast("❌ " + error, true);
 
   if (action === "gnav" || action === "gset" || (action === "gbk" && parts[2] === "1")) {
     const group = await activeGroup(ctx, parts[1]);
@@ -535,13 +533,9 @@ export async function handleGroupCallback(ctx, cb, ack) {
   }
   if (action === "gun") {
     const res = await undoGroupLink(ctx, { payerId: caller, txnId });
-    if (!res.ok) {
-      return ack
-        ? ack.toast("⚠️ " + res.error, true)
-        : ctx.tg.sendMessage(chatId, "⚠️ *" + escapeMarkdown(res.error) + "*");
-    }
+    if (!res.ok) return ack.toast("⚠️ " + res.error, true);
     await refreshCard();
-    if (ack) await ack.toast("↩️ Back to personal");
+    await ack.toast("↩️ Back to personal");
     return;
   }
 }
@@ -559,8 +553,7 @@ async function groupStatsView(ctx, groupId, caller, mode, messageId, ack) {
   if (!group) return;
   const members = await getGroupMembers(ctx.db, group.id);
   if (messageId && !members.includes(caller)) {
-    if (ack) await ack.toast("❌ You're not a member of this group.", true);
-    else await ctx.tg.sendMessage(groupId, "❌ *You're not a member of this group.*");
+    await ack.toast("❌ You're not a member of this group.", true);
     return;
   }
   const detailed = await groupBalances(ctx.db, group.id);
@@ -714,17 +707,6 @@ export async function handleGroupAccount(ctx, m) {
   ];
   if (group.admin_id) lines.push("Admin: " + escapeMarkdown(await memberName(ctx, group.id, group.admin_id)));
   await ctx.tg.sendMessage(m.chatId, lines.join("\n"), { disable_web_page_preview: true });
-}
-
-export async function handleGroupSheet(ctx, m) {
-  if (!(await requireGroup(ctx, m.chatId))) return;
-  await ctx.tg.sendMessage(
-    m.chatId,
-    "📋 Group balances now live with the bot — see /stats or the pinned live-balance message.",
-    {
-      parse_mode: null
-    }
-  );
 }
 
 export async function handleGroupStats(ctx, m) {

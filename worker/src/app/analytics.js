@@ -2,11 +2,16 @@
 // kind = 'spend' (card bill payments, transfers and investments excluded).
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { CATEGORY_EMOJIS } from "./constants.js";
-import { escapeMarkdown, formatAmount, formatAmountCompact, currencySymbol, shortCategoryName } from "./format.js";
+import {
+  MONTHS,
+  escapeMarkdown,
+  formatAmount,
+  formatAmountCompact,
+  currencySymbol,
+  shortCategoryName
+} from "./format.js";
 import { shiftIsoDate, istDate } from "../util/dates.js";
 import { fromMinor } from "../util/money.js";
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function sumByCurrency(rows) {
   const out = {};

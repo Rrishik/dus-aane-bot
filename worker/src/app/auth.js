@@ -6,7 +6,7 @@
 // Apps Script produces the same value with
 // Utilities.computeHmacSha256Signature(ts + "." + body, secret).
 const enc = new TextEncoder();
-export const MAX_SKEW_MS = 5 * 60 * 1000;
+const MAX_SKEW_MS = 5 * 60 * 1000;
 
 function toHex(buf) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");

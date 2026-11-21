@@ -5,7 +5,7 @@ import { diffExtractions } from "../parser/index.js";
 import { SAVED_SQL, savedValues, parserRead } from "./cases.js";
 import { maskId } from "./queries.js";
 
-export const REPLAY_BATCH_MAX = 25;
+const REPLAY_BATCH_MAX = 25;
 
 // fetchBodies(messageIds) → { [id]: { text, receivedAt, sender, subject } | { error } }
 export async function replayBatch(db, { offset = 0, limit = 15 } = {}, fetchBodies) {

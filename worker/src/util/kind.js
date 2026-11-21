@@ -12,8 +12,6 @@ const CREDIT_KINDS = {
   "Transfer In": "transfer"
 };
 
-export const KINDS = ["spend", "income", "refund", "transfer", "card_payment", "investment", "cash"];
-
 export function defaultKind(direction, category) {
   if (direction === "credit") return CREDIT_KINDS[category] || "income";
   return DEBIT_KINDS[category] || "spend";

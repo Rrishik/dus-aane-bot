@@ -27,7 +27,7 @@ const UNIT_ALIASES = {
 const STALE_JOB_MS = 30 * 60 * 1000;
 const IST_OFFSET_MS = 5.5 * 3600 * 1000;
 
-export const BACKFILL_USAGE =
+const BACKFILL_USAGE =
   "❌ *Invalid format!*\n\nTry e.g. `backfill 3 days`, `backfill 2 weeks`, or `backfill 2026-03-01 2026-03-31`.";
 
 // → { ok, startMs, endMs } | { ok: false, error: usage|unknown_unit|invalid_dates|invalid_range }

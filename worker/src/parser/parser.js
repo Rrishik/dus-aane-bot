@@ -241,15 +241,6 @@ function _isoFromDate(date) {
   return _isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
 }
 
-// Sheet cell (Date or "YYYY-MM-DD…" string) → "YYYY-MM-DD", or "" if unreadable.
-function toIsoDate(value) {
-  if (value instanceof Date) return isNaN(value.getTime()) ? "" : _isoFromDate(value);
-  var m = String(value || "")
-    .trim()
-    .match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  return m ? _isoDate(+m[1], +m[2], +m[3]) : "";
-}
-
 function _dayNumber(iso) {
   var p = iso.split("-");
   return Date.UTC(+p[0], +p[1] - 1, +p[2]) / 86400000;
@@ -607,6 +598,5 @@ export {
   parseTransactionText,
   validateExtraction,
   guessCategory,
-  diffExtractions,
-  toIsoDate
+  diffExtractions
 };

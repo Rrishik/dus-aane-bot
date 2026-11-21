@@ -85,6 +85,18 @@ describe("buildSetupEmailHtml", () => {
     var html = buildSetupEmailHtml("q", "bot@gmail.com", "https://demo", "https://guide", null);
     expect(html).not.toContain("Verify forwarding address");
   });
+
+  it("omits empty or REPLACE_WITH_ placeholder demo and guide links", () => {
+    var html = buildSetupEmailHtml(
+      "q",
+      "bot@gmail.com",
+      "",
+      "https://drive.google.com/file/d/REPLACE_WITH_GUIDE_FILE_ID/view",
+      null
+    );
+    expect(html).not.toContain("Watch 60-sec demo");
+    expect(html).not.toContain("Setup guide");
+  });
 });
 
 describe("buildGmailFilterPrefillUrl", () => {

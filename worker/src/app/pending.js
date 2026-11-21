@@ -3,7 +3,7 @@
 // later message such as a pasted SMS.
 import { putEphemeral, getEphemeral, takeEphemeral, deleteEphemeral } from "../db/ephemeral.js";
 
-export const PENDING_TTL_SEC = 600;
+const PENDING_TTL_SEC = 600;
 const key = (kind, id) => "pending:" + kind + ":" + id;
 
 export function setPending(ctx, kind, id, value = true) {

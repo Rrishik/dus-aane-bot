@@ -9,17 +9,18 @@ import { listUntaggedTransactions } from "../db/transactions.js";
 import { groupBalances } from "../db/splits.js";
 import { simplifyDebts } from "./groups.js";
 import { CATEGORY_EMOJIS } from "./constants.js";
-import { escapeMarkdown, currencySymbol, formatAmountCompact, money, shortCategoryName } from "./format.js";
+import {
+  escapeMarkdown,
+  currencySymbol,
+  formatAmountCompact,
+  formatMonthYear,
+  money,
+  shortCategoryName
+} from "./format.js";
 import { istDate, shiftIsoDate } from "../util/dates.js";
 import { fromMinor } from "../util/money.js";
 
 const PIN_SKIP = "skip";
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-function monthLabel(iso) {
-  const [y, m] = iso.split("-").map(Number);
-  return MONTHS[m - 1] + " " + y;
-}
 
 export async function personalPinData(ctx, tenantId) {
   const tid = String(tenantId);
@@ -60,7 +61,7 @@ export async function personalPinData(ctx, tenantId) {
   }
 
   return {
-    month: monthLabel(today),
+    month: formatMonthYear(today),
     spendByCurrency,
     txnCount: rows.filter((r) => r.kind === "spend").length,
     topCategories,

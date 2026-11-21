@@ -10,14 +10,7 @@ const IST_DAY = "date((%s) / 1000, 'unixepoch', '+330 minutes')";
 const CASE_LIMIT = 200;
 
 // Parser events worth a closer look: disagreements, misses and corrections.
-export const CASE_EVENTS = [
-  "shadow_mismatch",
-  "shadow_nomatch",
-  "shadow_extra",
-  "reparse_accepted",
-  "user_fix",
-  "report"
-];
+const CASE_EVENTS = ["shadow_mismatch", "shadow_nomatch", "shadow_extra", "reparse_accepted", "user_fix", "report"];
 
 export async function maskId(prefix, id) {
   return prefix + "-" + (await sha256Hex(String(id))).slice(0, 6);

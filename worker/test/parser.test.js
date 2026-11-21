@@ -178,12 +178,6 @@ describe("helpers", () => {
     ]);
   });
 
-  it("toIsoDate accepts Date cells and ISO strings", () => {
-    expect(api.toIsoDate(new Date(2026, 9, 7))).toBe("2026-10-07");
-    expect(api.toIsoDate("2026-10-07T00:00:00Z")).toBe("2026-10-07");
-    expect(api.toIsoDate("N/A")).toBe("");
-  });
-
   it("normalizeTransactionText decodes entities and collapses whitespace", () => {
     expect(api.normalizeTransactionText("Rs&nbsp;100\n\n debited &amp; done")).toBe("Rs 100 debited & done");
   });
