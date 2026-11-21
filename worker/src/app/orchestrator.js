@@ -2,10 +2,10 @@
 // agent graph, manages ephemeral session / follow-up state, enforces analytics
 // quota, and routes replies.
 import { defineAgent, runAgentLoop } from "../llm/agents.js";
-import { findTransactionByCardMessage } from "../db/transactions.js";
+import { findTransactionByCardMessage, getTransaction } from "../db/transactions.js";
 import { consumeAsk, refundAsk } from "../db/quota.js";
-import { putEphemeral, takeEphemeral, deleteEphemeral } from "../db/ephemeral.js";
-import { setPending, takePending, clearPending } from "./pending.js";
+import { putEphemeral, getEphemeral, takeEphemeral, deleteEphemeral } from "../db/ephemeral.js";
+import { stepperKey } from "./tagStepper.js";
 import { FREE_ASK_LIMIT } from "./constants.js";
 import { istDate } from "../util/dates.js";
 import { fromMinor } from "../util/money.js";
@@ -172,12 +172,7 @@ async function runTurn(ctx, { chatId, username = "", tenantStatus = "active", ac
 
   const text = result.content.trim() || "I couldn't find an answer to that. Try being more specific.";
   const canFollowUp = turn < ASK_MAX_TURNS;
-  const sent = await ctx.tg.sendMessage(chatId, text, {
-    parse_mode: null,
-    reply_markup: canFollowUp
-      ? { inline_keyboard: [[{ text: "💬 Follow up", callback_data: "askfu_" + turn }]] }
-      : undefined
-  });
+  const sent = await ctx.tg.sendMessage(chatId, text, { parse_mode: null });
   if (canFollowUp && sent && sent.message_id) {
     await putEphemeral(
       ctx.db,
@@ -194,24 +189,27 @@ export async function handleOrchestrator(ctx, m, tenant) {
     .replace(/^\/ask(@\w+)?\s*/i, "")
     .trim();
   if (!stripped) {
-    await setPending(ctx, "ask", m.chatId);
     await ctx.tg.sendMessage(
       m.chatId,
-      "💬 Type anything in plain English — no commands needed:\n\n" +
+      "💬 Type anything in plain English — no /ask needed:\n\n" +
         "• How much on food last month?\n" +
         "• Tag Rahul as Food\n" +
         "• Split dinner 50/50\n" +
-        "• Export September CSV",
-      { parse_mode: null, reply_markup: { force_reply: true, input_field_placeholder: "Ask or tell me what to do…" } }
+        "• Export September CSV\n\n" +
+        "Swipe-reply to any card or answer to act on it directly.",
+      { parse_mode: null }
     );
     return;
   }
-  await clearPending(ctx, "ask", m.chatId);
   const tenantStatus = (tenant && tenant.status) || "active";
   const fastAgent = classifyFastAgent(stripped, tenantStatus);
   let userContent = stripped;
   if (m.replyTo && m.replyTo.message_id) {
-    const repliedTxn = await findTransactionByCardMessage(ctx.db, m.chatId, m.replyTo.message_id);
+    let repliedTxn = await findTransactionByCardMessage(ctx.db, m.chatId, m.replyTo.message_id);
+    if (!repliedTxn) {
+      const step = await getEphemeral(ctx.db, stepperKey(m.chatId, m.replyTo.message_id), ctx.now());
+      if (step && step.txnId) repliedTxn = await getTransaction(ctx.db, m.chatId, step.txnId);
+    }
     if (repliedTxn) {
       userContent =
         "[Replied to transaction_id=" +
@@ -252,9 +250,6 @@ export async function handleAskResume(ctx, m, tenant) {
     }
   }
   if (!convo) return false;
-  if (convo.followUpPromptId) {
-    await ctx.tg.deleteMessage(m.chatId, convo.followUpPromptId).catch(() => {});
-  }
   const reply = convo.askCallId
     ? { role: "tool", tool_call_id: convo.askCallId, content: m.text }
     : { role: "user", content: m.text };
@@ -269,47 +264,22 @@ export async function handleAskResume(ctx, m, tenant) {
   return true;
 }
 
-export async function handlePendingAsk(ctx, m, tenant) {
-  if (!(await takePending(ctx, "ask", m.chatId))) return false;
-  const question = String(m.text || "").trim();
-  if (!question) {
-    await ctx.tg.sendMessage(m.chatId, "❌ Empty message, cancelled.", { parse_mode: null });
-    return true;
-  }
-  await handleOrchestrator(ctx, { ...m, text: question }, tenant);
-  return true;
-}
-
 export async function cancelOpenConversation(ctx, chatId) {
   const openAsk = await takeEphemeral(ctx.db, openAskKey(chatId), ctx.now());
   if (openAsk && openAsk.messageId) {
-    const convo = await takeEphemeral(ctx.db, convoKey(chatId, openAsk.messageId), ctx.now());
-    if (convo && convo.followUpPromptId) {
-      await ctx.tg.deleteMessage(chatId, convo.followUpPromptId).catch(() => {});
-    }
+    await deleteEphemeral(ctx.db, convoKey(chatId, openAsk.messageId));
   }
-  const pendingAsk = await takePending(ctx, "ask", chatId);
-  return !!(openAsk || pendingAsk);
+  return !!openAsk;
 }
 
+// Stateless self-heal for retired [💬 Follow up] buttons on older messages.
 export async function handleAskFollowUp(ctx, chatId, messageId, ack) {
   await ctx.tg.editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] }).catch(() => {});
-  const convo = await takeEphemeral(ctx.db, convoKey(chatId, messageId), ctx.now());
-  if (!convo) {
-    await ack.toast("⌛ That follow-up window expired — just type your question below.", true);
-    return;
-  }
-  const sent = await ctx.tg.sendMessage(chatId, "_What's your follow-up?_", {
-    reply_markup: { force_reply: true, selective: true }
-  });
-  if (sent && sent.message_id) {
-    await putEphemeral(
-      ctx.db,
-      convoKey(chatId, sent.message_id),
-      { ...convo, followUpPromptId: sent.message_id },
-      CONVO_TTL_SEC,
-      ctx.now()
-    );
-    await putEphemeral(ctx.db, openAskKey(chatId), { messageId: sent.message_id }, CONVO_TTL_SEC, ctx.now());
-  }
+  const convo = await getEphemeral(ctx.db, convoKey(chatId, messageId), ctx.now());
+  await ack.toast(
+    convo
+      ? "💡 Swipe-reply directly to this message to follow up!"
+      : "⌛ Follow-up window expired — just type your question below.",
+    !convo
+  );
 }

@@ -327,11 +327,16 @@ describe("split / settle / undo from the DM card", () => {
     const split = await getSplitForTransaction(ctx.db, id);
     expect(split.group_message_id).toBeTruthy();
 
-    // Retag merchant + category on the DM card via cat_ and tag_
+    // Retag merchant + category on the DM card via cat_ and swipe-reply
     await handleUpdate(ctx, tap("cat_" + id + "_1")); // Groceries
-    await handleUpdate(ctx, tap("tag_" + id));
     await handleUpdate(ctx, {
-      message: { chat: { id: 111, type: "private" }, from: { id: 111, first_name: "Alice" }, text: "Zepto" }
+      message: {
+        message_id: 901,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "Zepto",
+        reply_to_message: { message_id: 100 }
+      }
     });
 
     const groupEdits = ctx.tg

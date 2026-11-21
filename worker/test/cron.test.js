@@ -200,17 +200,18 @@ describe("runScheduled", () => {
     let edit = ctx.tg.of("editMessageText").at(-1).args;
     expect(edit[2]).toContain("1 of 3 left");
     expect(edit[2]).toContain("Kirana Store");
-    const kiranaCatCall = edit[3].reply_markup.inline_keyboard[0][1].callback_data; // Groceries (index 1)
 
-    // Categorize Kirana -> Groceries; advances automatically to Rahul 111 (1 of 2 left).
+    // Swipe-reply "Zepto, Groceries" directly onto the stepper message -> renames & categorizes Kirana, advancing to Rahul 111!
     await handleUpdate(ctx, {
-      callback_query: {
-        id: "cb2",
-        data: kiranaCatCall,
-        from: { id: 111 },
-        message: { chat: { id: 111 }, message_id: recapMsgId }
+      message: {
+        message_id: 501,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "Zepto, Groceries",
+        reply_to_message: { message_id: recapMsgId }
       }
     });
+    expect(ctx.tg.of("setMessageReaction").at(-1).args).toEqual(["111", 501, "👍"]);
     edit = ctx.tg.of("editMessageText").at(-1).args;
     expect(edit[2]).toContain("1 of 2 left");
     expect(edit[2]).toContain("Rahul 111");

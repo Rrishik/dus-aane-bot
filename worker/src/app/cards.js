@@ -12,6 +12,7 @@ export function cardText(txn, opts = {}) {
     ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount
     : emoji + " *" + amount + " " + (txn.direction === "debit" ? "Debited" : "Credited") + "*";
   const lines = [base + " · _" + escapeMarkdown(formatDayMonth(txn.occurred_on)) + "_"];
+  if (!txn.merchant && txn.status !== "review") lines.push("_Swipe-reply merchant name_");
   if (opts.user) lines.push("👤 " + escapeMarkdown(opts.user));
   if (txn.status === "review") {
     lines.push("⚠️ *Check this* — " + escapeMarkdown(txn.review_note || "not counted until you save it"));
@@ -20,10 +21,9 @@ export function cardText(txn, opts = {}) {
   return lines.join("\n");
 }
 
-export function pillsRow(txnId, merchant, category) {
+export function pillsRow(txnId, category) {
   const catText = category ? (CATEGORY_EMOJIS[category] || "📂") + " ▾" : "📂 All ▾";
   return [
-    { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + txnId },
     { text: catText, callback_data: "editcat_" + txnId },
     { text: "⋯", callback_data: "help_" + txnId }
   ];
@@ -49,33 +49,40 @@ export function quickCategoryRows(txnId, direction) {
 
 // groups: tenants rows of the groups the payer belongs to. quickSplit
 // ({ groupId, otherName }) puts the common case — 50-50 in a 2-person
-// group — one tap away, with the full menu next to it.
+// group — one tap away, collapsing onto a single action row when 0 or 1 group.
 export function level0Keyboard(txn, groups, quickSplit) {
   const rows = [];
   if (!txn.category) rows.push(...quickCategoryRows(txn.id, txn.direction));
+  const list = groups || [];
+  const pills = pillsRow(txn.id, txn.category);
+  if (list.length === 1) {
+    const g = list[0];
+    if (quickSplit && quickSplit.groupId === g.id) {
+      rows.push([
+        { text: "👥 50-50", callback_data: "gsp:" + txn.id + ":" + g.id + ":50" },
+        { text: "Split ▾", callback_data: "gnav:" + txn.id + ":" + g.id },
+        ...pills
+      ]);
+    } else {
+      rows.push([
+        { text: "👥 " + pillLabel(g.name, "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id },
+        ...pills
+      ]);
+    }
+    return { inline_keyboard: rows };
+  }
   rows.push(
-    ...(groups || []).map((g) =>
-      quickSplit && quickSplit.groupId === g.id
-        ? [
-            {
-              text: "👥 50-50 with " + pillLabel(quickSplit.otherName, "partner"),
-              callback_data: "gsp:" + txn.id + ":" + g.id + ":50"
-            },
-            { text: "Split ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
-          ]
-        : [{ text: "👥 Split with " + (g.name || "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id }]
-    )
+    ...list.map((g) => [
+      { text: "👥 Split with " + (g.name || "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
+    ])
   );
-  rows.push(pillsRow(txn.id, txn.merchant, txn.category));
+  rows.push(pills);
   return { inline_keyboard: rows };
 }
 
 export function postSplitKeyboard(txn) {
   return {
-    inline_keyboard: [
-      [{ text: "↩️ Make personal again", callback_data: "gun:" + txn.id }],
-      pillsRow(txn.id, txn.merchant, txn.category)
-    ]
+    inline_keyboard: [[{ text: "↩️ Make personal", callback_data: "gun:" + txn.id }, ...pillsRow(txn.id, txn.category)]]
   };
 }
 
@@ -87,33 +94,23 @@ export function reviewKeyboard(txnId, canReread) {
 }
 
 // ⋯ menu. canEdit is false while the transaction is split into a group
-// (changing or deleting it would move other people's balances).
-export function helpMenuKeyboard(txnId, { canReread = false, canEdit = true } = {}) {
+// (changing direction or deleting it would move other people's balances).
+export function helpMenuKeyboard(txnId, { canReread = false, canEdit = true, direction = "debit" } = {}) {
   const rows = [];
   const first = [];
   if (canReread) first.push({ text: "🔄 Re-read", callback_data: "rr_" + txnId });
-  if (canEdit) first.push({ text: "✏️ Fix", callback_data: "fix_" + txnId });
+  if (canEdit) {
+    first.push({
+      text: direction === "debit" ? "🟢 Money in" : "🔴 Money out",
+      callback_data: "flip_" + txnId
+    });
+  }
   if (first.length) rows.push(first);
   const second = [{ text: "⚠️ Report error", callback_data: "report_" + txnId }];
   if (canEdit) second.push({ text: "🗑️ Delete", callback_data: "del_" + txnId });
   rows.push(second);
   rows.push([{ text: "← Back", callback_data: "back_" + txnId }]);
   return { inline_keyboard: rows };
-}
-
-export function fixMenuKeyboard(txn) {
-  return {
-    inline_keyboard: [
-      [
-        {
-          text: txn.direction === "debit" ? "🟢 It was money in" : "🔴 It was money out",
-          callback_data: "flip_" + txn.id
-        },
-        { text: "💰 Amount", callback_data: "amt_" + txn.id }
-      ],
-      [{ text: "← Back", callback_data: "help_" + txn.id }]
-    ]
-  };
 }
 
 export function deleteConfirmKeyboard(txnId) {

@@ -36,7 +36,7 @@ async function sendWelcomeGuide(ctx, chatId) {
       "• _Tag Rahul as Food_\n" +
       "• _Split dinner 50/50_\n" +
       "• _Export September CSV_\n\n" +
-      "_Paste a bank SMS here any time to add it, or check your pinned bar above for a live summary._",
+      "_Swipe-reply on any card to rename, fix `₹amount`, `50-50`, or `del` — or swipe-reply on any answer to follow up._",
     { reply_markup: { inline_keyboard: [[{ text: "📖 README", url: README_URL }]] } }
   );
 }

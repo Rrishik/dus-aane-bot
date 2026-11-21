@@ -1,19 +1,23 @@
 // 1-tap in-place untagged stepper (driven from the 21:00 IST Daily Recap and
-// the pinned DM summary card).
+// the pinned DM summary card). Also accepts direct 0-LLM swipe-replies (e.g.
+// "Kirana, Groceries" or "Starbucks") on the stepper message to name & advance.
 import { getTransaction, listUntaggedTransactions, isUntaggedTransaction } from "../db/transactions.js";
+import { getMerchantRules } from "../db/merchantRules.js";
+import { putEphemeral, getEphemeral, deleteEphemeral } from "../db/ephemeral.js";
 import { mutateTransaction } from "./ledger.js";
+import { parseCardQuickReply, applyCardQuickReply } from "./cardActions.js";
 import { cardText } from "./cards.js";
 import { CATEGORIES, CREDIT_CATEGORIES, CATEGORY_EMOJIS, categoriesFor } from "./constants.js";
+
+const STEPPER_TTL_SEC = 86400;
+export const stepperKey = (chatId, messageId) => "stepper:" + chatId + ":" + messageId;
 
 function tagStepperKeyboard(txn) {
   const cats = txn.direction === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
   const rows = [];
   const missingMerchant = !txn.merchant || String(txn.merchant).trim().toLowerCase() === "unknown";
   if (missingMerchant && txn.category) {
-    rows.push([
-      { text: "🏷 Name merchant", callback_data: "tag_" + txn.id },
-      { text: "✓ Keep as " + txn.category, callback_data: "tagqm_" + txn.id }
-    ]);
+    rows.push([{ text: "✓ Keep as " + txn.category, callback_data: "tagqm_" + txn.id }]);
   }
   for (let i = 0; i < cats.length; i += 3) {
     rows.push(
@@ -23,10 +27,7 @@ function tagStepperKeyboard(txn) {
       }))
     );
   }
-  const footer = [];
-  if (!(missingMerchant && txn.category)) footer.push({ text: "🏷 Name merchant", callback_data: "tag_" + txn.id });
-  footer.push({ text: "⏭ Skip", callback_data: "tagq_skip_" + txn.id });
-  rows.push(footer);
+  rows.push([{ text: "⏭ Skip", callback_data: "tagq_skip_" + txn.id }]);
   return { inline_keyboard: rows };
 }
 
@@ -69,9 +70,32 @@ export async function handleTagQueueCallback(ctx, { chatId, messageId, action, p
   return renderNextUntaggedStep(ctx, chatId, messageId, skipId);
 }
 
+export async function handleStepperReply(ctx, m) {
+  if (!m.replyTo || !m.replyTo.message_id) return false;
+  const active = await getEphemeral(ctx.db, stepperKey(m.chatId, m.replyTo.message_id), ctx.now());
+  if (!active || !active.txnId) return false;
+  const txn = await getTransaction(ctx.db, m.chatId, active.txnId);
+  if (!txn || txn.status === "deleted") return false;
+
+  const rules = await getMerchantRules(ctx.db, m.chatId);
+  const parsed = parseCardQuickReply(m.text, txn.direction, rules);
+  if (!parsed) return false;
+
+  const outcome = await applyCardQuickReply(ctx, m.chatId, txn, parsed, { cardMessageId: null });
+  if (!outcome.handled) return false;
+
+  if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
+    await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
+  }
+  const stillUntagged = outcome.updatedTxn ? isUntaggedTransaction(outcome.updatedTxn) : false;
+  await renderNextUntaggedStep(ctx, m.chatId, m.replyTo.message_id, stillUntagged ? txn.id : null);
+  return true;
+}
+
 async function renderNextUntaggedStep(ctx, chatId, messageId, skipId) {
   const list = await listUntaggedTransactions(ctx.db, chatId, { limit: 25 });
   if (list.length === 0) {
+    await deleteEphemeral(ctx.db, stepperKey(chatId, messageId));
     await ctx.tg.editMessageText(chatId, messageId, "✅ *All caught up!*\nEvery recent transaction has a category.", {
       reply_markup: {
         inline_keyboard: [
@@ -91,8 +115,12 @@ async function renderNextUntaggedStep(ctx, chatId, messageId, skipId) {
     if (found >= 0) idx = (found + 1) % list.length;
   }
   const current = list[idx];
+  await putEphemeral(ctx.db, stepperKey(chatId, messageId), { txnId: current.id }, STEPPER_TTL_SEC, ctx.now());
   const header = "🏷 *Categorize* _(" + (idx + 1) + " of " + list.length + " left)_\n\n";
-  await ctx.tg.editMessageText(chatId, messageId, header + cardText(current), {
-    reply_markup: tagStepperKeyboard(current)
-  });
+  await ctx.tg.editMessageText(
+    chatId,
+    messageId,
+    header + cardText(current, { extraLine: current.merchant ? "_Tap a category or swipe-reply a new name_" : null }),
+    { reply_markup: tagStepperKeyboard(current) }
+  );
 }

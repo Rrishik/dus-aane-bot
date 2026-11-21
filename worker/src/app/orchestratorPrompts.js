@@ -115,7 +115,7 @@ export function triageSystemPrompt(today) {
     ".\n\n" +
     "Route every expense, transaction, tagging, group split, settlement, onboarding, backfill, or export message immediately to the right specialist:\n" +
     "- route_to_analytics: spending totals, category breakdowns, top merchants, trends, searching transactions.\n" +
-    "- route_to_ledger: tagging/categorizing untagged spends, editing merchant/category/type, deleting a transaction, or saving a pasted bank alert.\n" +
+    "- route_to_ledger: tagging/categorizing untagged spends, editing merchant/category/amount/type, deleting a transaction, or saving a pasted bank alert.\n" +
     "- route_to_groups: splitting expenses, checking who owes whom, settling balances, undoing splits.\n" +
     "- route_to_account: registering Gmail, resending setup instructions, backfilling emails, exporting CSV/Sheets, pinning dashboard, or deleting account data.\n\n" +
     "Only answer directly (plain text, 1–2 sentences, no markdown, no questions) if the user sends a greeting/help question (summarize what they can ask in plain English) or an off-topic non-finance request (politely decline)."
@@ -129,7 +129,7 @@ const ACCOUNT_RE =
 const GROUP_RE =
   /^(?:\/?settle\b)|(?:\b(?:split|50[-\/]50|who\s+owes|owe(?:s|d)?\s+(?:me|whom|bob|alice)?|group\s+balance|settle(?:\s+up|\s+with)?|settled\s+with|simplify\s+debts?|make\s+.+\s+personal|undo\s+split)\b)/i;
 const LEDGER_RE =
-  /\b(?:untagged|uncategorized|categorize|recategorize|re-?tag|tag\s+(?:this|that|it|the|my)?|mark\s+.+\s+as\b|change\s+.*category|update\s+transaction|(?:delete|remove|discard)\s+\S+)\b|\bmake\s+\S+\s+(?:food|groceries|shopping|travel|bills|health|fun|invest|transfer|income|refund)\b/i;
+  /\b(?:untagged|uncategorized|categorize|recategorize|re-?tag|tag\s+(?:this|that|it|the|my)?|mark\s+.+\s+as\b|change\s+.*(?:category|amount)|update\s+transaction|(?:delete|remove|discard)\s+\S+)\b|\bmake\s+\S+\s+(?:food|groceries|shopping|travel|bills|health|fun|invest|transfer|income|refund)\b/i;
 const ALERT_WORDS_RE = /\b(?:debited|credited|charged|withdrawn|utr|rrn|avl\s*bal|card\s+ending)\b/i;
 const ANALYTICS_RE =
   /^(?:\/?(?:stats|recent)\b)|(?:\b(?:how\s+much|total\s+spend|top\s+merchants?|category\s+breakdown|spending|trends?|compare|recent|latest\s+transactions?|what\s+did\s+i\s+spend|spent\s+on|food\s+spend)\b)/i;

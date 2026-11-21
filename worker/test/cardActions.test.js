@@ -47,7 +47,11 @@ describe("category picker", () => {
 
     await handleUpdate(ctx, tap("cat_" + id + "_8")); // Transfer
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Transfer", kind: "transfer" });
-    expect(lastMarkup(ctx).inline_keyboard.at(-1)[1].text).toBe("💸 ▾");
+    expect(
+      lastMarkup(ctx)
+        .inline_keyboard.at(-1)
+        .map((b) => b.text)
+    ).toEqual(["💸 ▾", "⋯"]);
     expect(lastToast(ctx)[1]).toBe("💸 Transfer");
     expect(await getMerchantRules(ctx.db, "111")).toEqual([
       { pattern: "swiggy", name: null, category: "Transfer", kind: null, personal: true }
@@ -60,19 +64,19 @@ describe("category picker", () => {
     expect(lastToast(ctx)[1]).toBe("❌ Invalid category");
   });
 
-  it("shows a 1-row emoji strip on uncategorized arrival cards, collapses to emoji pill on pick, and teaches shortened patterns", async () => {
+  it("shows a 1-row emoji strip on uncategorized arrival cards, collapses to [🍕 ▾, ⋯] on pick, and teaches shortened patterns", async () => {
     const rahulSms =
       "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL 9821 On 07/10/26 Ref 628011112222 Not You? Call 18002586161";
     const { ctx, id } = await withCard({ text: rahulSms });
     const initialRows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
     expect(initialRows[0].map((b) => b.text)).toEqual(["🍕", "🥦", "🛍", "🚕", "🏠", "💊"]);
-    expect(initialRows[1].map((b) => b.text)).toEqual(["🏷 Rahul 9821 ▾", "📂 All ▾", "⋯"]);
+    expect(initialRows[1].map((b) => b.text)).toEqual(["📂 All ▾", "⋯"]);
 
     // One tap on "🍕" (index 0) sets category, collapses the emoji strip, and teaches shortened pattern.
     await handleUpdate(ctx, tap("cat_" + id + "_0"));
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Food", kind: "spend" });
     expect(lastMarkup(ctx).inline_keyboard).toHaveLength(1);
-    expect(lastMarkup(ctx).inline_keyboard[0][1].text).toBe("🍕 ▾");
+    expect(lastMarkup(ctx).inline_keyboard[0].map((b) => b.text)).toEqual(["🍕 ▾", "⋯"]);
     expect((await getMerchantRules(ctx.db, "111")).map((r) => [r.pattern, r.category])).toEqual(
       expect.arrayContaining([
         ["rahul 9821", "Food"],
@@ -121,12 +125,20 @@ describe("category picker", () => {
     expect((await getTransaction(ctx.db, "111", id)).category).toBe("Food");
   });
 
-  it("tagging an uncategorized row to a known brand auto-fills its category", async () => {
+  it("swipe-replying an uncategorized row to a known brand auto-fills its category", async () => {
     const rahulSms =
       "Sent Rs.320.00 From HDFC Bank A/C *1234 To PAYTMQR 5544 On 07/10/26 Ref 628033334444 Not You? Call 18002586161";
     const { ctx, id } = await withCard({ text: rahulSms });
-    await handleUpdate(ctx, tap("tag_" + id));
-    await handleUpdate(ctx, reply("Starbucks"));
+    const cardMsgId = (await getTransaction(ctx.db, "111", id)).card_message_id;
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 779,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "Starbucks",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({
       merchant: "Starbucks",
       category: "Food",
@@ -135,20 +147,41 @@ describe("category picker", () => {
   });
 });
 
-describe("🏷 tag", () => {
-  it("prompts, then a reply renames the card and teaches both the exact and numbered patterns", async () => {
+describe("swipe-first merchant rename & legacy button self-heal", () => {
+  it("swipe-reply renames the card, clears the merchantless hint, and teaches exact + shortened patterns", async () => {
     const { ctx, id } = await withCard({
-      llmReplies: [llmTxn({ merchant: "BUNDL TECH 12345", reference: "1" })],
+      llmReplies: [llmTxn({ merchant: "", category: "", reference: "1" })],
       text: "Payment of 250 done"
     });
-    await handleUpdate(ctx, tap("tag_" + id));
-    const promptMsgId = ctx.tg.of("sendMessage").at(-1).result.message_id;
-    expect(ctx.tg.of("sendMessage").at(-1).args[2].reply_markup.force_reply).toBe(true);
+    expect(ctx.tg.of("sendMessage")[0].args[1]).toContain("_Swipe-reply merchant name_");
+    const cardMsgId = (await getTransaction(ctx.db, "111", id)).card_message_id;
 
-    await handleUpdate(ctx, reply("Swiggy"));
-    expect(ctx.tg.of("deleteMessage").some((c) => c.args[1] === promptMsgId)).toBe(true);
+    // Tapping 📂 All ▾ on a merchantless card shows the teach-on-tap toast.
+    await handleUpdate(ctx, tap("editcat_" + id, cardMsgId));
+    expect(lastToast(ctx)[1]).toContain('Swipe-reply "Name, Food"');
+
+    // First name it BUNDL TECH 12345, then rename to Swiggy via swipe-reply -> learns both patterns.
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 780,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "BUNDL TECH 12345",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 781,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "Swiggy",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
     expect((await getTransaction(ctx.db, "111", id)).merchant).toBe("Swiggy");
     expect(lastEdit(ctx)[2]).toMatch(/^🔴 \*Swiggy\* — ₹250/);
+    expect(lastEdit(ctx)[2]).not.toContain("_Swipe-reply merchant name_");
     const patterns = (await getMerchantRules(ctx.db, "111")).map((r) => [r.pattern, r.name]);
     expect(patterns).toEqual(
       expect.arrayContaining([
@@ -158,23 +191,15 @@ describe("🏷 tag", () => {
     );
   });
 
-  it("too-long tags keep the prompt open; /cancel closes it; a later message isn't swallowed", async () => {
+  it("tapping retired tag_ / amt_ / fix_ buttons on older cards self-heals the keyboard and shows a swipe tip toast", async () => {
     const { ctx, id } = await withCard();
     await handleUpdate(ctx, tap("tag_" + id));
-    await handleUpdate(ctx, reply("x".repeat(19)));
-    expect(sent(ctx).at(-1)).toMatch(/Tag must be 1–18 characters/);
-    await handleUpdate(ctx, reply("/cancel"));
-    expect(sent(ctx).at(-1)).toBe("↩️ *Tag unchanged.*");
-    await handleUpdate(ctx, reply("hello there"));
-    expect((await getTransaction(ctx.db, "111", id)).merchant).toBe("Swiggy");
-  });
-
-  it("the pending tag expires after 10 minutes", async () => {
-    const { ctx, id } = await withCard();
-    await handleUpdate(ctx, tap("tag_" + id));
-    ctx.advance(11 * 60 * 1000);
-    await handleUpdate(ctx, reply("Zomato"));
-    expect((await getTransaction(ctx.db, "111", id)).merchant).toBe("Swiggy");
+    expect(lastToast(ctx)[1]).toContain("Swipe-reply on this card with the merchant name");
+    await handleUpdate(ctx, tap("amt_" + id));
+    expect(lastToast(ctx)[1]).toContain("Swipe-reply on this card with the right amount");
+    await handleUpdate(ctx, tap("fix_" + id));
+    expect(lastToast(ctx)[1]).toContain("Swipe-reply ₹amount");
+    expect(lastMarkup(ctx).inline_keyboard[0].map((b) => b.callback_data)).toEqual(["rr_" + id, "flip_" + id]);
   });
 
   it("shortenMerchantPattern strips trailing transaction ids", () => {
@@ -187,16 +212,17 @@ describe("🏷 tag", () => {
 describe("⋯ menu, back and delete", () => {
   const menu = (ctx) => lastMarkup(ctx).inline_keyboard.map((r) => r.map((b) => b.callback_data.split("_")[0]));
 
-  it("offers Re-read for parser rows, Fix, Report and Delete", async () => {
+  it("offers Re-read for parser rows, inline Flip, Report and Delete, plus a teach-on-tap toast", async () => {
     const { ctx, id } = await withCard();
     await handleUpdate(ctx, tap("help_" + id));
-    expect(menu(ctx)).toEqual([["rr", "fix"], ["report", "del"], ["back"]]);
+    expect(lastToast(ctx)[1]).toContain("Swipe-reply name, ₹amt, flip, or del");
+    expect(menu(ctx)).toEqual([["rr", "flip"], ["report", "del"], ["back"]]);
     await handleUpdate(ctx, tap("rrk_" + id));
     await handleUpdate(ctx, tap("help_" + id));
-    expect(menu(ctx)).toEqual([["fix"], ["report", "del"], ["back"]]);
+    expect(menu(ctx)).toEqual([["flip"], ["report", "del"], ["back"]]);
   });
 
-  it("split transactions hide Fix and Delete and refuse them", async () => {
+  it("split transactions hide Flip and Delete and refuse them", async () => {
     const { ctx, id } = await withCard();
     await seedTenant(ctx, "222");
     await seedGroup(ctx, "-100", ["111", "222"]);
@@ -297,54 +323,96 @@ describe("⋯ menu, back and delete", () => {
   });
 });
 
-describe("✏️ Fix", () => {
+describe("Flip, swipe-reply amount, and swipe-reply group split / undo", () => {
   const fixEvents = (ctx) =>
     ctx.db
       .prepare("SELECT template_id, fields_changed FROM parser_events WHERE event = 'user_fix' ORDER BY rowid")
       .all()
       .then((r) => r.results);
 
-  it("flips debit ↔ credit, re-guessing a category that no longer fits, and logs the fix", async () => {
+  it("flips debit ↔ credit via inline ⋯ button or 0-LLM swipe-reply 'flip', and logs user_fix", async () => {
     const { ctx, id } = await withCard();
-    await handleUpdate(ctx, tap("fix_" + id));
+    const cardMsgId = (await getTransaction(ctx.db, "111", id)).card_message_id;
+    await handleUpdate(ctx, tap("help_" + id, cardMsgId));
     expect(lastMarkup(ctx).inline_keyboard[0].map((b) => [b.text, b.callback_data])).toEqual([
-      ["🟢 It was money in", "flip_" + id],
-      ["💰 Amount", "amt_" + id]
+      ["🔄 Re-read", "rr_" + id],
+      ["🟢 Money in", "flip_" + id]
     ]);
-    await handleUpdate(ctx, tap("flip_" + id));
-    const t = await getTransaction(ctx.db, "111", id);
+    await handleUpdate(ctx, tap("flip_" + id, cardMsgId));
+    let t = await getTransaction(ctx.db, "111", id);
     expect(t.direction).toBe("credit");
     expect(categoriesFor("credit").concat([null])).toContain(t.category);
     expect(t.kind).not.toBe("spend");
     expect(lastEdit(ctx)[2]).toMatch(/^🟢 /);
-    expect(await fixEvents(ctx)).toEqual([{ template_id: "hdfc_upi_sent_sms_v1", fields_changed: "transaction_type" }]);
+
+    // Swipe-reply "flip" flips it back to debit deterministically (0 LLM calls).
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 890,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "flip",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect(ctx.llm.calls).toHaveLength(0);
+    t = await getTransaction(ctx.db, "111", id);
+    expect(t.direction).toBe("debit");
+    expect(await fixEvents(ctx)).toEqual([
+      { template_id: "hdfc_upi_sent_sms_v1", fields_changed: "transaction_type" },
+      { template_id: "hdfc_upi_sent_sms_v1", fields_changed: "transaction_type" }
+    ]);
   });
 
-  it("corrects the amount from a reply, and rejects junk", async () => {
+  it("corrects the amount via 0-LLM swipe-reply ('₹1,250.50' or 'amt 99'), and supports 0-LLM '50-50' + 'undo'", async () => {
     const { ctx, id } = await withCard();
-    await handleUpdate(ctx, tap("amt_" + id, 321));
-    expect(sent(ctx).at(-1)).toMatch(/Currently ₹250/);
-    await handleUpdate(ctx, reply("about 300"));
-    expect(sent(ctx).at(-1)).toMatch(/not an amount/);
-    await handleUpdate(ctx, reply("₹1,250.50"));
+    await seedTenant(ctx, "222", { name: "Bob" });
+    await seedGroup(ctx, "-100", ["111", "222"], "Flat");
+    const cardMsgId = (await getTransaction(ctx.db, "111", id)).card_message_id;
+
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 891,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "₹1,250.50",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect(ctx.llm.calls).toHaveLength(0);
     expect((await getTransaction(ctx.db, "111", id)).amount_minor).toBe(125050);
-    expect(lastEdit(ctx)[1]).toBe(321);
     expect(lastEdit(ctx)[2]).toMatch(/₹1251/);
     expect(await fixEvents(ctx)).toEqual([{ template_id: "hdfc_upi_sent_sms_v1", fields_changed: "amount" }]);
+
+    // 0-LLM swipe-reply "50-50" splits with Flat, then "undo" makes it personal again!
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 892,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "50-50",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect(ctx.llm.calls).toHaveLength(0);
+    expect(lastEdit(ctx)[2]).toContain("👥 Split with *Flat*");
+
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 893,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "undo",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect(ctx.llm.calls).toHaveLength(0);
+    expect(lastEdit(ctx)[2]).not.toContain("Split with *Flat*");
   });
 
-  it("/cancel leaves the amount alone", async () => {
-    const { ctx, id } = await withCard();
-    await handleUpdate(ctx, tap("amt_" + id));
-    await handleUpdate(ctx, reply("/cancel"));
-    expect(sent(ctx).at(-1)).toMatch(/Amount unchanged/);
-    await handleUpdate(ctx, reply("999"));
-    expect((await getTransaction(ctx.db, "111", id)).amount_minor).toBe(25000);
-  });
-
-  it("parses amounts", () => {
-    expect(["1250", "1,250.5", "Rs. 99", "INR 10.25", "₹0.5"].map(parseAmountInput)).toEqual([
-      125000, 125050, 9900, 1025, 50
+  it("parses amounts (bare, currency-prefixed, and 'amt' prefixed)", () => {
+    expect(["1250", "1,250.5", "Rs. 99", "INR 10.25", "₹0.5", "amt 450"].map(parseAmountInput)).toEqual([
+      125000, 125050, 9900, 1025, 50, 45000
     ]);
     expect(["", "0", "-5", "12.345", "1e5", "999999999"].map(parseAmountInput)).toEqual([
       null,

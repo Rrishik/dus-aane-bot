@@ -1,20 +1,20 @@
-// Personal DM card actions: inline buttons (tag, category, ⋯ menu, fix,
-// delete, report, review Save/Discard), pending tag/amount replies, and the
-// deterministic 0-LLM swipe-reply-to-card shortcut.
+// Personal DM card actions: inline buttons (category, ⋯ menu, flip, delete,
+// report, review Save/Discard), stateless self-heal for retired buttons, and
+// deterministic 0-LLM swipe-reply actions on cards.
 import { findTransactionByCardMessage, updateTransaction } from "../db/transactions.js";
 import { getMerchantRules, resolveMerchant } from "../db/merchantRules.js";
-import { touchActivity } from "../db/tenants.js";
+import { touchActivity, groupsForMember, getGroupMembers } from "../db/tenants.js";
 import { logParserEvent } from "../db/settings.js";
 import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { loadCardState, defaultKeyboard, editCard } from "./cardState.js";
 import { mutateTransaction, removeTransaction } from "./ledger.js";
+import { splitTransaction, undoGroupLink } from "./groups.js";
 import { reread, rereadAccept, rereadKeep } from "./reread.js";
 import { cancelOpenConversation } from "./orchestrator.js";
 import { refreshPersonalPin } from "./personalPin.js";
-import { categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard, fixMenuKeyboard } from "./cards.js";
+import { categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard } from "./cards.js";
 import { CATEGORY_EMOJIS, categoriesFor, TAG_MAX_LEN } from "./constants.js";
-import { escapeMarkdown, money } from "./format.js";
-import { setPending, getPending, takePending, clearPending } from "./pending.js";
+import { escapeMarkdown } from "./format.js";
 import { toMinor, fromMinor } from "../util/money.js";
 
 async function notFound(ctx, chatId, ack) {
@@ -29,26 +29,11 @@ async function refuseIfSplit(ctx, chatId, messageId, state, ack) {
   return true;
 }
 
-async function logUserFix(ctx, chatId, state, fields) {
-  const src = state.sources[0] || {};
-  await logParserEvent(
-    ctx.db,
-    {
-      tenantId: chatId,
-      channel: src.source,
-      templateId: src.parsed_by || "llm",
-      event: "user_fix",
-      fieldsChanged: fields,
-      sourceRef: src.source_ref
-    },
-    ctx.now()
-  );
-}
-
 // "1,250.50", "₹1250", "Rs. 99" → minor units, or null.
 export function parseAmountInput(text) {
   const s = String(text || "")
     .trim()
+    .replace(/^(?:amt|amount)\s*:?\s*/i, "")
     .replace(/^(?:₹|rs\.?|inr)\s*/i, "")
     .replace(/,/g, "");
   if (!/^\d+(?:\.\d{1,2})?$/.test(s)) return null;
@@ -76,33 +61,38 @@ export async function handleCardAction(ctx, { chatId, userId, messageId, action,
 }
 
 const ACTIONS = {
-  async tag(ctx, { chatId, userId, messageId, state }) {
-    const current = state.txn.merchant;
-    const prompt = current
-      ? "🏷 *Tag merchant*\nCurrently tagged as *" +
-        escapeMarkdown(current) +
-        "*.\n\nReply with a new brand name (up to " +
-        TAG_MAX_LEN +
-        " chars), or /cancel to keep " +
-        escapeMarkdown(current) +
-        "."
-      : "🏷 *Tag merchant*\nReply with the brand name (up to " + TAG_MAX_LEN + " chars), or /cancel.";
-    const sent = await ctx.tg.sendMessage(chatId, prompt, {
-      reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. Swiggy" }
-    });
-    await setPending(ctx, "tag", userId, {
-      txnId: state.txn.id,
-      messageId,
-      promptMessageId: sent && sent.message_id ? sent.message_id : null
-    });
+  // Stateless self-heal for retired buttons on older scrollback cards.
+  async tag(ctx, { chatId, messageId, state, ack }) {
+    await editCard(ctx, chatId, messageId, state);
+    if (ack) await ack.toast("💡 Swipe-reply on this card with the merchant name");
   },
 
-  async editcat(ctx, { chatId, messageId, state }) {
+  async amt(ctx, { chatId, messageId, state, ack }) {
+    await editCard(ctx, chatId, messageId, state);
+    if (ack) await ack.toast("💡 Swipe-reply on this card with the right amount (e.g. 1250)");
+  },
+
+  async fix(ctx, { chatId, messageId, state, ack }) {
+    if (await refuseIfSplit(ctx, chatId, messageId, state, ack)) return;
+    await ctx.tg.editMessageReplyMarkup(
+      chatId,
+      messageId,
+      helpMenuKeyboard(state.txn.id, {
+        canReread: state.canReread,
+        canEdit: !state.isSplit,
+        direction: state.txn.direction
+      })
+    );
+    if (ack) await ack.toast("💡 Swipe-reply ₹amount to edit amount, or tap Flip below");
+  },
+
+  async editcat(ctx, { chatId, messageId, state, ack }) {
     await ctx.tg.editMessageReplyMarkup(
       chatId,
       messageId,
       categoryKeyboard(state.txn.id, categoriesFor(state.txn.direction))
     );
+    if (ack && !state.txn.merchant) await ack.toast('💡 Tip: Swipe-reply "Name, Food" to tag both');
   },
 
   async cat(ctx, { chatId, messageId, state, arg, ack }) {
@@ -122,17 +112,17 @@ const ACTIONS = {
     await ack.toast(emoji + category + extra);
   },
 
-  async help(ctx, { chatId, messageId, state }) {
+  async help(ctx, { chatId, messageId, state, ack }) {
     await ctx.tg.editMessageReplyMarkup(
       chatId,
       messageId,
-      helpMenuKeyboard(state.txn.id, { canReread: state.canReread, canEdit: !state.isSplit })
+      helpMenuKeyboard(state.txn.id, {
+        canReread: state.canReread,
+        canEdit: !state.isSplit,
+        direction: state.txn.direction
+      })
     );
-  },
-
-  async fix(ctx, { chatId, messageId, state, ack }) {
-    if (await refuseIfSplit(ctx, chatId, messageId, state, ack)) return;
-    await ctx.tg.editMessageReplyMarkup(chatId, messageId, fixMenuKeyboard(state.txn));
+    if (ack) await ack.toast("💡 Tip: Swipe-reply name, ₹amt, flip, or del");
   },
 
   async flip(ctx, { chatId, messageId, state, ack }) {
@@ -148,24 +138,7 @@ const ACTIONS = {
     if (!res.ok) return;
     Object.assign(state.txn, res.txn);
     await editCard(ctx, chatId, messageId, state);
-    await logUserFix(ctx, chatId, state, ["transaction_type"]);
     if (ack) await ack.toast(direction === "credit" ? "🟢 Flipped to Credit" : "🔴 Flipped to Debit");
-  },
-
-  async amt(ctx, { chatId, userId, messageId, state, ack }) {
-    if (await refuseIfSplit(ctx, chatId, messageId, state, ack)) return;
-    const sent = await ctx.tg.sendMessage(
-      chatId,
-      "💰 *Correct amount*\nCurrently " +
-        money(state.txn.amount_minor, state.txn.currency) +
-        ". Reply with the right amount, or /cancel.",
-      { reply_markup: { force_reply: true, selective: true, input_field_placeholder: "e.g. 1250.50" } }
-    );
-    await setPending(ctx, "amount", userId, {
-      txnId: state.txn.id,
-      messageId,
-      promptMessageId: sent && sent.message_id ? sent.message_id : null
-    });
   },
 
   async back(ctx, { chatId, messageId, state }) {
@@ -251,95 +224,14 @@ const ACTIONS = {
   }
 };
 
-// ─── Pending replies & /cancel ───────────────────────────────────────
-
 export async function handleCancel(ctx, m) {
-  const pendingTag = await takePending(ctx, "tag", m.userId);
-  if (pendingTag) {
-    if (pendingTag.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pendingTag.promptMessageId).catch(() => {});
-    await ctx.tg.sendMessage(m.chatId, "↩️ *Tag unchanged.*");
-    return;
-  }
-  const pendingAmt = await takePending(ctx, "amount", m.userId);
-  if (pendingAmt) {
-    if (pendingAmt.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pendingAmt.promptMessageId).catch(() => {});
-    await ctx.tg.sendMessage(m.chatId, "↩️ *Amount unchanged.*");
-    return;
-  }
   const hadConversation = await cancelOpenConversation(ctx, m.chatId);
   await ctx.tg.sendMessage(m.chatId, hadConversation ? "↩️ Cancelled." : "Nothing to cancel.", {
     parse_mode: null
   });
 }
 
-export async function handleAmountReply(ctx, m) {
-  const pending = await getPending(ctx, "amount", m.userId);
-  if (!pending) return false;
-  const amountMinor = parseAmountInput(m.text);
-  if (amountMinor === null) {
-    await ctx.tg.sendMessage(m.chatId, "❌ *That's not an amount.* Try `1250` or `1250.50`, or /cancel.");
-    return true;
-  }
-  await clearPending(ctx, "amount", m.userId);
-  if (pending.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pending.promptMessageId).catch(() => {});
-  const state = await loadCardState(ctx, m.chatId, pending.txnId);
-  if (!state || state.txn.status === "deleted") {
-    await notFound(ctx, m.chatId);
-    return true;
-  }
-  if (state.isSplit) {
-    await ctx.tg.sendMessage(m.chatId, "↩️ *Make it personal again first, then fix it.*");
-    return true;
-  }
-  if (amountMinor !== state.txn.amount_minor) {
-    await updateTransaction(ctx.db, m.chatId, state.txn.id, { amountMinor }, ctx.now());
-    state.txn.amount_minor = amountMinor;
-    await logUserFix(ctx, m.chatId, state, ["amount"]);
-    await refreshPersonalPin(ctx, m.chatId);
-  }
-  if (pending.messageId) await editCard(ctx, m.chatId, pending.messageId, state);
-  if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
-    await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
-  }
-  return true;
-}
-
-export async function handleTagReply(ctx, m) {
-  const pending = await getPending(ctx, "tag", m.userId);
-  if (!pending) return false;
-  const text = m.text.trim();
-  if (!text || text.length > TAG_MAX_LEN) {
-    await ctx.tg.sendMessage(
-      m.chatId,
-      "❌ *Tag must be 1–" + TAG_MAX_LEN + " characters.* Try a shorter name, or /cancel to keep the current tag."
-    );
-    return true;
-  }
-  await clearPending(ctx, "tag", m.userId);
-  if (pending.promptMessageId) await ctx.tg.deleteMessage(m.chatId, pending.promptMessageId).catch(() => {});
-  const state = await loadCardState(ctx, m.chatId, pending.txnId);
-  if (!state || state.txn.status === "deleted") {
-    await notFound(ctx, m.chatId);
-    return true;
-  }
-  const res = await mutateTransaction(
-    ctx,
-    m.chatId,
-    state.txn.id,
-    { merchant: text, inferCategory: true },
-    { refreshCard: false }
-  );
-  if (res.ok) {
-    Object.assign(state.txn, res.txn);
-    if (pending.messageId) await editCard(ctx, m.chatId, pending.messageId, state);
-  }
-  if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
-    await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
-  }
-  return true;
-}
-
-// ─── Deterministic swipe-reply-to-card tagging shortcut ──────────────
+// ─── Deterministic 0-LLM swipe-reply actions on cards ────────────────
 
 const CATEGORY_ALIASES = {
   food: "Food",
@@ -392,9 +284,15 @@ const CATEGORY_ALIASES = {
 };
 
 const DELETE_REPLY_RE = /^(?:del|delete|remove|discard|🗑\uFE0F?)$/i;
+const CONFIRM_REPLY_RE = /^(?:ok|save|confirm|yes|✓|✅)$/i;
+const UNDO_REPLY_RE = /^(?:undo|unsplit|personal|make\s+personal)$/i;
+const SPLIT_DEFAULT_RE = /^(?:50[-\/]50|split(?:\s+50[-\/]50)?)$/i;
+const SPLIT_P100_RE = /^(?:100%|p100|split\s+100%?)$/i;
+const SPLIT_ALL_RE = /^split\s+all$/i;
+const FLIP_REPLY_RE = /^(?:flip|money\s+in|money\s+out|credit|debit)$/i;
 
 const CONVERSATIONAL_REPLY_RE =
-  /[?]|^(?:split|settle|undo|how|what|why|when|where|who|show|list|export|cancel|make\s+it|change\s+amount|fix)\b/i;
+  /[?]|^(?:split|settle|undo|unsplit|flip|amt|amount|make|change|set|fix|how|what|why|when|where|who|show|list|export|cancel)\b/i;
 
 export function matchCategoryToken(raw, direction) {
   const token = String(raw || "").trim();
@@ -410,7 +308,22 @@ export function matchCategoryToken(raw, direction) {
 export function parseCardQuickReply(text, direction, rules = []) {
   const s = String(text || "").trim();
   if (!s || s.length > 50 || /\n/.test(s)) return null;
+
   if (DELETE_REPLY_RE.test(s)) return { action: "delete" };
+  if (CONFIRM_REPLY_RE.test(s)) return { action: "confirm" };
+  if (UNDO_REPLY_RE.test(s)) return { action: "undo" };
+  if (SPLIT_DEFAULT_RE.test(s)) return { action: "split", mode: "default" };
+  if (SPLIT_P100_RE.test(s)) return { action: "split", mode: "p100" };
+  if (SPLIT_ALL_RE.test(s)) return { action: "split", mode: "all" };
+  if (FLIP_REPLY_RE.test(s)) {
+    const lower = s.toLowerCase();
+    const target = lower === "flip" ? null : lower === "credit" || lower === "money in" ? "credit" : "debit";
+    return { action: "flip", direction: target };
+  }
+
+  const amountMinor = parseAmountInput(s);
+  if (amountMinor !== null) return { action: "amount", amountMinor };
+
   if (CONVERSATIONAL_REPLY_RE.test(s)) return null;
 
   const catOnly = matchCategoryToken(s, direction);
@@ -423,7 +336,7 @@ export function parseCardQuickReply(text, direction, rules = []) {
     if (m && m.length <= TAG_MAX_LEN && c) return { merchant: m, category: c };
   }
 
-  if (s.length <= TAG_MAX_LEN && !/^(?:₹|\$|rs\.?|inr)?\s*\d+(?:\.\d+)?$/i.test(s)) {
+  if (s.length <= TAG_MAX_LEN && !/^(?:₹|\$|rs\.?|inr)?\s*[\d,.]+$/i.test(s)) {
     const valid = categoriesFor(direction);
     const resolved = resolveMerchant(s, rules);
     const guessed =
@@ -435,6 +348,126 @@ export function parseCardQuickReply(text, direction, rules = []) {
   return null;
 }
 
+// Execute a parsed quick-reply against `txn`. Returns { handled: boolean, updatedTxn? }.
+// When `cardMessageId` is passed, edits that DM card in place; when null (e.g.
+// from the untagged stepper), refreshes `txn.card_message_id` via ledger.js.
+export async function applyCardQuickReply(ctx, chatId, txn, parsed, { cardMessageId = null } = {}) {
+  const refreshInPlace = async () => {
+    if (!cardMessageId) return;
+    const freshState = await loadCardState(ctx, chatId, txn.id);
+    if (freshState) await editCard(ctx, chatId, cardMessageId, freshState);
+  };
+
+  if (parsed.action === "delete") {
+    const res = await removeTransaction(ctx, chatId, txn.id, { cardMessageId });
+    if (!res.ok) {
+      if (res.isSplit) {
+        await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then delete.*");
+        return { handled: true };
+      }
+      return { handled: false };
+    }
+    return { handled: true, deleted: true };
+  }
+
+  if (parsed.action === "confirm") {
+    if (txn.status !== "review") return { handled: false };
+    await updateTransaction(ctx.db, chatId, txn.id, { status: "confirmed", reviewNote: null }, ctx.now());
+    await touchActivity(ctx.db, chatId, ctx.now());
+    await refreshPersonalPin(ctx, chatId);
+    await refreshInPlace();
+    return { handled: true, updatedTxn: { ...txn, status: "confirmed", review_note: null } };
+  }
+
+  if (parsed.action === "undo") {
+    const res = await undoGroupLink(ctx, { payerId: chatId, txnId: txn.id });
+    if (!res.ok) {
+      await ctx.tg.sendMessage(chatId, "⚠️ " + res.error, { parse_mode: null });
+      return { handled: true };
+    }
+    await refreshInPlace();
+    return { handled: true };
+  }
+
+  if (parsed.action === "split") {
+    const groups = await groupsForMember(ctx.db, chatId);
+    if (groups.length !== 1) return { handled: false }; // Let Groups agent disambiguate
+    const members = await getGroupMembers(ctx.db, groups[0].id);
+    const mode = parsed.mode === "default" ? (members.length === 2 ? "50" : "all") : parsed.mode;
+    const res = await splitTransaction(ctx, { payerId: chatId, txnId: txn.id, groupId: groups[0].id, mode });
+    if (!res.ok) {
+      await ctx.tg.sendMessage(chatId, "❌ " + res.error, { parse_mode: null });
+      return { handled: true };
+    }
+    await refreshInPlace();
+    return { handled: true };
+  }
+
+  if (parsed.action === "flip") {
+    const nextDir = parsed.direction || (txn.direction === "debit" ? "credit" : "debit");
+    if (nextDir === txn.direction && txn.status === "confirmed") return { handled: true, updatedTxn: txn };
+    const res = await mutateTransaction(
+      ctx,
+      chatId,
+      txn.id,
+      { direction: nextDir, confirmReview: true },
+      { refreshCard: !cardMessageId, backfillUntagged: false }
+    );
+    if (!res.ok) {
+      if (res.isSplit) {
+        await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then fix it.*");
+        return { handled: true };
+      }
+      return { handled: false };
+    }
+    if (txn.status === "review") await touchActivity(ctx.db, chatId, ctx.now());
+    await refreshInPlace();
+    return { handled: true, updatedTxn: res.txn };
+  }
+
+  if (parsed.action === "amount") {
+    if (parsed.amountMinor === txn.amount_minor && txn.status === "confirmed") {
+      return { handled: true, updatedTxn: txn };
+    }
+    const res = await mutateTransaction(
+      ctx,
+      chatId,
+      txn.id,
+      { amountMinor: parsed.amountMinor, confirmReview: true },
+      { refreshCard: !cardMessageId, backfillUntagged: false }
+    );
+    if (!res.ok) {
+      if (res.isSplit) {
+        await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then fix it.*");
+        return { handled: true };
+      }
+      return { handled: false };
+    }
+    if (txn.status === "review") await touchActivity(ctx.db, chatId, ctx.now());
+    await refreshInPlace();
+    return { handled: true, updatedTxn: res.txn };
+  }
+
+  if (!parsed.merchant && !parsed.category) return { handled: false };
+
+  const res = await mutateTransaction(
+    ctx,
+    chatId,
+    txn.id,
+    {
+      merchant: parsed.merchant || undefined,
+      category: parsed.category || undefined,
+      inferCategory: !!parsed.merchant,
+      confirmReview: true
+    },
+    { refreshCard: !cardMessageId }
+  );
+  if (!res.ok) return { handled: false };
+  if (txn.status === "review") await touchActivity(ctx.db, chatId, ctx.now());
+  await refreshInPlace();
+  return { handled: true, updatedTxn: res.txn };
+}
+
 export async function handleCardReply(ctx, m) {
   if (!m.replyTo || !m.replyTo.message_id) return false;
   const txn = await findTransactionByCardMessage(ctx.db, m.chatId, m.replyTo.message_id);
@@ -443,34 +476,8 @@ export async function handleCardReply(ctx, m) {
   const parsed = parseCardQuickReply(m.text, txn.direction, rules);
   if (!parsed) return false;
 
-  if (parsed.action === "delete") {
-    const res = await removeTransaction(ctx, m.chatId, txn.id, { cardMessageId: m.replyTo.message_id });
-    if (!res.ok) {
-      if (res.isSplit) {
-        await ctx.tg.sendMessage(m.chatId, "↩️ *Make it personal again first, then delete.*");
-        return true;
-      }
-      return false;
-    }
-    if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
-      await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
-    }
-    return true;
-  }
-
-  if (!parsed.merchant && !parsed.category) return false;
-
-  const res = await mutateTransaction(
-    ctx,
-    m.chatId,
-    txn.id,
-    { merchant: parsed.merchant || undefined, category: parsed.category || undefined },
-    { refreshCard: false }
-  );
-  if (!res.ok) return false;
-
-  const freshState = await loadCardState(ctx, m.chatId, txn.id);
-  if (freshState) await editCard(ctx, m.chatId, m.replyTo.message_id, freshState);
+  const outcome = await applyCardQuickReply(ctx, m.chatId, txn, parsed, { cardMessageId: m.replyTo.message_id });
+  if (!outcome.handled) return false;
   if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
     await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
   }

@@ -71,7 +71,7 @@ describe("/ask", () => {
     const out = lastSent(ctx);
     expect(out.args[1]).toBe("You spent ₹450.");
     expect(out.args[2].parse_mode).toBeNull();
-    expect(out.args[2].reply_markup.inline_keyboard[0][0].callback_data).toBe("askfu_1");
+    expect(out.args[2].reply_markup).toBeUndefined();
     expect(ctx.tg.of("sendChatAction").length).toBeGreaterThan(0);
   });
 
@@ -102,24 +102,26 @@ describe("/ask", () => {
     expect(lastSent(ctx).args[1]).toBe("↩️ Cancelled.");
   });
 
-  it("Follow up re-keys the conversation to a prompt; the reply continues as turn 2", async () => {
+  it("swipe-replying directly to any button-free answer continues as turn 2; legacy askfu_ button self-heals with a tip", async () => {
     const { ctx, replies } = await setup();
     replies.push("Answer one.");
     await handleUpdate(ctx, msg("top merchants"));
     const answerId = lastSent(ctx).result.message_id;
+
+    // Tapping a stale askfu_ button on an old message strips the button without consuming the conversation!
     await handleUpdate(ctx, tap("askfu_1", answerId));
     expect(ctx.tg.of("editMessageReplyMarkup").at(-1).args).toEqual(["111", answerId, { inline_keyboard: [] }]);
-    const promptId = lastSent(ctx).result.message_id;
-    expect(lastSent(ctx).args[1]).toContain("follow-up");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("Swipe-reply directly");
 
+    // Swipe-replying directly to answerId continues as turn 2.
     replies.push("Answer two.");
-    await handleUpdate(ctx, msg("and last month?", promptId));
+    await handleUpdate(ctx, msg("and last month?", answerId));
     expect(ctx.llm.calls.at(-1).slice(-2)).toEqual([
       { role: "assistant", content: "Answer one." },
       { role: "user", content: "and last month?" }
     ]);
-    expect(lastSent(ctx).args[2].reply_markup.inline_keyboard[0][0].callback_data).toBe("askfu_2");
 
+    // Once consumed, tapping stale askfu_1 reports expired.
     await handleUpdate(ctx, tap("askfu_1", answerId));
     expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("expired");
   });
@@ -149,17 +151,16 @@ describe("/ask", () => {
     expect(lastSent(ctx).args[1]).toBe("new day");
   });
 
-  it("bare /ask still works as a legacy prompt; /cancel drops it", async () => {
+  it("bare /ask explains commandless chat; next plain message goes straight to orchestrator", async () => {
     const { ctx, replies } = await setup();
     await handleUpdate(ctx, msg("/ask"));
-    expect(lastSent(ctx).args[2].reply_markup.force_reply).toBe(true);
+    expect(lastSent(ctx).args[1]).toContain("no /ask needed");
     replies.push("Here you go.");
     await handleUpdate(ctx, msg("food last month"));
     expect(ctx.llm.calls[0][1].content).toBe("food last month");
 
-    await handleUpdate(ctx, msg("/ask"));
     await handleUpdate(ctx, msg("/cancel"));
-    expect(lastSent(ctx).args[1]).toContain("Cancelled");
+    expect(lastSent(ctx).args[1]).toBe("Nothing to cancel.");
   });
 
   it("natural-language messages with ₹ amounts route to specialists instead of colliding with SMS paste", async () => {

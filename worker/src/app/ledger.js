@@ -6,18 +6,21 @@
 // posts, and personal DM pins stay consistent everywhere.
 import {
   getTransaction,
+  getSources,
   updateTransaction,
   softDeleteTransaction,
   listUntaggedTransactions
 } from "../db/transactions.js";
 import { getSplitForTransaction, getSettlementForTransaction } from "../db/splits.js";
 import { getMerchantRules, resolveMerchant, upsertMerchantRule } from "../db/merchantRules.js";
-import { guessCategory } from "../parser/index.js";
+import { logParserEvent } from "../db/settings.js";
+import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { refreshCardMessage } from "./cardState.js";
 import { refreshSplitGroupMessage } from "./groups.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { categoriesFor, TAG_MAX_LEN } from "./constants.js";
 import { defaultKind } from "../util/kind.js";
+import { toMinor, fromMinor } from "../util/money.js";
 
 // "bundl tech 12345" → "bundl tech": one rule covers numbered payee variants.
 export function shortenMerchantPattern(raw) {
@@ -74,18 +77,51 @@ export async function applyLearnedCategoryToUntagged(ctx, tenantId) {
 
 const txnLabel = (r) => r.merchant || r.merchant_raw || "Unknown";
 
-// input: { merchant?, category?, direction?, transactionType?, inferCategory?: boolean }
+// input: { merchant?, category?, direction?, transactionType?, amount?, amountMinor?, confirmReview?: boolean, inferCategory?: boolean }
 // opts:  { refreshCard?: boolean, backfillUntagged?: boolean, refreshPin?: boolean }
 export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts = {}) {
   const tid = String(tenantId);
   const txn = txnId && (await getTransaction(ctx.db, tid, txnId));
-  if (!txn || txn.status !== "confirmed") {
+  const allowedStatuses = input.confirmReview ? ["confirmed", "review"] : ["confirmed"];
+  if (!txn || !allowedStatuses.includes(txn.status)) {
     return { ok: false, error: "Transaction not found for transaction_id: " + txnId };
   }
 
   const patch = {};
   const changes = [];
+  const fixedFields = [];
   let direction = txn.direction;
+
+  const wantsFinancialFix =
+    input.direction !== undefined ||
+    input.transactionType !== undefined ||
+    input.amount !== undefined ||
+    input.amountMinor !== undefined;
+  if (wantsFinancialFix) {
+    const [split, settlement] = await Promise.all([
+      getSplitForTransaction(ctx.db, txn.id),
+      getSettlementForTransaction(ctx.db, txn.id)
+    ]);
+    if (split || settlement) {
+      return { ok: false, isSplit: true, error: "Make it personal again first, then fix it." };
+    }
+  }
+
+  if (input.amount !== undefined || input.amountMinor !== undefined) {
+    let minor = input.amountMinor;
+    if (minor === undefined && input.amount !== null) {
+      const num = Number(input.amount);
+      minor = Number.isFinite(num) ? toMinor(num) : -1;
+    }
+    if (!Number.isInteger(minor) || minor <= 0 || minor > toMinor(PARSER_MAX_AMOUNT)) {
+      return { ok: false, error: "amount must be a positive number" };
+    }
+    if (minor !== txn.amount_minor) {
+      patch.amountMinor = minor;
+      changes.push({ field: "amount", from: fromMinor(txn.amount_minor), to: fromMinor(minor) });
+      fixedFields.push("amount");
+    }
+  }
 
   if (input.direction || input.transactionType) {
     const rawDir = input.direction || String(input.transactionType || "");
@@ -101,6 +137,7 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
         from: txn.direction === "debit" ? "Debit" : "Credit",
         to: direction === "debit" ? "Debit" : "Credit"
       });
+      fixedFields.push("transaction_type");
     }
   }
 
@@ -145,8 +182,16 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
     }
   }
 
+  if (input.confirmReview && txn.status === "review") {
+    patch.status = "confirmed";
+    patch.reviewNote = null;
+  }
+
   if (!changes.length && !Object.keys(patch).length) {
-    return { ok: false, error: "Nothing to update — pass at least one of: category, merchant, transaction_type" };
+    return {
+      ok: false,
+      error: "Nothing to update — pass at least one of: category, merchant, amount, transaction_type"
+    };
   }
   if (patch.direction || patch.category !== undefined) {
     patch.kind = defaultKind(direction, category);
@@ -155,6 +200,22 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
   const now = ctx.now();
   await updateTransaction(ctx.db, tid, txn.id, patch, now);
   const updated = { ...txn, ...patch };
+
+  if (fixedFields.length) {
+    const src = (await getSources(ctx.db, tid, txn.id))[0] || {};
+    await logParserEvent(
+      ctx.db,
+      {
+        tenantId: tid,
+        channel: src.source,
+        templateId: src.parsed_by || "llm",
+        event: "user_fix",
+        fieldsChanged: fixedFields,
+        sourceRef: src.source_ref
+      },
+      now
+    );
+  }
 
   const previousRaw = txn.merchant || txn.merchant_raw;
   if (patch.merchant && previousRaw) {
@@ -198,6 +259,7 @@ export async function batchMutateTransactions(ctx, tenantId, items = []) {
       {
         merchant: item && item.merchant,
         category: item && item.category,
+        amount: item && item.amount,
         transactionType: item && item.transaction_type
       },
       { backfillUntagged: false, refreshPin: false }

@@ -103,11 +103,12 @@ export const LEDGER_TOOLS = [
   SEARCH_TOOL,
   fn(
     "update_transaction",
-    "Update a single transaction's category, merchant tag, or transaction type. Identify via transaction_id from search_transactions or list_untagged_transactions.",
+    "Update a single transaction's category, merchant tag, amount (only when personal/unsplit), or transaction type. Identify via transaction_id from search_transactions or list_untagged_transactions.",
     {
       transaction_id: { type: "string", description: "The transaction_id." },
       category: { type: "string", description: "Valid debit or credit category." },
       merchant: { type: "string", description: "Short merchant / tag name (1–18 chars)." },
+      amount: { type: "number", description: "Corrected positive transaction amount." },
       transaction_type: { type: "string", description: "Debit or Credit." }
     },
     ["transaction_id"]
@@ -125,6 +126,7 @@ export const LEDGER_TOOLS = [
             transaction_id: { type: "string" },
             category: { type: "string" },
             merchant: { type: "string" },
+            amount: { type: "number" },
             transaction_type: { type: "string" }
           },
           required: ["transaction_id"]
@@ -409,6 +411,7 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       const res = await mutateTransaction(ctx, tid, args.transaction_id, {
         merchant: args.merchant,
         category: args.category,
+        amount: args.amount,
         transactionType: args.transaction_type
       });
       if (!res.ok) return res;

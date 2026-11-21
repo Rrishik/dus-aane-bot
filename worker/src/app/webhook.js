@@ -8,8 +8,9 @@ import { getTenant } from "../db/tenants.js";
 import { handleStart, registerEmailForChat } from "./commands.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
-import { handleTagReply, handleAmountReply, handleCardReply, handleCancel } from "./cardActions.js";
-import { handleOrchestrator, handleAskResume, handlePendingAsk } from "./orchestrator.js";
+import { handleCardReply, handleCancel } from "./cardActions.js";
+import { handleStepperReply } from "./tagStepper.js";
+import { handleOrchestrator, handleAskResume } from "./orchestrator.js";
 import { isUsable, gateText } from "./onboarding.js";
 import {
   handleGroupStart,
@@ -88,10 +89,6 @@ export async function handleMessage(ctx, message) {
     return;
   }
 
-  // Deterministic pending card inputs.
-  if (await handleTagReply(ctx, m)) return;
-  if (await handleAmountReply(ctx, m)) return;
-
   // Deterministic strict bank SMS paste (0 LLM tokens when matching templates).
   if (await handleSmsPaste(ctx, tenant, chatId, text)) return;
 
@@ -108,10 +105,12 @@ export async function handleMessage(ctx, message) {
     return;
   }
 
-  // Active conversation resume (swipe reply or open ask_user) -> card quick-reply -> central orchestrator.
+  // Swipe-reply to card/stepper (0 LLM) -> open conversation resume -> central orchestrator.
+  if (m.replyTo && m.replyTo.message_id) {
+    if (await handleCardReply(ctx, m)) return;
+    if (await handleStepperReply(ctx, m)) return;
+  }
   if (await handleAskResume(ctx, m, tenant)) return;
-  if (await handleCardReply(ctx, m)) return;
-  if (await handlePendingAsk(ctx, m, tenant)) return;
   await handleOrchestrator(ctx, m, tenant);
 }
 

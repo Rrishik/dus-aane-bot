@@ -31,7 +31,9 @@ export async function activateWithWelcome(ctx, tenant) {
   try {
     await ctx.tg.sendMessage(
       tenant.id,
-      "🎉 *Your first transaction is in!*\n\nEvery bank email you forward (or SMS you paste) becomes a card here. Ask anything in plain English, or ask to export your data any time."
+      "🎉 *Your first transaction is in!*\n\n" +
+        "• *Tap an emoji* to categorize, or *swipe-reply* on any card with a merchant name, `₹amount`, `50-50`, or `del`\n" +
+        "• *Type in plain English* anytime to ask questions, split bills, or export CSVs — and swipe-reply to any answer to follow up"
     );
   } catch (e) {
     console.error("[activate] welcome DM failed:", e && e.message);
