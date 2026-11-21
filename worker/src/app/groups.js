@@ -26,7 +26,7 @@ import { getTransaction } from "../db/transactions.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { MAX_GROUP_MEMBERS } from "./constants.js";
-import { MONTHS, escapeMarkdown, money, currencySymbol, formatAmount } from "./format.js";
+import { escapeMarkdown, money, currencySymbol, formatAmount, formatLongDate } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { fromMinor, toMinor } from "../util/money.js";
 
@@ -34,11 +34,6 @@ const NOT_SET_UP = "👋 This group isn't set up yet. Promote me to admin and ru
 const PIN_SKIP = "skip";
 const PIN_CURRENCY_CAP = 3;
 const IN_STATUSES = ["member", "administrator", "creator", "restricted"];
-
-function longDate(iso) {
-  const [y, m, d] = iso.split("-");
-  return d + " " + MONTHS[Number(m) - 1] + " " + y;
-}
 
 async function activeGroup(ctx, groupId) {
   const g = await getTenant(ctx.db, groupId);
@@ -204,7 +199,7 @@ function splitNotification(txn, payerName, holders, shares, nameOf) {
   const lines = [
     txn.merchant ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount : emoji + " *" + amount + "*"
   ];
-  const date = escapeMarkdown(longDate(txn.occurred_on));
+  const date = escapeMarkdown(formatLongDate(txn.occurred_on));
   lines.push(txn.category ? "📂 " + escapeMarkdown(txn.category) + " · " + date : "🗓 " + date);
   lines.push("👤 *" + escapeMarkdown(payerName) + "* paid");
   lines.push(

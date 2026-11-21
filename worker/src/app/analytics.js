@@ -1,5 +1,5 @@
-// /stats trends and the weekly digest. Spend is
-// kind = 'spend' (card bill payments, transfers and investments excluded).
+// Spending trends and the weekly digest. Spend is kind = 'spend'
+// (Transfer and Invest debits excluded).
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { CATEGORY_EMOJIS } from "./constants.js";
 import { MONTHS, escapeMarkdown, formatAmount, formatAmountCompact, currencySymbol } from "./format.js";
@@ -186,7 +186,12 @@ export async function weeklyDigestData(db, tenantId, range) {
       .slice()
       .sort((a, b) => b.effective_minor - a.effective_minor)
       .slice(0, 5)
-      .map((r) => ({ merchant: r.merchant, amount: fromMinor(r.effective_minor), occurredOn: r.occurred_on }))
+      .map((r) => ({
+        merchant: r.merchant,
+        amount: fromMinor(r.effective_minor),
+        currency: r.currency,
+        occurredOn: r.occurred_on
+      }))
   };
 }
 
@@ -219,20 +224,31 @@ export function formatWeeklyMessage(range, data) {
   const sorted = Object.keys(data.categorySpend).sort((a, b) => data.categorySpend[b] - data.categorySpend[a]);
   const top = sorted.slice(0, 5);
   const nameWidth = Math.max(0, ...top.map((k) => k.split("|||")[0].length));
-  const amounts = top.map((k) => formatAmount(data.categorySpend[k]));
-  const amtWidth = Math.max(0, ...amounts.map((a) => a.length));
+  const formattedAmounts = top.map((k) => {
+    const ccy = k.split("|||")[1] || "INR";
+    return currencySymbol(ccy) + formatAmount(data.categorySpend[k]);
+  });
+  const amtWidth = Math.max(0, ...formattedAmounts.map((a) => a.length));
   top.forEach((k, i) => {
     const cat = k.split("|||")[0];
-    msg += (CATEGORY_EMOJIS[cat] || "•") + " `" + cat.padEnd(nameWidth) + "  ₹" + amounts[i].padEnd(amtWidth) + "`\n";
+    msg +=
+      (CATEGORY_EMOJIS[cat] || "•") +
+      " `" +
+      cat.padEnd(nameWidth) +
+      "  " +
+      formattedAmounts[i].padEnd(amtWidth) +
+      "`\n";
   });
   if (sorted.length > 5) {
-    const rest = sorted.slice(5).reduce((s, k) => s + data.categorySpend[k], 0);
-    msg +=
-      "   `" +
-      ("+" + (sorted.length - 5) + " more").padEnd(nameWidth) +
-      "  ₹" +
-      formatAmount(rest).padEnd(amtWidth) +
-      "`\n";
+    const restByCcy = {};
+    for (const k of sorted.slice(5)) {
+      const ccy = k.split("|||")[1] || "INR";
+      restByCcy[ccy] = (restByCcy[ccy] || 0) + data.categorySpend[k];
+    }
+    const restStr = Object.keys(restByCcy)
+      .map((c) => currencySymbol(c) + formatAmount(restByCcy[c]))
+      .join(" + ");
+    msg += "   `" + ("+" + (sorted.length - 5) + " more").padEnd(nameWidth) + "  " + restStr.padEnd(amtWidth) + "`\n";
   }
   if (data.topTransactions.length) {
     msg += "\n💳 *Top:*\n";
@@ -242,7 +258,8 @@ export function formatWeeklyMessage(range, data) {
         1 +
         ". " +
         escapeMarkdown(t.merchant || "Unknown") +
-        "  ₹" +
+        "  " +
+        currencySymbol(t.currency || "INR") +
         formatAmount(t.amount) +
         "  " +
         label(t.occurredOn) +

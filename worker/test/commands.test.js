@@ -177,7 +177,7 @@ describe("pinned dashboard callbacks (Recent & Trends)", () => {
     await handleUpdate(ctx, tap("111", "stats_trendsmonthly"));
     expect(ctx.tg.of("editMessageText")[2].args[2]).toMatch(/Monthly/);
     await handleUpdate(ctx, tap("111", "stats_back"));
-    expect(ctx.tg.of("editMessageText")[3].args[2]).toBe("📊 *Stats* — pick a view:");
+    expect(ctx.tg.of("editMessageText")[3].args[2]).toContain("📌 *Oct 2026*");
   });
 });
 
@@ -226,19 +226,23 @@ describe("analytics", () => {
     const ctx = testContext();
     await seedTenant(ctx, "111");
     await addTxn(ctx, "111", { amountMinor: 120000, merchant: "Zepto", category: "Groceries" });
+    await addTxn(ctx, "111", { amountMinor: 2000, currency: "USD", merchant: "OpenAI", category: "Bills" });
     await addTxn(ctx, "111", { amountMinor: 50000, occurredOn: "2026-09-29" });
     const range = { start: "2026-09-30", end: "2026-10-06" };
     const data = await weeklyDigestData(ctx.db, "111", range);
-    expect(data.spentByCurrency).toEqual({ INR: 1200 });
+    expect(data.spentByCurrency).toEqual({ INR: 1200, USD: 20 });
     expect(data.prevSpentByCurrency).toEqual({ INR: 500 });
     const text = formatWeeklyMessage(range, data);
     expect(text).toMatch(/^📅 \*Last Week\* — Sep 30–Oct 6\n🔴 ₹1200  _\(vs ₹500, ↑140%\)_/);
+    expect(text).toContain("$20");
     expect(await weeklyDigestData(ctx.db, "111", { start: "2026-01-01", end: "2026-01-07" })).toBeNull();
   });
 });
 
 describe("/backfill", () => {
   it("parses compact, spaced and absolute ranges", () => {
+    expect(parseBackfillArgs("10m", NOW)).toEqual({ ok: true, startMs: NOW - 600000, endMs: NOW });
+    expect(parseBackfillArgs("3 days", NOW).startMs).toBe(NOW - 3 * 86400000);
     expect(parseBackfillArgs("/backfill 10m", NOW)).toEqual({ ok: true, startMs: NOW - 600000, endMs: NOW });
     expect(parseBackfillArgs("/backfill 3 days", NOW).startMs).toBe(NOW - 3 * 86400000);
     expect(parseBackfillArgs("/backfill 2026-10-01 2026-10-02", NOW)).toEqual({

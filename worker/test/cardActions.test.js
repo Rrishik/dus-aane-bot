@@ -7,7 +7,8 @@ import { getMerchantRules } from "../src/db/merchantRules.js";
 import { createSplit } from "../src/db/splits.js";
 import { getDisabledTemplates, logParserEvent } from "../src/db/settings.js";
 import { putEphemeral } from "../src/db/ephemeral.js";
-import { shortenMerchantPattern, parseAmountInput } from "../src/app/cardActions.js";
+import { parseAmountInput } from "../src/app/cardActions.js";
+import { shortenMerchantPattern } from "../src/app/ledger.js";
 import { categoriesFor } from "../src/app/constants.js";
 
 const HDFC_SMS =

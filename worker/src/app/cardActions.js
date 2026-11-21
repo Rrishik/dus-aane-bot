@@ -7,7 +7,7 @@ import { touchActivity } from "../db/tenants.js";
 import { logParserEvent } from "../db/settings.js";
 import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { loadCardState, defaultKeyboard, editCard } from "./cardState.js";
-import { mutateTransaction, shortenMerchantPattern } from "./ledger.js";
+import { mutateTransaction } from "./ledger.js";
 import { reread, rereadAccept, rereadKeep } from "./reread.js";
 import { cancelOpenConversation } from "./orchestrator.js";
 import { refreshPersonalPin } from "./personalPin.js";
@@ -16,8 +16,6 @@ import { CATEGORY_EMOJIS, categoriesFor, TAG_MAX_LEN } from "./constants.js";
 import { escapeMarkdown, money } from "./format.js";
 import { setPending, getPending, takePending, clearPending } from "./pending.js";
 import { toMinor, fromMinor } from "../util/money.js";
-
-export { shortenMerchantPattern };
 
 async function notFound(ctx, chatId, ack) {
   if (ack) await ack.toast("❌ Transaction not found", true);

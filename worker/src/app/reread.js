@@ -10,7 +10,7 @@ import { refreshPersonalPin } from "./personalPin.js";
 import { extractWithLlm } from "./extraction.js";
 import { callAppsScript } from "./appsScript.js";
 import { categoriesFor } from "./constants.js";
-import { escapeMarkdown, money, formatDayMonth } from "./format.js";
+import { escapeMarkdown, money, formatLongDate } from "./format.js";
 import { toMinor, fromMinor } from "../util/money.js";
 import { defaultKind } from "../util/kind.js";
 
@@ -38,7 +38,7 @@ function describeChanges(fresh, changed) {
     parts.push(money(toMinor(fresh.amount), fresh.currency));
   }
   if (changed.includes("transaction_date")) {
-    parts.push(formatDayMonth(fresh.transaction_date) + " " + fresh.transaction_date.slice(0, 4));
+    parts.push(formatLongDate(fresh.transaction_date));
   }
   if (changed.includes("transaction_type")) parts.push(fresh.transaction_type);
   return parts.join(" · ");

@@ -4,6 +4,8 @@
 import { getTenantEmails } from "../db/tenants.js";
 import { callAppsScript } from "./appsScript.js";
 import { verifySignedRequest } from "./auth.js";
+import { refreshPersonalPin } from "./personalPin.js";
+import { IST_OFFSET_MS } from "../util/dates.js";
 
 const UNIT_MS = { minute: 60000, hour: 3600000, day: 86400000, week: 7 * 86400000 };
 const UNIT_ALIASES = {
@@ -25,26 +27,27 @@ const UNIT_ALIASES = {
   months: "month"
 };
 const STALE_JOB_MS = 30 * 60 * 1000;
-const IST_OFFSET_MS = 5.5 * 3600 * 1000;
 
 const BACKFILL_USAGE =
   "❌ *Invalid format!*\n\nTry e.g. `backfill 3 days`, `backfill 2 weeks`, or `backfill 2026-03-01 2026-03-31`.";
 
 // → { ok, startMs, endMs } | { ok: false, error: usage|unknown_unit|invalid_dates|invalid_range }
 export function parseBackfillArgs(text, nowMs) {
-  const parts = String(text || "")
+  const cleaned = String(text || "")
     .trim()
-    .split(/\s+/);
-  if (parts.length < 2) return { ok: false, error: "usage" };
+    .replace(/^\/?backfill(?:@\w+)?\b\s*/i, "")
+    .trim();
+  if (!cleaned) return { ok: false, error: "usage" };
+  const parts = cleaned.split(/\s+/);
   let amount;
   let unit;
-  const compact = parts[1].match(/^(\d+)([a-z]+)$/i);
+  const compact = parts[0].match(/^(\d+)([a-z]+)$/i);
   if (compact) {
     amount = parseInt(compact[1], 10);
     unit = compact[2].toLowerCase();
-  } else if (/^\d+$/.test(parts[1]) && parts.length >= 3) {
-    amount = parseInt(parts[1], 10);
-    unit = parts[2].toLowerCase();
+  } else if (/^\d+$/.test(parts[0]) && parts.length >= 2) {
+    amount = parseInt(parts[0], 10);
+    unit = parts[1].toLowerCase();
   }
   if (unit) {
     const u = UNIT_ALIASES[unit];
@@ -56,12 +59,12 @@ export function parseBackfillArgs(text, nowMs) {
     }
     return { ok: true, startMs: nowMs - amount * UNIT_MS[u], endMs: nowMs };
   }
-  if (parts.length < 3) return { ok: false, error: "usage" };
+  if (parts.length < 2) return { ok: false, error: "usage" };
   const iso = /^\d{4}-\d{2}-\d{2}$/;
-  if (!iso.test(parts[1]) || !iso.test(parts[2])) return { ok: false, error: "invalid_dates" };
+  if (!iso.test(parts[0]) || !iso.test(parts[1])) return { ok: false, error: "invalid_dates" };
   // Whole IST days: start 00:00, end 23:59:59.999.
-  const startMs = Date.parse(parts[1] + "T00:00:00Z") - IST_OFFSET_MS;
-  const endMs = Date.parse(parts[2] + "T00:00:00Z") - IST_OFFSET_MS + 86400000 - 1;
+  const startMs = Date.parse(parts[0] + "T00:00:00Z") - IST_OFFSET_MS;
+  const endMs = Date.parse(parts[1] + "T00:00:00Z") - IST_OFFSET_MS + 86400000 - 1;
   if (isNaN(startMs) || isNaN(endMs)) return { ok: false, error: "invalid_dates" };
   if (startMs > endMs) return { ok: false, error: "invalid_range" };
   return { ok: true, startMs, endMs };
@@ -187,5 +190,6 @@ export async function handleBackfillProgress(ctx, request) {
   summary += "\n_Ask for recent transactions any time to see the latest._";
   await ctx.tg.sendMessage(chatId, summary);
   await ctx.db.prepare("DELETE FROM backfill_jobs WHERE tenant_id = ?").bind(chatId).run();
+  if (job.saved > 0) await refreshPersonalPin(ctx, chatId);
   return Response.json({ ok: true });
 }

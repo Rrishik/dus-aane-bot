@@ -1,5 +1,4 @@
-// Your data: /export (CSV, or a Google Sheet copy via Apps Script) and
-// /deletemydata.
+// Your data: CSV / Google Sheet export (via Apps Script) and account-wide data wipe.
 import { getTenantEmails, groupsForMember, deleteTenantData } from "../db/tenants.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { getSetting, setSetting } from "../db/settings.js";
@@ -27,11 +26,12 @@ const USAGE = "Specify all time, a month (`2026-09`), or a date range (`2026-01-
 
 // "" → all time; "YYYY-MM" → that month; two ISO dates → that range.
 export function parseExportRange(text) {
-  const args = String(text || "")
+  const cleaned = String(text || "")
     .trim()
-    .split(/\s+/)
-    .slice(1);
-  if (!args.length) return { from: null, to: null };
+    .replace(/^\/?export(?:@\w+)?\b\s*/i, "")
+    .trim();
+  if (!cleaned) return { from: null, to: null };
+  const args = cleaned.split(/\s+/);
   if (args.length === 1 && /^\d{4}-\d{2}$/.test(args[0])) {
     const [y, m] = args[0].split("-").map(Number);
     if (m < 1 || m > 12) return null;

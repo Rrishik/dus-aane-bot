@@ -63,7 +63,7 @@ const LIST_UNTAGGED_TOOL = fn(
 export const ANALYTICS_TOOLS = [
   fn(
     "get_spending_summary",
-    "Get total spending and income summary for a date range. spend_by_currency excludes card bill payments, transfers out and investments (reported separately as non_spend_debits_by_currency).",
+    "Get total spending and income summary for a date range. spend_by_currency excludes Transfer and Invest debits (reported separately as non_spend_debits_by_currency).",
     DATE_PARAMS,
     ["start_date", "end_date"]
   ),
@@ -560,15 +560,13 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
     },
 
     async start_backfill(args) {
-      const range = String(args.range || "").trim();
-      await handleBackfill(ctx, tid, "/backfill " + range);
+      await handleBackfill(ctx, tid, args.range);
       runMeta.suppressFinalText = true;
       return { ok: true, already_sent_to_chat: true };
     },
 
     async export_transactions(args) {
-      const range = String(args.range || "").trim();
-      await handleExport(ctx, tid, range ? "/export " + range : "/export");
+      await handleExport(ctx, tid, args.range);
       runMeta.suppressFinalText = true;
       return { ok: true, already_sent_to_chat: true };
     },

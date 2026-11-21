@@ -1,7 +1,7 @@
 // Specialist system prompts, quota-cap copy, and the deterministic fast
 // pre-router for personal DM messages.
 import { CATEGORIES, CREDIT_CATEGORIES, FREE_ASK_LIMIT } from "./constants.js";
-import { shiftIsoDate } from "../util/dates.js";
+import { shiftIsoDate, IST_OFFSET_MS } from "../util/dates.js";
 
 const NON_SPEND = ["Transfer", "Invest"];
 
@@ -147,7 +147,7 @@ export function classifyFastAgent(text, tenantStatus = "active") {
 // ─── Quota copy ──────────────────────────────────────────────────────
 
 export function capHitMessage(nowMs) {
-  const istMs = nowMs + 5.5 * 3600 * 1000;
+  const istMs = nowMs + IST_OFFSET_MS;
   const secs = Math.floor((istMs % 86400000) / 1000);
   const left = Math.max(1, 1440 - Math.ceil(secs / 60));
   const h = Math.floor(left / 60);

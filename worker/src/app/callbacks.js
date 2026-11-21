@@ -1,7 +1,7 @@
-// Inline-button callbacks: /stats views, "Resend setup", group split/settle
-// (":"-separated) and transaction card actions ("_"-separated).
+// Inline-button callbacks: live summary views, "Resend setup", group
+// split/settle (":"-separated) and transaction card actions ("_"-separated).
 import { getTenant, getTenantEmails } from "../db/tenants.js";
-import { recentMessage, statsMenuKeyboard, sendSetupEmail } from "./commands.js";
+import { recentMessage, sendSetupEmail } from "./commands.js";
 import { monthlyTrends, weeklyTrends, formatTrendsMessage } from "./analytics.js";
 import { isUsable, gateText } from "./onboarding.js";
 import { handleCardAction } from "./cardActions.js";
@@ -13,17 +13,13 @@ import { personalPinData, formatPersonalPin, personalPinKeyboard } from "./perso
 
 const statsBackRow = [{ text: "🔙 Back", callback_data: "stats_back" }];
 
-export async function handleStatsCallback(ctx, chatId, messageId, view, tenant) {
+export async function handleStatsCallback(ctx, chatId, messageId, view) {
   if (view === "back") {
-    if (tenant && tenant.pin_message_id && Number(tenant.pin_message_id) === Number(messageId)) {
-      const data = await personalPinData(ctx, chatId);
-      await ctx.tg.editMessageText(chatId, messageId, formatPersonalPin(data), {
-        disable_web_page_preview: true,
-        reply_markup: personalPinKeyboard(data.untaggedCount)
-      });
-      return;
-    }
-    await ctx.tg.editMessageText(chatId, messageId, "📊 *Stats* — pick a view:", { reply_markup: statsMenuKeyboard() });
+    const data = await personalPinData(ctx, chatId);
+    await ctx.tg.editMessageText(chatId, messageId, formatPersonalPin(data), {
+      disable_web_page_preview: true,
+      reply_markup: personalPinKeyboard(data.untaggedCount)
+    });
     return;
   }
   if (view === "recent") {
@@ -103,7 +99,7 @@ export async function handleCallback(ctx, cb) {
     const action = sep < 0 ? data : data.slice(0, sep);
     const payload = sep < 0 ? "" : data.slice(sep + 1);
 
-    if (action === "stats") return await handleStatsCallback(ctx, chatId, messageId, payload, tenant);
+    if (action === "stats") return await handleStatsCallback(ctx, chatId, messageId, payload);
     if (action === "tagq" || action === "tagqc" || action === "tagqm") {
       return await handleTagQueueCallback(ctx, { chatId, messageId, action, payload, ack });
     }

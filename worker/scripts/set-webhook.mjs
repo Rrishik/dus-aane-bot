@@ -22,11 +22,10 @@ export const GROUP_COMMANDS = [
 
 export async function setWebhook(tg, url, { secret, dropPending = false }) {
   if (!secret) throw new Error("WEBHOOK_SECRET is required");
-  await tg.call("setWebhook", {
-    url: new URL(url).origin + "/",
-    secret_token: secret,
-    allowed_updates: ALLOWED_UPDATES,
-    drop_pending_updates: dropPending
+  await tg.setWebhook(new URL(url).origin + "/", {
+    secretToken: secret,
+    allowedUpdates: ALLOWED_UPDATES,
+    dropPending
   });
   await tg.call("setMyCommands", { scope: { type: "all_private_chats" }, commands: PRIVATE_COMMANDS });
   await tg.call("setMyCommands", { scope: { type: "all_group_chats" }, commands: GROUP_COMMANDS });

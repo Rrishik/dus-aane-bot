@@ -9,10 +9,9 @@ import { listUntaggedTransactions } from "../db/transactions.js";
 import { weekRangeFor, weeklyDigestData, formatWeeklyMessage } from "./analytics.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { escapeMarkdown, money, formatDayMonth } from "./format.js";
-import { istDate, shiftIsoDate } from "../util/dates.js";
+import { istDate, shiftIsoDate, IST_OFFSET_MS } from "../util/dates.js";
 
 const DAY_MS = 86400000;
-const IST_OFFSET_MS = 5.5 * 3600 * 1000;
 
 export const NUDGE_CONFIG = { inactiveDays: 5, pendingDays: 2, cooldownDays: 7, maxNudges: 3 };
 

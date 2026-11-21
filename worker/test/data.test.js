@@ -37,13 +37,15 @@ async function withTxns(opts) {
 }
 
 describe("/export", () => {
-  it("parses ranges", () => {
+  it("parses ranges (bare or with legacy /export prefix)", () => {
+    expect(parseExportRange("")).toEqual({ from: null, to: null });
+    expect(parseExportRange("2026-02")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
+    expect(parseExportRange("2026-01-01 2026-03-31")).toEqual({ from: "2026-01-01", to: "2026-03-31" });
     expect(parseExportRange("/export")).toEqual({ from: null, to: null });
     expect(parseExportRange("/export 2026-02")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
-    expect(parseExportRange("/export 2026-01-01 2026-03-31")).toEqual({ from: "2026-01-01", to: "2026-03-31" });
     expect(parseExportRange("/export 2026-03-31 2026-01-01")).toBeNull();
     expect(parseExportRange("/export 2026-13")).toBeNull();
-    expect(parseExportRange("/export last month")).toBeNull();
+    expect(parseExportRange("last month")).toBeNull();
   });
 
   it("CSV escapes quotes/commas and neutralises formulas", () => {

@@ -13,7 +13,7 @@ export async function handleStart(ctx, chatId, username) {
   const tenant = await getTenant(ctx.db, chatId);
   if (isUsable(tenant)) {
     await ensurePersonalPin(ctx, chatId);
-    return handleHelp(ctx, chatId);
+    return sendWelcomeGuide(ctx, chatId);
   }
   const greeting = username ? "Hey " + username + "! " : "";
   await ctx.tg.sendMessage(
@@ -28,7 +28,7 @@ export async function handleStart(ctx, chatId, username) {
   );
 }
 
-export async function handleHelp(ctx, chatId) {
+async function sendWelcomeGuide(ctx, chatId) {
   await ctx.tg.sendMessage(
     chatId,
     "*Just type in plain English* — no commands needed:\n" +
@@ -110,22 +110,12 @@ export async function sendSetupEmail(ctx, chatId, emails) {
 
 // ─── Recent & Trends view helpers (used by pinned summary callbacks) ─
 
-export async function recentMessage(ctx, tenantId, { limit = 5, user = null } = {}) {
-  let rows = await listTransactions(ctx.db, tenantId, { limit: user ? 500 : limit });
-  if (user)
-    rows = rows
-      .filter((r) =>
-        String(r.forwarder || "")
-          .toLowerCase()
-          .includes(user)
-      )
-      .slice(0, limit);
-  if (rows.length === 0) {
-    return user ? "📅 *No transactions found* for user: " + escapeMarkdown(user) : "📅 *No transactions found yet!*";
-  }
-  let msg = "📅 *Recent Transactions*" + (user ? " (user: " + escapeMarkdown(user) + ")" : "") + "\n";
+export async function recentMessage(ctx, tenantId, limit = 5) {
+  const rows = await listTransactions(ctx.db, tenantId, { limit });
+  if (rows.length === 0) return "📅 *No transactions found yet!*";
+  let msg = "📅 *Recent Transactions*\n";
   rows.forEach((r) => {
-    const cat = r.category ? " · " + r.category : " · _untagged_";
+    const cat = r.category ? " · " + escapeMarkdown(r.category) : " · _untagged_";
     msg +=
       "\n" +
       (r.direction === "debit" ? "🔴" : "🟢") +
@@ -133,21 +123,10 @@ export async function recentMessage(ctx, tenantId, { limit = 5, user = null } = 
       escapeMarkdown(r.merchant || "Unknown") +
       "* " +
       money(r.amount_minor, r.currency) +
-      (r.category ? escapeMarkdown(cat) : cat) +
+      cat +
       "\n   _" +
       escapeMarkdown(formatLongDate(r.occurred_on)) +
       "_\n";
   });
   return msg;
-}
-
-export function statsMenuKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: "🕒 Recent", callback_data: "stats_recent" },
-        { text: "📉 Trends", callback_data: "stats_trends" }
-      ]
-    ]
-  };
 }

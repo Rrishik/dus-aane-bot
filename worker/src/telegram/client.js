@@ -101,13 +101,14 @@ export function createTelegram({
     getChat: (chatId) => call("getChat", { chat_id: chatId }),
     getChatAdministrators: (chatId) => call("getChatAdministrators", { chat_id: chatId }),
     getChatMember: (chatId, userId) => call("getChatMember", { chat_id: chatId, user_id: userId }),
-    setWebhook: (url, { secretToken, allowedUpdates } = {}) => {
+    setWebhook: (url, { secretToken, allowedUpdates, dropPending } = {}) => {
       if (secretToken && !SECRET_TOKEN_PATTERN.test(secretToken)) {
         return Promise.reject(new Error("secret token may only contain A-Z, a-z, 0-9, _ and - (1-256 chars)"));
       }
       const payload = { url };
       if (secretToken) payload.secret_token = secretToken;
       if (allowedUpdates) payload.allowed_updates = allowedUpdates;
+      if (dropPending !== undefined) payload.drop_pending_updates = dropPending;
       return call("setWebhook", payload);
     },
     sendDocument: (chatId, { filename, content, mimeType = "text/csv", caption, replyMarkup }) =>

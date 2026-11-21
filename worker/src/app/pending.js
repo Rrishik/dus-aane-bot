@@ -1,4 +1,4 @@
-// "Waiting for your next message" state (bare /ask, bare /register, 🏷 Tag).
+// "Waiting for your next message" state (🏷 Tag, 💰 Amount, bare /ask).
 // Expires after 10 minutes so a forgotten prompt can't swallow an unrelated
 // later message such as a pasted SMS.
 import { putEphemeral, getEphemeral, takeEphemeral, deleteEphemeral } from "../db/ephemeral.js";
