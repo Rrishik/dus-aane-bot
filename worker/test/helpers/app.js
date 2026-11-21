@@ -25,6 +25,7 @@ export function fakeTelegram() {
     answerCallbackQuery: record("answerCallbackQuery"),
     sendChatAction: record("sendChatAction"),
     deleteMessage: record("deleteMessage"),
+    setMessageReaction: record("setMessageReaction"),
     pinChatMessage: record("pinChatMessage"),
     sendDocument: record("sendDocument", () => ({ message_id: nextId++ })),
     getMe: record("getMe", () => ({ id: 999000, username: "dusaanebot" })),

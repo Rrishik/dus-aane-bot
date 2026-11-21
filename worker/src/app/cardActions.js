@@ -2,6 +2,7 @@
 // (direction / amount), back, delete, report, Re-read and review Save/Discard.
 import {
   getTransaction,
+  findTransactionByCardMessage,
   updateTransaction,
   softDeleteTransaction,
   updateSource,
@@ -558,6 +559,135 @@ export async function handleTagReply(ctx, m) {
   }
   if (patch.category) await applyLearnedCategoryToUntagged(ctx, m.chatId);
   await refreshPersonalPin(ctx, m.chatId);
+  return true;
+}
+
+// ─── Deterministic swipe-reply-to-card tagging shortcut ──────────────
+
+const CATEGORY_ALIASES = {
+  food: "Food & Dining",
+  dining: "Food & Dining",
+  grocery: "Groceries",
+  groceries: "Groceries",
+  shopping: "Shopping",
+  shop: "Shopping",
+  health: "Healthcare",
+  healthcare: "Healthcare",
+  medical: "Healthcare",
+  medicine: "Healthcare",
+  fuel: "Fuel",
+  petrol: "Fuel",
+  entertainment: "Entertainment",
+  movies: "Entertainment",
+  travel: "Travel",
+  cab: "Travel",
+  flight: "Travel",
+  bills: "Bills & Utilities",
+  utilities: "Bills & Utilities",
+  education: "Education",
+  investment: "Investment",
+  invest: "Investment",
+  subscriptions: "Subscriptions",
+  subs: "Subscriptions",
+  subscription: "Subscriptions",
+  "cc bill": "CC Bill Payment",
+  "card bill": "CC Bill Payment",
+  "cc bill payment": "CC Bill Payment",
+  salary: "Salary",
+  refund: "Refund",
+  cashback: "Cashback",
+  reimburse: "Reimbursement",
+  reimbursement: "Reimbursement",
+  interest: "Interest/Dividend",
+  dividend: "Interest/Dividend"
+};
+
+const CONVERSATIONAL_REPLY_RE =
+  /[?]|^(?:split|settle|undo|delete|remove|discard|how|what|why|when|where|who|show|list|export|cancel|make\s+it|change\s+amount|fix)\b/i;
+
+export function matchCategoryToken(raw, direction) {
+  const token = String(raw || "").trim();
+  if (!token) return null;
+  const valid = categoriesFor(direction);
+  const lower = token.toLowerCase();
+  if (lower === "transfer" || lower === "trf") {
+    const trf = direction === "credit" ? "Transfer In" : "Transfer Out";
+    return valid.includes(trf) ? trf : null;
+  }
+  const exact = valid.find(
+    (c) => c.toLowerCase() === lower || shortCategoryName(c).toLowerCase() === lower || CATEGORY_EMOJIS[c] === token
+  );
+  if (exact) return exact;
+  const alias = CATEGORY_ALIASES[lower];
+  return alias && valid.includes(alias) ? alias : null;
+}
+
+export function parseCardQuickReply(text, direction, rules = []) {
+  const s = String(text || "").trim();
+  if (!s || s.length > 50 || /\n/.test(s) || CONVERSATIONAL_REPLY_RE.test(s)) return null;
+
+  // 1. Pure category or category emoji ("Food", "🥦", "Transfer").
+  const catOnly = matchCategoryToken(s, direction);
+  if (catOnly) return { merchant: null, category: catOnly };
+
+  // 2. "Merchant, Category" / "Merchant · Category" / "Merchant - Category" / "Merchant / Category".
+  const parts = s.split(/\s*(?:,|·|\||\/|\s-\s)\s*/);
+  if (parts.length === 2) {
+    const m = parts[0].trim();
+    const c = matchCategoryToken(parts[1], direction);
+    if (m && m.length <= TAG_MAX_LEN && c) return { merchant: m, category: c };
+  }
+
+  // 3. Short brand/payee tag ("Starbucks", "Zepto", "Rikks") — up to 18 chars, no digits-only/currency amounts.
+  if (s.length <= TAG_MAX_LEN && !/^(?:₹|\$|rs\.?|inr)?\s*\d+(?:\.\d+)?$/i.test(s)) {
+    const valid = categoriesFor(direction);
+    const resolved = resolveMerchant(s, rules);
+    const guessed =
+      (resolved.category && valid.includes(resolved.category) && resolved.category) ||
+      guessCategory(s, direction === "credit" ? "Credit" : "Debit") ||
+      null;
+    return { merchant: s, category: guessed && valid.includes(guessed) ? guessed : null };
+  }
+  return null;
+}
+
+// Swipe-to-reply directly on a transaction card with "Food", "Starbucks", or
+// "Zepto, Groceries" updates the card in-place with 0 LLM tokens.
+export async function handleCardReply(ctx, m) {
+  if (!m.replyTo || !m.replyTo.message_id) return false;
+  const txn = await findTransactionByCardMessage(ctx.db, m.chatId, m.replyTo.message_id);
+  if (!txn || txn.status === "deleted") return false;
+  const rules = await getMerchantRules(ctx.db, m.chatId);
+  const parsed = parseCardQuickReply(m.text, txn.direction, rules);
+  if (!parsed) return false;
+
+  const previous = txn.merchant || txn.merchant_raw;
+  const patch = {};
+  if (parsed.merchant) patch.merchant = parsed.merchant;
+  if (parsed.category) {
+    patch.category = parsed.category;
+    patch.kind = defaultKind(txn.direction, parsed.category);
+  }
+  if (!Object.keys(patch).length) return false;
+
+  await updateTransaction(ctx.db, m.chatId, txn.id, patch, ctx.now());
+  const updated = { ...txn, ...patch };
+  if (patch.merchant && previous) {
+    const fields = patch.category ? { name: patch.merchant, category: patch.category } : { name: patch.merchant };
+    const short = shortenMerchantPattern(previous);
+    if (short && short !== previous) await upsertMerchantRule(ctx.db, m.chatId, short, fields, ctx.now());
+    await upsertMerchantRule(ctx.db, m.chatId, previous, fields, ctx.now());
+  }
+  if (patch.category) {
+    await teachCategoryRules(ctx.db, m.chatId, updated, patch.category, ctx.now());
+    await applyLearnedCategoryToUntagged(ctx, m.chatId);
+  }
+  const freshState = await loadCardState(ctx, m.chatId, txn.id);
+  if (freshState) await editCard(ctx, m.chatId, m.replyTo.message_id, freshState);
+  await refreshPersonalPin(ctx, m.chatId);
+  if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
+    await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
+  }
   return true;
 }
 

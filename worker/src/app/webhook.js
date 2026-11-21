@@ -8,7 +8,7 @@ import { getTenant } from "../db/tenants.js";
 import { handleStart, registerEmailForChat } from "./commands.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
-import { handleTagReply, handleAmountReply, handleCancel } from "./cardActions.js";
+import { handleTagReply, handleAmountReply, handleCardReply, handleCancel } from "./cardActions.js";
 import { handleOrchestrator, handleAskResume, handlePendingAsk } from "./orchestrator.js";
 import { isUsable, gateText } from "./onboarding.js";
 import {
@@ -110,8 +110,9 @@ export async function handleMessage(ctx, message) {
     return;
   }
 
-  // Active conversation resume (swipe reply or open ask_user) -> central orchestrator.
+  // Active conversation resume (swipe reply or open ask_user) -> card quick-reply -> central orchestrator.
   if (await handleAskResume(ctx, m, tenant)) return;
+  if (await handleCardReply(ctx, m)) return;
   if (await handlePendingAsk(ctx, m, tenant)) return;
   await handleOrchestrator(ctx, m, tenant);
 }

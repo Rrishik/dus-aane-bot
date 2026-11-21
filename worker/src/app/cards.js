@@ -21,30 +21,36 @@ export function cardText(txn, opts = {}) {
 }
 
 export function pillsRow(txnId, merchant, category) {
+  const catText = category ? (CATEGORY_EMOJIS[category] || "📂") + " ▾" : "📂 All ▾";
   return [
     { text: "🏷 " + pillLabel(merchant, "Untagged") + " ▾", callback_data: "tag_" + txnId },
-    { text: "📂 " + pillLabel(shortCategoryName(category), "Uncategorized") + " ▾", callback_data: "editcat_" + txnId },
+    { text: catText, callback_data: "editcat_" + txnId },
     { text: "⋯", callback_data: "help_" + txnId }
   ];
 }
 
-const QUICK_DEBIT_CATEGORIES = ["Food & Dining", "Groceries", "Shopping", "Travel", "Bills & Utilities"];
-const QUICK_CREDIT_CATEGORIES = ["Transfer In", "Refund", "Reimbursement", "Salary", "Cashback"];
+const QUICK_DEBIT_CATEGORIES = [
+  "Food & Dining",
+  "Groceries",
+  "Shopping",
+  "Travel",
+  "Bills & Utilities",
+  "Entertainment"
+];
+const QUICK_CREDIT_CATEGORIES = ["Transfer In", "Refund", "Reimbursement", "Salary", "Cashback", "Interest/Dividend"];
 
-// Quick 1-tap category pills shown directly on arrival when a confirmed
-// transaction has no category yet.
+// Compact 1-row emoji strip shown on arrival when a confirmed transaction has
+// no category yet (6 icons on a single horizontal row).
 export function quickCategoryRows(txnId, direction) {
   const all = categoriesFor(direction);
   const picks = (direction === "credit" ? QUICK_CREDIT_CATEGORIES : QUICK_DEBIT_CATEGORIES).filter((c) =>
     all.includes(c)
   );
-  const btn = (c) => ({
-    text: (CATEGORY_EMOJIS[c] ? CATEGORY_EMOJIS[c] + " " : "") + shortCategoryName(c),
-    callback_data: "cat_" + txnId + "_" + all.indexOf(c)
-  });
   return [
-    picks.slice(0, 3).map(btn),
-    [...picks.slice(3, 5).map(btn), { text: "📂 More ▾", callback_data: "editcat_" + txnId }]
+    picks.slice(0, 6).map((c) => ({
+      text: CATEGORY_EMOJIS[c] || shortCategoryName(c),
+      callback_data: "cat_" + txnId + "_" + all.indexOf(c)
+    }))
   ];
 }
 
@@ -62,7 +68,7 @@ export function level0Keyboard(txn, groups, quickSplit) {
               text: "👥 50-50 with " + pillLabel(quickSplit.otherName, "partner"),
               callback_data: "gsp:" + txn.id + ":" + g.id + ":50"
             },
-            { text: "More ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
+            { text: "Split ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
           ]
         : [{ text: "👥 Split with " + (g.name || "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id }]
     )

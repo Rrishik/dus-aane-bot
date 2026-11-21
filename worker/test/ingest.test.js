@@ -52,11 +52,7 @@ describe("ingest — SMS", () => {
     const card = ctx.tg.of("sendMessage")[0];
     expect(card.args[0]).toBe("111");
     expect(card.args[1]).toMatch(/^🔴 \*Swiggy\* — ₹250\n🗓 7 Oct 2026$/);
-    expect(card.args[2].reply_markup.inline_keyboard.at(-1).map((b) => b.text)).toEqual([
-      "🏷 Swiggy ▾",
-      "📂 Food ▾",
-      "⋯"
-    ]);
+    expect(card.args[2].reply_markup.inline_keyboard.at(-1).map((b) => b.text)).toEqual(["🏷 Swiggy ▾", "🍕 ▾", "⋯"]);
     expect(await events(ctx)).toEqual([{ event: "saved", template_id: "hdfc_upi_sent_sms_v1" }]);
     expect((await ctx.db.prepare("SELECT last_activity_at FROM tenants WHERE id='111'").first()).last_activity_at).toBe(
       ctx.now()
@@ -255,7 +251,7 @@ describe("ingest — merchant rules and cards", () => {
     const rows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
     expect(rows[0]).toEqual([
       { text: "👥 50-50 with Bob", callback_data: "gsp:" + res.transactionId + ":-100:50" },
-      { text: "More ▾", callback_data: "gnav:" + res.transactionId + ":-100" }
+      { text: "Split ▾", callback_data: "gnav:" + res.transactionId + ":-100" }
     ]);
   });
 });

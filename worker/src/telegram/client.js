@@ -89,6 +89,12 @@ export function createTelegram({
       call("answerCallbackQuery", { callback_query_id: id, text, show_alert: showAlert }),
     sendChatAction: (chatId, action = "typing") => call("sendChatAction", { chat_id: chatId, action }),
     deleteMessage: (chatId, messageId) => call("deleteMessage", { chat_id: chatId, message_id: messageId }),
+    setMessageReaction: (chatId, messageId, emoji) =>
+      call("setMessageReaction", {
+        chat_id: chatId,
+        message_id: messageId,
+        reaction: emoji ? [{ type: "emoji", emoji }] : []
+      }),
     pinChatMessage: (chatId, messageId, disableNotification = true) =>
       call("pinChatMessage", { chat_id: chatId, message_id: messageId, disable_notification: disableNotification }),
     getMe: () => call("getMe"),

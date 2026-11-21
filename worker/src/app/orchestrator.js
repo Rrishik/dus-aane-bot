@@ -12,6 +12,7 @@ import { defineAgent, runAgentLoop } from "../llm/agents.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
 import {
   getTransaction,
+  findTransactionByCardMessage,
   updateTransaction,
   listUntaggedTransactions,
   isUntaggedTransaction
@@ -1061,12 +1062,33 @@ export async function handleOrchestrator(ctx, m, tenant) {
   await clearPending(ctx, "ask", m.chatId);
   const tenantStatus = (tenant && tenant.status) || "active";
   const fastAgent = classifyFastAgent(stripped, tenantStatus);
+  let userContent = stripped;
+  if (m.replyTo && m.replyTo.message_id) {
+    const repliedTxn = await findTransactionByCardMessage(ctx.db, m.chatId, m.replyTo.message_id);
+    if (repliedTxn) {
+      userContent =
+        "[Replied to transaction_id=" +
+        repliedTxn.id +
+        " (" +
+        repliedTxn.occurred_on +
+        ", " +
+        (repliedTxn.merchant || "Unknown") +
+        ", " +
+        repliedTxn.currency +
+        " " +
+        fromMinor(repliedTxn.amount_minor) +
+        ", " +
+        repliedTxn.direction +
+        ")]\n" +
+        stripped;
+    }
+  }
   await runTurn(ctx, {
     chatId: m.chatId,
     username: m.username || "",
     tenantStatus,
     activeAgent: fastAgent,
-    messages: [{ role: "user", content: stripped }],
+    messages: [{ role: "user", content: userContent }],
     turn: 1
   });
 }

@@ -91,6 +91,14 @@ export async function getTransaction(db, tenantId, id) {
   return db.prepare("SELECT * FROM transactions WHERE id = ? AND tenant_id = ?").bind(id, String(tenantId)).first();
 }
 
+export async function findTransactionByCardMessage(db, tenantId, cardMessageId) {
+  if (!cardMessageId) return null;
+  return db
+    .prepare("SELECT * FROM transactions WHERE tenant_id = ? AND card_message_id = ? AND status <> 'deleted' LIMIT 1")
+    .bind(String(tenantId), Number(cardMessageId))
+    .first();
+}
+
 export async function findTransactionBySource(db, tenantId, source, sourceRef) {
   return db
     .prepare(

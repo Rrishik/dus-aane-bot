@@ -44,7 +44,7 @@ describe("category picker", () => {
 
     await handleUpdate(ctx, tap("cat_" + id + "_12")); // Transfer Out
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Transfer Out", kind: "transfer" });
-    expect(lastMarkup(ctx).inline_keyboard.at(-1)[1].text).toBe("📂 Transfer ▾");
+    expect(lastMarkup(ctx).inline_keyboard.at(-1)[1].text).toBe("📤 ▾");
     expect(await getMerchantRules(ctx.db, "111")).toEqual([
       { pattern: "swiggy", name: null, category: "Transfer Out", kind: null, personal: true }
     ]);
@@ -56,25 +56,62 @@ describe("category picker", () => {
     expect(sent(ctx).at(-1)).toBe("❌ *Invalid category*");
   });
 
-  it("shows 1-tap quick category pills on uncategorized arrival cards, collapses on pick, and teaches shortened patterns", async () => {
+  it("shows a 1-row emoji strip on uncategorized arrival cards, collapses to emoji pill on pick, and teaches shortened patterns", async () => {
     const rahulSms =
       "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL 9821 On 07/10/26 Ref 628011112222 Not You? Call 18002586161";
     const { ctx, id } = await withCard({ text: rahulSms });
     const initialRows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
-    expect(initialRows[0].map((b) => b.text)).toEqual(["🍕 Food", "🥦 Groceries", "🛍 Shopping"]);
-    expect(initialRows[1].map((b) => b.text)).toEqual(["✈️ Travel", "💡 Bills", "📂 More ▾"]);
+    expect(initialRows[0].map((b) => b.text)).toEqual(["🍕", "🥦", "🛍", "✈️", "💡", "🎬"]);
+    expect(initialRows[1].map((b) => b.text)).toEqual(["🏷 Rahul 9821 ▾", "📂 All ▾", "⋯"]);
 
-    // One tap on "🍕 Food" (index 2) sets category, collapses quick rows, and teaches shortened pattern.
+    // One tap on "🍕" (index 2) sets category, collapses the emoji strip, and teaches shortened pattern.
     await handleUpdate(ctx, tap("cat_" + id + "_2"));
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Food & Dining", kind: "spend" });
     expect(lastMarkup(ctx).inline_keyboard).toHaveLength(1);
-    expect(lastMarkup(ctx).inline_keyboard[0][1].text).toBe("📂 Food ▾");
+    expect(lastMarkup(ctx).inline_keyboard[0][1].text).toBe("🍕 ▾");
     expect((await getMerchantRules(ctx.db, "111")).map((r) => [r.pattern, r.category])).toEqual(
       expect.arrayContaining([
         ["rahul 9821", "Food & Dining"],
         ["rahul", "Food & Dining"]
       ])
     );
+  });
+
+  it("swipe-replying directly to a transaction card updates category and/or merchant deterministically (0 LLM calls) and reacts 👍", async () => {
+    const rahulSms =
+      "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL 9821 On 07/10/26 Ref 628011112222 Not You? Call 18002586161";
+    const { ctx, id } = await withCard({ text: rahulSms });
+    const cardMsgId = (await getTransaction(ctx.db, "111", id)).card_message_id;
+
+    // Swipe-reply with "Zepto, Groceries"
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 777,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "Zepto, Groceries",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect(ctx.llm.calls).toHaveLength(0);
+    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({
+      merchant: "Zepto",
+      category: "Groceries",
+      kind: "spend"
+    });
+    expect(ctx.tg.of("setMessageReaction")[0].args).toEqual(["111", 777, "👍"]);
+
+    // Swipe-reply with just a category emoji ("🍕")
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 778,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "🍕",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect((await getTransaction(ctx.db, "111", id)).category).toBe("Food & Dining");
   });
 
   it("tagging an uncategorized row to a known brand auto-fills its category", async () => {
