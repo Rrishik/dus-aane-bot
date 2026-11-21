@@ -137,7 +137,8 @@ function buildSetupEmailHtml(query, botInboxEmail, demoUrl, guideUrl, verifyUrl)
  */
 function mailSetupInstructions(chatId, recipients, verifyEmails) {
   var webAppUrl = getWebAppUrl();
-  var verifyUrl = webAppUrl ? buildVerifyForwardingUrl(webAppUrl, chatId, null, verifyEmails) : null;
+  var scopedEmails = verifyEmails || recipients;
+  var verifyUrl = webAppUrl ? buildVerifyForwardingUrl(webAppUrl, chatId, null, scopedEmails) : null;
   MailApp.sendEmail({
     to: recipients.join(","),
     subject: "Set up Dus Aane Bot — auto-forward bank alerts",

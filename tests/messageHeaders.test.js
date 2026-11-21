@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { loadAppsScript } from "./_loader.js";
 
-// Mirrors Constants.js so we don't have to load Constants.js (it depends on
-// BOT_TOKEN being globally defined, which other tests deliberately avoid).
+// Narrow test fixtures for header filtering and bank-domain matching.
 const IGNORE_SENDERS = ["noreply@marketing.bank.com", '"alerts@promo.bank.com"'];
 const IGNORE_SUBJECTS = ["survey", '"feedback request"'];
 const BANK_FROM_DOMAINS = ["hdfcbank.net", "icicibank.com", "axisbank.com"];

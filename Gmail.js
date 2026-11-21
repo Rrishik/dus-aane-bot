@@ -1,6 +1,11 @@
 // Gmail poller: finds new forwarded bank mail in the bot inbox and hands
 // each email to the Worker (WorkerBridge.js), which parses and saves it.
 
+var PROCESSED_LABEL_ID_PROP = "gmail.processedLabelId";
+var LAST_HISTORY_ID_PROP = "gmail.lastHistoryId";
+var EMAIL_RUN_LOCK_PROP = "gmail.runStartedAt";
+var EMAIL_RUN_LOCK_TTL_MS = 6 * 60 * 1000;
+
 /**
  * Returns the Gmail label resource ID for PROCESSED_LABEL_NAME, creating the
  * label if it doesn't exist. The ID is cached in ScriptProperties because
@@ -13,14 +18,14 @@
  */
 function getProcessedLabelId() {
   var props = PropertiesService.getScriptProperties();
-  var cached = props.getProperty("gmail.processedLabelId");
+  var cached = props.getProperty(PROCESSED_LABEL_ID_PROP);
   if (cached) return cached;
 
   var resp = Gmail.Users.Labels.list("me");
   var labels = (resp && resp.labels) || [];
   for (var i = 0; i < labels.length; i++) {
     if (labels[i].name === PROCESSED_LABEL_NAME) {
-      props.setProperty("gmail.processedLabelId", labels[i].id);
+      props.setProperty(PROCESSED_LABEL_ID_PROP, labels[i].id);
       return labels[i].id;
     }
   }
@@ -33,7 +38,7 @@ function getProcessedLabelId() {
     },
     "me"
   );
-  props.setProperty("gmail.processedLabelId", created.id);
+  props.setProperty(PROCESSED_LABEL_ID_PROP, created.id);
   return created.id;
 }
 
@@ -94,7 +99,7 @@ function listNewMessageIdsViaHistory(startHistoryId) {
  */
 function bootstrapHistoryState() {
   var profile = Gmail.Users.getProfile("me");
-  PropertiesService.getScriptProperties().setProperty("gmail.lastHistoryId", profile.historyId);
+  PropertiesService.getScriptProperties().setProperty(LAST_HISTORY_ID_PROP, profile.historyId);
   return profile.historyId;
 }
 
@@ -123,11 +128,33 @@ function extractTransactions() {
   }
 }
 
-var EMAIL_RUN_LOCK_PROP = "gmail.runStartedAt";
-var EMAIL_RUN_LOCK_TTL_MS = 6 * 60 * 1000;
+/**
+ * Two-phase hydration: metadata fetch first (cheap), then drop on the header
+ * ignore-list; only survivors get a full body fetch via GmailApp and bank check.
+ */
+function hydrateBankMessages(ids) {
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i];
+    var headers = getMessageHeaders(id);
+    if (!headers) continue;
+    if (shouldIgnoreByHeaders(headers)) continue;
+    var msg;
+    try {
+      msg = GmailApp.getMessageById(id);
+    } catch (e) {
+      // Deleted between list/history event and hydrate — skip.
+      continue;
+    }
+    if (!msg) continue;
+    if (!isFromAllowedBank(msg)) continue;
+    out.push({ msg: msg, headers: headers });
+  }
+  return out;
+}
 
 function _extractTransactionsLocked(props) {
-  var lastHistoryId = props.getProperty("gmail.lastHistoryId");
+  var lastHistoryId = props.getProperty(LAST_HISTORY_ID_PROP);
   var messagesToProcess;
   var newHistoryIdToSave = null;
 
@@ -147,27 +174,7 @@ function _extractTransactionsLocked(props) {
       console.log("[extractTransactions] History cursor invalid; bootstrap-window recovery");
       messagesToProcess = fetchAndFilterMessages(getBootstrapCutoffDate());
     } else {
-      // Two-phase hydration: metadata fetch first (cheap), then drop on the
-      // ignore-list; only the survivors get a full body fetch via GmailApp.
-      // Most of the "bank-curated" inbox passes both gates, but this avoids
-      // the multi-MB raw fetch on promo/OTP slip-throughs.
-      messagesToProcess = [];
-      for (var i = 0; i < result.messageIds.length; i++) {
-        var id = result.messageIds[i];
-        var headers = getMessageHeaders(id);
-        if (!headers) continue;
-        if (shouldIgnoreByHeaders(headers)) continue;
-        var m;
-        try {
-          m = GmailApp.getMessageById(id);
-        } catch (e) {
-          // Deleted between history event and hydrate — skip.
-          continue;
-        }
-        if (!m) continue;
-        if (!isFromAllowedBank(m)) continue;
-        messagesToProcess.push({ msg: m, headers: headers });
-      }
+      messagesToProcess = hydrateBankMessages(result.messageIds);
       newHistoryIdToSave = result.newHistoryId;
     }
   }
@@ -177,7 +184,7 @@ function _extractTransactionsLocked(props) {
   var stats = ingestBatchViaWorker(messagesToProcess);
   console.log("[extractTransactions] worker " + JSON.stringify(stats));
   recordPollerRun(messagesToProcess.length, stats);
-  if (newHistoryIdToSave) props.setProperty("gmail.lastHistoryId", newHistoryIdToSave);
+  if (newHistoryIdToSave) props.setProperty(LAST_HISTORY_ID_PROP, newHistoryIdToSave);
 }
 /**
  * Computes the bootstrap window cutoff used when no historyId is available
@@ -321,7 +328,7 @@ function isFromAllowedBank(msg) {
  *
  * Called only by:
  *   - extractTransactions' bootstrap / history-expiry fallback path.
- *   - backfillTransactions (user-initiated date-range scan).
+ *   - continueWorkerBackfill (user-initiated date-range scan).
  * The steady-state trigger flow uses Gmail.Users.History.list instead.
  *
  * Server-side `-label:processed-by-bot` means messages already handled in a
@@ -356,24 +363,7 @@ function fetchAndFilterMessages(startDate, endDate) {
   // Gmail returns newest-first; flip so downstream processing is chronological
   // (matches the original `GmailApp.search(...).reverse()` behaviour).
   ids.reverse();
-
-  var out = [];
-  for (var j = 0; j < ids.length; j++) {
-    var id = ids[j];
-    var headers = getMessageHeaders(id);
-    if (!headers) continue;
-    if (shouldIgnoreByHeaders(headers)) continue;
-    var msg;
-    try {
-      msg = GmailApp.getMessageById(id);
-    } catch (e) {
-      continue;
-    }
-    if (!msg) continue;
-    if (!isFromAllowedBank(msg)) continue;
-    out.push({ msg: msg, headers: headers });
-  }
-  return out;
+  return hydrateBankMessages(ids);
 }
 
 /**
@@ -411,7 +401,7 @@ function endProcessedBatch() {
   } catch (e) {
     console.warn("[endProcessedBatch] batchModify failed: " + e.message);
     if (/label/i.test(e.message || "")) {
-      PropertiesService.getScriptProperties().deleteProperty("gmail.processedLabelId");
+      PropertiesService.getScriptProperties().deleteProperty(PROCESSED_LABEL_ID_PROP);
     }
   }
 }
@@ -430,7 +420,7 @@ function markProcessed(message) {
     // If the label was deleted by the user, the cached id is stale. Clear it
     // so the next run re-discovers/recreates the label on first call.
     if (/label/i.test(e.message || "")) {
-      PropertiesService.getScriptProperties().deleteProperty("gmail.processedLabelId");
+      PropertiesService.getScriptProperties().deleteProperty(PROCESSED_LABEL_ID_PROP);
     }
   }
 }

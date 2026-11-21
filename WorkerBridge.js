@@ -163,14 +163,14 @@ var WORKER_ACTIONS = {
     }
     if (p.pollNow) extractTransactions();
     var retryNow = parse(WORKER_RETRY_PROP, {});
+    var lockProp = typeof EMAIL_RUN_LOCK_PROP !== "undefined" ? EMAIL_RUN_LOCK_PROP : RUN_LOCK_FALLBACK_PROP;
+    var lockStarted = props.getProperty(lockProp);
     return {
       requeued: requeued,
       lastRun: parse(POLLER_LAST_RUN_PROP, null),
-      runLockAgeMin: props.getProperty("gmail.runStartedAt")
-        ? Math.round((Date.now() - Number(props.getProperty("gmail.runStartedAt"))) / 60000)
-        : null,
+      runLockAgeMin: lockStarted ? Math.round((Date.now() - Number(lockStarted)) / 60000) : null,
       retryCount: Object.keys(retryNow).length,
-      lastWorkerFailure: parse("gmail.lastWorkerFailure", null),
+      lastWorkerFailure: parse(LAST_WORKER_FAILURE_PROP, null),
       triggers: ScriptApp.getProjectTriggers().map(function (t) {
         return t.getHandlerFunction();
       }),
@@ -266,7 +266,7 @@ function ingestEmailViaWorker(message, forwarder, silent) {
   console.warn("[ingestEmailViaWorker] " + message.getId() + " → HTTP " + res.code);
   try {
     PropertiesService.getScriptProperties().setProperty(
-      "gmail.lastWorkerFailure",
+      LAST_WORKER_FAILURE_PROP,
       JSON.stringify({
         at: new Date().toISOString(),
         code: res.code,
@@ -329,6 +329,8 @@ var WORKER_RETRY_PROP = "gmail.workerRetry";
 var WORKER_RETRY_MAX_ATTEMPTS = 288;
 var WORKER_RETRY_MAX_IDS = 200;
 var POLLER_LAST_RUN_PROP = "gmail.lastRun";
+var LAST_WORKER_FAILURE_PROP = "gmail.lastWorkerFailure";
+var RUN_LOCK_FALLBACK_PROP = "gmail.runStartedAt";
 
 function recordPollerRun(found, stats) {
   try {

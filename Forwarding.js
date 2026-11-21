@@ -5,14 +5,14 @@
 // inbox). The tenant is then blocked until someone clicks that link.
 //
 // Flow we support:
-//   1. Setup email (Onboarding.js) embeds a "Verify forwarding address" button
+//   1. Setup email (SetupEmail.js) embeds a "Verify forwarding address" button
 //      pointing at this script's web-app URL with a signed token in the query
-//      string (`?action=verify&t=<chatId>&sig=<hmac>`).
+//      string (`?action=verify_forwarding&t=<chatId>&iat=<ms>&e=<emails>&sig=<hmac>`).
 //   2. User clicks → Gmail sends the click via a normal browser GET to
 //      doGet() (Code.js) → handleVerifyForwardingClick() runs.
-//   3. We scan the bot inbox for unread Gmail-forwarding-confirmation mails,
-//      extract the `vf-...` confirmation URL, fetch it (which is what Gmail
-//      considers "click the link"), then return an HTML status page.
+//   3. We scan the bot inbox for Gmail-forwarding-confirmation mails scoped to
+//      the tenant's email, extract the `vf-...` confirmation URL, and redirect
+//      the user's top-level window there so they click Confirm on Google's page.
 //
 // This is a click-driven, idempotent endpoint. No background polling, no
 // time-based triggers — runs only when a user opts in by clicking.
@@ -224,9 +224,8 @@ function findPendingForwardingConfirmations(tenantEmails) {
 
 /**
  * doGet handler for `?action=verify_forwarding&t=<chatId>&iat=<ms>&sig=<hmac>`.
- * Validates the signature, runs confirmForwardingAddresses(), and returns an
- * HTML status page. Pure-ish wrapper that produces the response body for the
- * web-app dispatch in Code.js (`doGet`).
+ * Validates the signature, finds the matching confirmation URL, and returns a
+ * redirect or status HTML page for `doGet` in Code.js.
  */
 function handleVerifyForwardingClick(params) {
   var chatId = params.t;
@@ -237,7 +236,7 @@ function handleVerifyForwardingClick(params) {
     return _verifyResponseHtml({
       ok: false,
       title: "Link expired or invalid",
-      body: "This verification link is no longer valid. Open Telegram, send /account and tap Resend setup for a fresh link."
+      body: "This verification link is no longer valid. Open Telegram and ask Dus Aane Bot to resend setup instructions for a fresh link."
     });
   }
   try {
@@ -267,7 +266,7 @@ function handleVerifyForwardingClick(params) {
     return _verifyResponseHtml({
       ok: false,
       title: "Something went wrong",
-      body: "We hit an error verifying your forwarding address. Try again in a minute, or send /account on Telegram and tap Resend setup."
+      body: "We hit an error verifying your forwarding address. Try again in a minute, or ask Dus Aane Bot on Telegram to resend setup instructions."
     });
   }
 }

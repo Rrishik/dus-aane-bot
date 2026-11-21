@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { loadAppsScript } from "./_loader.js";
 
-// Constants stubbed inline (Constants.js itself is hard to load — pulls in
-// BOT_TOKEN side-effects). Match the production values that fetchAndFilterMessages
-// actually consults.
+// Narrow test fixtures matching the Constants.js symbols consulted by Gmail.js.
 const PROCESSED_LABEL_NAME = "processed-by-bot";
 const GMAIL_SEARCH_QUERY = "in:inbox";
 const BANK_FROM_DOMAINS = ["hdfcbank.net", "icicibank.com"];
@@ -244,6 +242,35 @@ describe("fetchAndFilterMessages", () => {
       id: "m1",
       from: "alerts@hdfcbank.net"
     });
+  });
+
+  it("hydrateBankMessages skips ignored headers, deleted messages, and non-bank senders", () => {
+    var { hydrateBankMessages } = loadAppsScript(["Gmail.js"], ["hydrateBankMessages"], {
+      BANK_FROM_DOMAINS,
+      IGNORE_SENDERS,
+      IGNORE_SUBJECTS,
+      Gmail: {
+        Users: {
+          Messages: {
+            get: (_u, id) => {
+              if (id === "missing-meta") throw new Error("404");
+              if (id === "ignored") return metaResponse(id, { subject: "Please take our survey" });
+              if (id === "non-bank") return metaResponse(id, { from: "friend@gmail.com" });
+              return metaResponse(id);
+            }
+          }
+        }
+      },
+      GmailApp: {
+        getMessageById: (id) => {
+          if (id === "deleted") throw new Error("deleted");
+          if (id === "non-bank") return makeMockMsg(id, { from: "friend@gmail.com", body: "hi" });
+          return makeMockMsg(id);
+        }
+      }
+    });
+    var survivors = hydrateBankMessages(["missing-meta", "ignored", "deleted", "non-bank", "ok-bank"]);
+    expect(survivors.map((s) => s.headers.id)).toEqual(["ok-bank"]);
   });
 });
 

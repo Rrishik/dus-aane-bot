@@ -7,13 +7,11 @@
   "filePushOrder": [
     "AConfig.js",
     "Constants.js",
-    "TelegramUtils.js",
-    "GoogleSheetUtils.js",
-    "TenantRegistry.js",
-    "AdminHelpers.js",
-    "Onboarding.js",
-    "TransactionProcessor.js",
-    "BotHandlers.js"
+    "SetupEmail.js",
+    "Forwarding.js",
+    "Gmail.js",
+    "WorkerBridge.js",
+    "Code.js"
   ],
   "skipSubdirectories": false
 }

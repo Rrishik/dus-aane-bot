@@ -4,9 +4,6 @@ import { loadAppsScript } from "./_loader.js";
 let extractForwardedFrom, extractForwarderFromHeaders;
 
 beforeAll(() => {
-  // TransactionProcessor.js's top level only declares EXTRACTION_TOOLS (a plain
-  // array literal). All Apps Script globals are referenced inside functions,
-  // so loading is safe with no stubs.
   ({ extractForwardedFrom, extractForwarderFromHeaders } = loadAppsScript(
     ["Gmail.js"],
     ["extractForwardedFrom", "extractForwarderFromHeaders"]

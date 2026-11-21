@@ -10,7 +10,6 @@ let signVerifyToken,
 
 // Capture state for stubs so tests can assert against it.
 var propsStore;
-var fetchedUrls;
 var fakeThreads;
 
 function makeMessage(subject, body) {
@@ -34,7 +33,6 @@ function makeThread(messages) {
 
 beforeAll(() => {
   propsStore = {};
-  fetchedUrls = [];
   fakeThreads = [];
 
   ({
@@ -83,19 +81,7 @@ beforeAll(() => {
         }
       },
       GmailApp: {
-        search: (q) => {
-          fetchedUrls.lastSearchQuery = q;
-          return fakeThreads;
-        }
-      },
-      UrlFetchApp: {
-        fetch: (url) => {
-          fetchedUrls.push(url);
-          return {
-            getResponseCode: () => 200,
-            getContentText: () => "ok"
-          };
-        }
+        search: () => fakeThreads
       },
       _escHtml: (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     }
