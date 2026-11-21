@@ -7,15 +7,10 @@ import { createTelegram } from "../src/telegram/client.js";
 
 export const ALLOWED_UPDATES = ["message", "edited_message", "callback_query", "my_chat_member", "chat_member"];
 
-// Zero-argument commands only: tapping a menu item sends it immediately.
+// Minimalist personal menu: everything else is plain-English chat.
 export const PRIVATE_COMMANDS = [
-  { command: "start", description: "Onboard / show welcome" },
-  { command: "ask", description: "Ask anything about your spending" },
-  { command: "stats", description: "Dashboard: recent, trends" },
-  { command: "recent", description: "Latest transactions" },
-  { command: "export", description: "Download your data" },
-  { command: "account", description: "Account & settings" },
-  { command: "help", description: "Show available commands" }
+  { command: "start", description: "Welcome & live summary" },
+  { command: "cancel", description: "Cancel current prompt" }
 ];
 
 export const GROUP_COMMANDS = [

@@ -11,17 +11,21 @@ const HDFC_SMS =
 const notes = (ctx) => ctx.tg.of("sendMessage").map((c) => c.args[1]);
 
 describe("handleSmsPaste", () => {
-  it("returns false for plain chat (no amount) and stays silent", async () => {
+  it("returns false for plain chat or natural-language sentences with amounts, and stays silent", async () => {
     const ctx = testContext();
     const t = await seedTenant(ctx, "111");
     expect(await handleSmsPaste(ctx, t, "111", "hey, what's up?")).toBe(false);
+    expect(await handleSmsPaste(ctx, t, "111", "split the ₹1200 dinner 50/50")).toBe(false);
+    expect(await handleSmsPaste(ctx, t, "111", "paid ₹500 to Rahul")).toBe(false);
     expect(ctx.tg.calls).toEqual([]);
   });
 
   it("gates unknown chats", async () => {
     const ctx = testContext();
     expect(await handleSmsPaste(ctx, null, "555", HDFC_SMS)).toBe(true);
-    expect(notes(ctx)).toEqual(["👋 I don't know this chat yet. Send `/start` to onboard."]);
+    expect(notes(ctx)).toEqual([
+      "👋 I don't know this chat yet. Send `/start` or reply with your Gmail address to onboard."
+    ]);
   });
 
   it("saves, then reports a re-paste as already recorded", async () => {

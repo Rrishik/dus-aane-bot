@@ -19,7 +19,7 @@
   <img alt="GitHub stars" src="https://img.shields.io/github/stars/Rrishik/dus-aane-bot?style=social" />
 </p>
 
-Forward a bank email or paste a bank SMS; the bot reads it, categorises it, and sends you a card. Tap one button to split it 50/50 with your partner — the group chat gets a notification, the math is done. Ask `/ask how much on food this month?` in plain English. No data entry, no app to install, no full-Gmail OAuth grant to a black box.
+Forward a bank email or paste a bank SMS; the bot reads it, categorises it, and sends you a card. Tap one button to split it 50/50 with your partner — the group chat gets a notification, the math is done. Type `"how much on food this month?"` in plain English — no slash commands to memorise. No data entry, no app to install, no full-Gmail OAuth grant to a black box.
 
 <!--
 Screenshots are hidden until assets/ exists. To publish them: add the files
@@ -140,10 +140,11 @@ The Gmail filter on the user's side is the **primary privacy boundary** — the 
 - 🤖 **LLM fallback** — Azure OpenAI with tool calling handles formats the parser can't read. Tap **⋯ → 🔄 Re-read** on a parser-read card to have the LLM read it again and pick the better result.
 - 📱 **SMS paste** — paste one or several bank SMS into the chat. The same payment arriving by email and SMS becomes one transaction (matched on reference number, or account + amount + date); the same SMS twice is caught.
 - 👫 **One-tap splits** — `50–50` / `They owe 100%` / `Split with all` / `Everyone except X` / `Just me + Y`, plus 🤝 Settle up. Group `/stats` shows who owes whom with optional minimum-transfer simplification, and a pinned message keeps live balances.
-- 💬 **`/ask` in plain English** — structured tools over your own data (summaries, category breakdowns, top merchants, search), and it can fix a category or split a transaction when you ask it to.
-- 📤 **Your data, any time** — `/export` sends a CSV (all time, a month or a date range) with an **Open in Google Sheets** button; `/deletemydata` removes everything.
-- 🧠 **Self-improving merchant map** — your 🏷 Tag and 📂 Category taps teach the bot for your future transactions only; admin-curated shared defaults give new users a head start.
-- ⏪ **`/backfill`** — reprocess any date range of forwarded mail with progress updates.
+- 💬 **Commandless plain-English chat** — a central multi-agent orchestrator routes anything you type to specialist agents for analytics, tagging/editing, group splits/settlements, or account operations.
+- 📌 **Minimalist live summary & evening recap** — a pinned summary bar in your DM shows current-month spend, untagged count and group balances at 0 taps; a 21:00 IST daily recap highlights today's spends and lets you categorize untagged items in 1 tap.
+- 📤 **Your data, any time** — ask in plain English to export a CSV (all time, a month or a date range) with an **Open in Google Sheets** button, or ask to delete all your data (always gated behind a confirmation button).
+- 🧠 **Self-improving merchant map** — uncategorized cards surface 1-tap quick category pills on arrival; your 🏷 Tag and 📂 Category picks teach the bot for your future transactions and auto-fill matching untagged rows.
+- ⏪ **Email backfill** — ask to backfill any duration or date range of forwarded mail (`"backfill last 2 weeks"`) with live progress updates.
 - 🔒 **Allowlist-only ingestion** — the bot only sees emails matching ~30 fixed bank senders. OTPs, statements, security codes and personal mail never leave your Gmail.
 - 🚀 **CI/CD** — every push to `main` is tested, then deployed to Cloudflare and Apps Script, with a smoke test at the end.
 
@@ -152,7 +153,7 @@ The Gmail filter on the user's side is the **primary privacy boundary** — the 
 ### 👤 As a user
 
 1. **DM the bot** → [@dusaanebot](https://t.me/dusaanebot) → `/start`.
-2. **`/register your.email@gmail.com`** — the bot emails you a 3-step Gmail auto-forwarding setup (add forwarding address → verify → create filter) with a one-tap **Verify forwarding address** button.
+2. **Reply with `your.email@gmail.com`** — the bot emails you a 3-step Gmail auto-forwarding setup (add forwarding address → verify → create filter) with a one-tap **Verify forwarding address** button.
 3. **Forward any bank email (or paste a bank SMS)** — your first transaction activates the account and its card arrives.
 
 From here, every matching transaction email auto-forwards; its card arrives within about 5 minutes. Full flow details: [User onboarding](#user-onboarding).
@@ -192,28 +193,23 @@ Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank (`s
 **From Telegram:**
 
 1. `/start` — the bot shows the welcome.
-2. `/register your.name@gmail.com` — the bot:
+2. **Send `your.name@gmail.com`** — the bot:
    - Reserves your account (pending) keyed to your chat and email.
    - Emails `your.name@gmail.com` a 3-step auto-forwarding setup, with a one-tap **Verify forwarding address** button that auto-confirms Gmail's verification code.
    - Replies with a manual fallback: forward any bank email to `dusaanebot.inbox@gmail.com`, or paste a bank SMS.
 3. **First transaction arrives** (forwarded or pasted) — your account activates and you get a welcome. If someone added you to a group before you registered, you join it now.
-4. `/account` — view status and registered emails; tap **📬 Resend auto-forwarding setup** if you lost the email.
+4. **Resend setup any time** — tap **📬 Resend setup instructions** on the setup message or ask `"resend setup email"` in chat.
 
-## Commands
+## Talking to the bot (Minimalist UI)
 
-| Command                                              | Description                                                                                              |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `/start`                                             | Welcome + onboarding instructions                                                                        |
-| `/register [email]`                                  | Claim a Gmail address; emails the auto-forwarding setup steps. Bare `/register` prompts for the address. |
-| `/account`                                           | Status, registered emails, one-tap resend of the setup email                                             |
-| `/recent [N]`                                        | Recent transactions                                                                                      |
-| `/stats`                                             | Dashboard — recent, weekly / monthly trends                                                              |
-| `/ask <question>`                                    | Ask about your spending in plain English (e.g. "food spending last month"); 5 a day                      |
-| `/export [YYYY-MM \| from to]`                       | CSV of your transactions, with an **Open in Google Sheets** button                                       |
-| `/backfill 10m` / `3 days` / `YYYY-MM-DD YYYY-MM-DD` | Re-read forwarded mail from a period                                                                     |
-| `/deletemydata`                                      | Delete your account and data (asks first)                                                                |
-| `/cancel`                                            | Cancel a pending prompt                                                                                  |
-| `/help`                                              | Show commands                                                                                            |
+Personal DMs are **commandless** — only `/start` (welcome + pin live summary) and `/cancel` (cancel an open prompt) live in the `/` menu. Everything else works in plain English:
+
+| What you want                  | Example message                                                                                      |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Spending & trends**          | `"How much did I spend on food last month?"`, `"Monthly spending trends"`                            |
+| **Tagging & edits**            | `"Show untagged expenses"`, `"Rahul is Food, Kirana is Groceries"`                                   |
+| **Splits & settlements**       | `"Split the ₹900 Swiggy dinner 50/50"`, `"Who owes whom?"`, `"Settled ₹500 cash with Bob"`           |
+| **Account, backfill & export** | `"Add alice@gmail.com"`, `"Backfill last 2 weeks"`, `"Export September CSV"`, `"Delete all my data"` |
 
 **In a group** (after adding the bot as admin): `/start` sets the group up (or re-syncs members), `/stats` shows who owes whom, `/settle @name 500` records a cash payment, `/account` shows the group's setup, `/help`.
 
@@ -250,20 +246,20 @@ flowchart LR
     W -->|signed actions: setup email,<br/>email body, export sheet| AS
 ```
 
-- **Telegram → Worker.** The webhook carries Telegram's secret-token header; quick taps are answered straight away, while anything that waits on the LLM or Apps Script (`/ask`, pasted SMS, `/export`, Re-read) runs from a Cloudflare Queue so it isn't cut off.
+- **Telegram → Worker.** The webhook carries Telegram's secret-token header; inline card taps, `/start` and `/cancel` are answered straight away, while private-chat messages routed through the LLM orchestrator or Apps Script run from a Cloudflare Queue so they aren't cut off.
 - **Email → Apps Script → Worker.** Apps Script owns the bot's Gmail: it filters new mail and posts each email to the Worker, labelling it only once the Worker accepts it (failures retry for about a day). It also sends the setup email, re-fetches email bodies for Re-read, and creates Export-to-Sheet copies. Both directions are HMAC-signed with a shared secret.
 - **Isolation.** Every D1 query is scoped to the caller's Telegram chat id; group data is only visible to that group's members.
-- **Scheduled jobs.** One daily cron sends the Friday weekly summary, Tuesday reminders to inactive users, a Monday parser report to the admin, and purges expired state.
+- **Scheduled jobs.** An 08:00 IST cron runs daily ephemeral cleanup plus the Friday weekly summary, Tuesday inactive nudges and Monday admin parser report; a 21:00 IST cron sends an evening spend recap and 1-tap untagged-expense reminder on active days.
 
-### Tool calling (MCP-like pattern)
+### Multi-agent tool calling
 
-Both extraction and `/ask` use OpenAI function calling. Tools are defined once, the LLM decides when to call them, and only the tool's response (not the full dataset) enters the context.
+Extraction and the conversational DM orchestrator (`worker/src/llm/agents.js` + `worker/src/app/orchestrator.js`) use OpenAI function calling with zero external SDK dependencies.
 
 **Why not RAG or context injection?** Transaction data is structured — embedding rows into a vector DB adds cost with no benefit, and stuffing all merchant→category mappings into the prompt floods the context window.
 
-**Extraction — 1 tool** (`get_merchant_category`): the LLM categorises well-known merchants directly; calls the tool only for unfamiliar ones.
+**Extraction — 1 tool** (`get_merchant_category`): categorises known brands directly, checks saved rules for unfamiliar ones, and leaves ambiguous person/UPI handles uncategorized (`null`) rather than guessing.
 
-**`/ask` — 9 tools**: `get_spending_summary`, `get_category_breakdown`, `get_top_merchants`, `get_user_spend`, `search_transactions`, `get_groups`, `update_transaction`, `split_transaction`, and `ask_user` (asks you a follow-up question; reply to it to continue).
+**Conversational orchestrator — 4 specialists**: `analytics` (summaries, category breakdowns, top merchants, trends, search), `ledger` (untagged queue, single/batch tagging, alert ingest), `groups` (splits, balances, cash settlements, undo), and `account` (Gmail registration, setup resend, backfill, CSV/Sheet export, dashboard pin, delete confirmation), plus `ask_user` suspension.
 
 </details>
 

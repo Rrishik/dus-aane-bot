@@ -37,12 +37,12 @@ describe("slow updates go through the queue", () => {
   const dm = (text, extra = {}) => ({ message: { chat: { id: 1, type: "private" }, text, ...extra } });
   const tap = (data) => ({ callback_query: { data } });
 
-  it("classifies LLM / Apps Script work as slow", () => {
+  it("classifies orchestrator / Apps Script work as slow and /start, /cancel, and card taps as fast", () => {
     expect(
       [
-        dm("/ask food?"),
-        dm("/register a@x.com"),
-        dm("/export"),
+        dm("how much on food?"),
+        dm("a@x.com"),
+        dm("export my csv"),
         dm("Sent Rs.250.00 From HDFC Bank A/C *1234 To SWIGGY On 05/10/26 Ref 628012345678"),
         dm("October", { reply_to_message: { message_id: 5 } }),
         tap("rr_X"),
@@ -51,7 +51,9 @@ describe("slow updates go through the queue", () => {
       ].map(isSlowUpdate)
     ).toEqual([true, true, true, true, true, true, true, true]);
     expect(
-      [dm("/help"), dm("/stats"), dm("Coffee"), tap("rra_X"), tap("cat_X_1"), tap("gsp:X:-1:50")].map(isSlowUpdate)
+      [dm("/start"), dm("/cancel"), tap("rra_X"), tap("cat_X_1"), tap("tagq_next"), tap("gsp:X:-1:50")].map(
+        isSlowUpdate
+      )
     ).toEqual([false, false, false, false, false, false]);
   });
 

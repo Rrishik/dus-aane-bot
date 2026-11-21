@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { testContext, seedTenant, seedGroup, NOW } from "./helpers/app.js";
+import { testContext, seedTenant, seedGroup, llmTxn, NOW } from "./helpers/app.js";
 import { handleUpdate } from "../src/app/webhook.js";
 import { ingest } from "../src/app/ingest.js";
 import { getTransaction } from "../src/db/transactions.js";
 import { getMerchantRules } from "../src/db/merchantRules.js";
 import { getSplitForTransaction, createSplit } from "../src/db/splits.js";
-import { capHitMessage, askToolExecutor } from "../src/app/ask.js";
+import { capHitMessage, askToolExecutor, classifyFastAgent } from "../src/app/ask.js";
+import { FREE_ASK_LIMIT } from "../src/app/constants.js";
 
 const SMS = "Sent Rs.900.00 From HDFC Bank A/C *1234 To SWIGGY On 07/10/26 Ref 628012345678 Not You? Call 18002586161";
 
@@ -59,7 +60,7 @@ describe("/ask", () => {
       toolCall("get_spending_summary", { start_date: "2026-10-01", end_date: "2026-10-07" }),
       "You spent ₹450."
     );
-    await handleUpdate(ctx, msg("/ask how much this week?"));
+    await handleUpdate(ctx, msg("how much this week?"));
 
     const [first, second] = ctx.llm.calls;
     expect(first[0].content).toContain("Today's date is 2026-10-07");
@@ -73,30 +74,37 @@ describe("/ask", () => {
     expect(ctx.tg.of("sendChatAction").length).toBeGreaterThan(0);
   });
 
-  it("ask_user suspends; replying resumes the same conversation", async () => {
+  it("ask_user suspends; replying (with or without swipe-reply) resumes the same conversation, and /cancel aborts an open question", async () => {
     const { ctx, replies } = await setup();
     replies.push(toolCall("ask_user", { question: "Which month?" }));
-    await handleUpdate(ctx, msg("/ask food spend"));
+    await handleUpdate(ctx, msg("food spend"));
     const q = lastSent(ctx);
     expect(q.args[1]).toBe("Which month?");
     expect(q.args[2].reply_markup.force_reply).toBe(true);
-    const qId = q.result.message_id;
 
+    // Replying WITHOUT swipe-to-reply still resumes the open ask_user prompt!
     replies.push("Food in October: ₹900.");
-    await handleUpdate(ctx, msg("October", qId));
+    await handleUpdate(ctx, msg("October"));
     const resumed = ctx.llm.calls.at(-1);
     expect(resumed.at(-1)).toMatchObject({ role: "tool", content: "October" });
     expect(lastSent(ctx).args[1]).toBe("Food in October: ₹900.");
 
-    // Single use: a second reply to the same question is a normal message.
-    await handleUpdate(ctx, msg("October", qId));
-    expect(ctx.llm.calls).toHaveLength(2);
+    // Once answered, a later plain message starts a fresh turn 1 (not a tool reply).
+    replies.push("Fresh turn.");
+    await handleUpdate(ctx, msg("October"));
+    expect(ctx.llm.calls.at(-1).filter((m) => m.role === "tool")).toHaveLength(0);
+
+    // /cancel clears an unanswered ask_user question cleanly.
+    replies.push(toolCall("ask_user", { question: "Which category?" }));
+    await handleUpdate(ctx, msg("tag that spend"));
+    await handleUpdate(ctx, msg("/cancel"));
+    expect(lastSent(ctx).args[1]).toBe("↩️ Cancelled.");
   });
 
   it("Follow up re-keys the conversation to a prompt; the reply continues as turn 2", async () => {
     const { ctx, replies } = await setup();
     replies.push("Answer one.");
-    await handleUpdate(ctx, msg("/ask top merchants"));
+    await handleUpdate(ctx, msg("top merchants"));
     const answerId = lastSent(ctx).result.message_id;
     await handleUpdate(ctx, tap("askfu_1", answerId));
     expect(ctx.tg.of("editMessageReplyMarkup").at(-1).args).toEqual(["111", answerId, { inline_keyboard: [] }]);
@@ -115,27 +123,32 @@ describe("/ask", () => {
     expect(lastSent(ctx).args[1]).toContain("expired");
   });
 
-  it("caps at 5 a day and refunds failed calls", async () => {
-    const { ctx, replies } = await setup();
+  it("caps analytics at FREE_ASK_LIMIT/day, refunds failures, and keeps tagging/splits/exports quota-exempt", async () => {
+    const { ctx, replies, id } = await setup();
     replies.push(new Error("azure down"));
-    await handleUpdate(ctx, msg("/ask q"));
+    await handleUpdate(ctx, msg("how much today?"));
     expect(lastSent(ctx).args[1]).toContain("Something went wrong");
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < FREE_ASK_LIMIT; i++) {
       replies.push("ok " + i);
-      await handleUpdate(ctx, msg("/ask q" + i));
+      await handleUpdate(ctx, msg("how much day " + i + "?"));
     }
-    await handleUpdate(ctx, msg("/ask one more"));
-    expect(lastSent(ctx).args[1]).toContain("Daily /ask limit reached");
+    await handleUpdate(ctx, msg("how much one more?"));
+    expect(lastSent(ctx).args[1]).toContain("Daily analytics limit reached");
     expect(lastSent(ctx).args[2].reply_markup.inline_keyboard[0][0].callback_data).toBe("premium_info");
-    expect(ctx.llm.calls).toHaveLength(6);
+
+    // Even when analytics quota is exhausted, LedgerTagAgent and AccountOpsAgent still work!
+    replies.push(toolCall("update_transaction", { transaction_id: id, category: "Groceries" }), "Tagged Groceries.");
+    await handleUpdate(ctx, msg("make swiggy groceries"));
+    expect(lastSent(ctx).args[1]).toBe("Tagged Groceries.");
+    expect((await getTransaction(ctx.db, "111", id)).category).toBe("Groceries");
 
     ctx.advance(24 * 3600 * 1000);
     replies.push("new day");
-    await handleUpdate(ctx, msg("/ask again"));
+    await handleUpdate(ctx, msg("how much again?"));
     expect(lastSent(ctx).args[1]).toBe("new day");
   });
 
-  it("bare /ask waits for the question; /cancel drops it", async () => {
+  it("bare /ask still works as a legacy prompt; /cancel drops it", async () => {
     const { ctx, replies } = await setup();
     await handleUpdate(ctx, msg("/ask"));
     expect(lastSent(ctx).args[2].reply_markup.force_reply).toBe(true);
@@ -146,6 +159,41 @@ describe("/ask", () => {
     await handleUpdate(ctx, msg("/ask"));
     await handleUpdate(ctx, msg("/cancel"));
     expect(lastSent(ctx).args[1]).toContain("Cancelled");
+  });
+
+  it("natural-language messages with ₹ amounts route to specialists instead of colliding with SMS paste", async () => {
+    const { ctx, replies, id } = await setup({ groups: true });
+    replies.push(toolCall("split_transaction", { transaction_id: id, mode: "50" }), "Split ₹900 50/50.");
+    await handleUpdate(ctx, msg("split the ₹900 swiggy dinner 50/50"));
+    expect(lastSent(ctx).args[1]).toBe("Split ₹900 50/50.");
+    expect(await getSplitForTransaction(ctx.db, id)).not.toBeNull();
+  });
+
+  it("TriageAgent routes unfamiliar bank alerts to ledger's ingest_transaction_text tool", async () => {
+    const { ctx, replies } = await setup();
+    replies.push(
+      toolCall("route_to_ledger"),
+      toolCall("ingest_transaction_text", { text: "Revolut: EUR 14.50 charged at Paul Bakery on 2026-10-07" }),
+      llmTxn({ merchant: "Paul Bakery", amount: 14.5, currency: "EUR", category: "Food & Dining" }),
+      ""
+    );
+    await handleUpdate(ctx, msg("Revolut: EUR 14.50 charged at Paul Bakery on 2026-10-07"));
+    const cards = ctx.tg.of("sendMessage").filter((c) => c.args[1].includes("Paul Bakery"));
+    expect(cards).toHaveLength(1);
+  });
+
+  it("batch_update_transactions tags multiple untagged rows in one call", async () => {
+    const { ctx, id } = await setup();
+    const run = askToolExecutor(ctx, "111");
+    const res = await run("batch_update_transactions", {
+      items: [{ transaction_id: id, category: "Groceries", merchant: "Zepto" }]
+    });
+    expect(res).toMatchObject({ ok: true, updated: 1 });
+    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Groceries", merchant: "Zepto" });
+    expect(classifyFastAgent("how much this week?")).toBe("analytics");
+    expect(classifyFastAgent("tag rahul as food")).toBe("ledger");
+    expect(classifyFastAgent("split dinner 50/50")).toBe("groups");
+    expect(classifyFastAgent("export my csv")).toBe("account");
   });
 
   it("update_transaction edits, learns the merchant and refreshes the card", async () => {
@@ -176,7 +224,7 @@ describe("/ask", () => {
     expect(ctx.tg.of("sendMessage").some((c) => c.args[0] === "-100")).toBe(true);
   });
 
-  it("tools: search, groups, breakdown", async () => {
+  it("tools: search, groups, balances, settlements, undo, trends, untagged, dashboard", async () => {
     const { ctx, id } = await setup({ groups: true });
     const run = askToolExecutor(ctx, "111");
     const found = await run("search_transactions", { merchant: "swig", transaction_type: "Debit" });
@@ -197,6 +245,24 @@ describe("/ask", () => {
     });
     const cats = await run("get_category_breakdown", { start_date: "2026-10-01", end_date: "2026-10-31" });
     expect(cats.categories[0]).toMatchObject({ amount: 900, count: 1, counts_as_spend: true });
+
+    // Split -> check balances -> settle cash -> undo split
+    await run("split_transaction", { transaction_id: id, mode: "50" });
+    const bal = await run("get_group_balances", {});
+    expect(bal.groups[0].balances.INR).toEqual([
+      { from_id: "222", from_name: "U222", to_id: "111", to_name: "U111", amount: 450 }
+    ]);
+    const cash = await run("record_cash_settlement", { to_member_id: "222", amount: 150 });
+    expect(cash).toMatchObject({ ok: true, amount: 150, currency: "INR" });
+    const undone = await run("undo_split", { transaction_id: id });
+    expect(undone).toEqual({ ok: true, transaction_id: id });
+
+    // Trends, untagged list, dashboard pin, account status
+    const trends = await run("get_spending_trends", { granularity: "monthly" });
+    expect(trends.buckets).toHaveLength(6);
+    expect((await run("list_untagged_transactions", {})).count).toBe(0);
+    expect(await run("show_dashboard", {})).toMatchObject({ ok: true });
+    expect(await run("get_account_status", {})).toMatchObject({ ok: true, status: "active" });
     expect(await run("nope")).toEqual({ error: "Unknown tool: nope" });
   });
 

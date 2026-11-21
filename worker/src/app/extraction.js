@@ -27,7 +27,7 @@ export function extractionSystemPrompt() {
     '- merchant (if identifiable; use empty string "" if generic bank alert with no merchant/payee)\n' +
     "- amount (numeric only, no currency symbols)\n" +
     "- currency (3-letter ISO code, default INR)\n" +
-    "- category\n" +
+    '- category (or empty string "" when unknown/ambiguous)\n' +
     "- transaction_type (Debit or Credit)\n" +
     '- account_last4 (last 3-4 digits of the account or card, or "")\n' +
     '- reference (UPI ref / RRN / UTR / transaction reference number, or "")\n\n' +
@@ -38,14 +38,15 @@ export function extractionSystemPrompt() {
     "- Extract the actual merchant/payee name, NOT the bank name\n" +
     '- Generic bank debit/credit alert with no merchant info = ""\n\n' +
     "Rules for category:\n" +
-    "- Debit: must be one of: " +
+    "- Debit (when confident): one of: " +
     CATEGORIES.join(", ") +
-    "\n- Credit: must be one of: " +
+    "\n- Credit (when confident): one of: " +
     CREDIT_CATEGORIES.join(", ") +
-    "\n\nIf the message is NOT a transaction (surveys, OTPs, marketing, feedback, declined transactions, alerts with no monetary value), return:\n" +
+    '\n- IMPORTANT: Return "" (empty string) for category when merchant is "", an individual person\'s name (e.g., "Rahul Sharma"), an opaque corporate/UPI handle (e.g., "Bundl Tech", "Sri Enterprises"), or when get_merchant_category returns null and the business type is not obvious from the merchant name itself. Never guess "Shopping" or "Transfer Out" as a fallback — leaving it "" lets the user tag it accurately.\n\n' +
+    "If the message is NOT a transaction (surveys, OTPs, marketing, feedback, declined transactions, alerts with no monetary value), return:\n" +
     '{"not_a_transaction": true, "reason": "brief reason"}\n\n' +
-    "Use the get_merchant_category tool ONLY when you are unsure about the category. " +
-    "For well-known merchants (Amazon, Flipkart, Swiggy, Zomato, Uber, etc.) categorize directly."
+    "Use the get_merchant_category tool when you see an unfamiliar merchant/company name that might have a saved mapping. " +
+    "For well-known brands (Amazon, Flipkart, Swiggy, Zomato, Uber, Netflix, etc.) categorize directly."
   );
 }
 
@@ -68,7 +69,11 @@ export async function extractWithLlm(llm, text, channel, rules) {
       const r = resolveMerchant(args.merchant, rules);
       return r.category
         ? { merchant: r.merchant, category: r.category }
-        : { merchant: args.merchant, category: null, message: "No mapping found, use your best guess" };
+        : {
+            merchant: args.merchant,
+            category: null,
+            message: 'No mapping found — return "" unless the merchant name itself clearly states the business type'
+          };
     }
   });
   return out.kind === "final" ? parseJsonContent(out.content) : null;

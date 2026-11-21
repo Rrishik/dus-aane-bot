@@ -28,7 +28,7 @@ const STALE_JOB_MS = 30 * 60 * 1000;
 const IST_OFFSET_MS = 5.5 * 3600 * 1000;
 
 export const BACKFILL_USAGE =
-  "❌ *Invalid format!*\n\nUse: `/backfill 10m` or `/backfill 3 days` or `/backfill 2 weeks`\nOr: `/backfill YYYY-MM-DD YYYY-MM-DD`";
+  "❌ *Invalid format!*\n\nTry e.g. `backfill 3 days`, `backfill 2 weeks`, or `backfill 2026-03-01 2026-03-31`.";
 
 // → { ok, startMs, endMs } | { ok: false, error: usage|unknown_unit|invalid_dates|invalid_range }
 export function parseBackfillArgs(text, nowMs) {
@@ -86,7 +86,7 @@ export function formatDurationMs(ms) {
 
 const ERRORS = {
   unknown_unit: "❌ *Unknown unit!* Use `min`, `hour`, `day`, `week`, or `month`.",
-  invalid_dates: "❌ *Invalid dates!* Use format YYYY-MM-DD\n\nExample: `/backfill 2026-03-01 2026-03-31`",
+  invalid_dates: "❌ *Invalid dates!* Use format YYYY-MM-DD (e.g. `2026-03-01 2026-03-31`).",
   invalid_range: "❌ *Start date must be before end date.*",
   usage: BACKFILL_USAGE
 };
@@ -184,7 +184,7 @@ export async function handleBackfillProgress(ctx, request) {
   if (job.dupes > 0) summary += "🔁 *Duplicates skipped:* " + job.dupes + "\n";
   if (job.failed > 0) summary += "❌ *Failed:* " + job.failed + "\n";
   if (job.chunk > 1) summary += "📦 *Chunks:* " + job.chunk + "\n";
-  summary += "\n_Run_ /recent _to see the latest._";
+  summary += "\n_Ask for recent transactions any time to see the latest._";
   await ctx.tg.sendMessage(chatId, summary);
   await ctx.db.prepare("DELETE FROM backfill_jobs WHERE tenant_id = ?").bind(chatId).run();
   return Response.json({ ok: true });

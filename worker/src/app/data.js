@@ -23,7 +23,7 @@ export const EXPORT_HEADER = [
   "Id"
 ];
 
-const USAGE = "Usage: `/export`, `/export 2026-09` or `/export 2026-01-01 2026-03-31`";
+const USAGE = "Specify all time, a month (`2026-09`), or a date range (`2026-01-01 2026-03-31`).";
 
 // "" → all time; "YYYY-MM" → that month; two ISO dates → that range.
 export function parseExportRange(text) {
@@ -164,7 +164,7 @@ export async function handleDeleteMyData(ctx, chatId, tenant) {
     "⚠️ *Delete all your data?*\n\n" +
       "This permanently removes your transactions, registered emails, merchant tags and settings. " +
       "Splits you paid are removed from your groups' balances; your shares in others' splits stay so their balances still add up.\n\n" +
-      "_Exported CSVs and Google Sheet copies aren't affected. This can't be undone — /export first if you want a copy._",
+      "_Exported CSVs and Google Sheet copies aren't affected. This can't be undone — ask to export a CSV first if you want a copy._",
     {
       reply_markup: {
         inline_keyboard: [

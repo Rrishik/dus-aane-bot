@@ -25,6 +25,7 @@ import { touchActivity } from "../db/tenants.js";
 import { getParserMode, getDisabledTemplates, logParserEvent } from "../db/settings.js";
 import { extractWithLlm } from "./extraction.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
+import { refreshPersonalPin } from "./personalPin.js";
 import { categoriesFor } from "./constants.js";
 import { money, formatDayMonth } from "./format.js";
 import { toMinor } from "../util/money.js";
@@ -91,6 +92,18 @@ export async function ingest(ctx, input) {
     if (resolved.personalCategory || !category || category === "Uncategorized") category = resolved.category;
   }
   if (!allowed.includes(category)) category = guessCategory(resolved.merchant, d.transaction_type) || null;
+  // Generic alerts with no merchant cannot have a confident spend category
+  // unless explicitly a card bill payment or investment.
+  if (
+    !resolved.merchant &&
+    !resolved.category &&
+    direction === "debit" &&
+    category &&
+    category !== "CC Bill Payment" &&
+    category !== "Investment"
+  ) {
+    category = null;
+  }
 
   // The LLM may omit account/reference; the parser's read of the same text
   // has them when it saw the same amount.
@@ -156,7 +169,10 @@ export async function ingest(ctx, input) {
     ctx.now()
   );
   if (!input.silent) await sendCard(ctx, input.tenant, id);
-  if (txn.status === "confirmed" && !input.silent) await touchActivity(db, tenantId, ctx.now());
+  if (txn.status === "confirmed" && !input.silent) {
+    await touchActivity(db, tenantId, ctx.now());
+    await refreshPersonalPin(ctx, tenantId);
+  }
   return { status: txn.status === "review" ? "review" : "saved", transactionId: id };
 }
 

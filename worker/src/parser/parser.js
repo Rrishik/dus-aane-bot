@@ -147,6 +147,39 @@ function looksLikeTransactionText(text) {
   return _P_VERB_AMOUNT_PATTERNS[1].test(t);
 }
 
+var _P_STRICT_BANK_MARKERS =
+  /\b(?:avl|avbl|available)\s*(?:bal|balance|limit)\b|\bsms\s+block\b|\bnot\s+you\?|\bdear\s+customer\b|\bto\s+vpa\b|\b[\w.-]+@(?:ybl|okaxis|okicici|okhdfcbank|oksbi|paytm|ibl|apl|axl)\b/i;
+
+// Strict Layer-0 check for pasted bank SMS so natural-language chat messages
+// with amounts ("split ₹1200 dinner 50/50", "tag ₹450 spend as Coffee") go to
+// the LLM orchestrator instead of the SMS parser.
+function isStrictBankSms(text) {
+  var chunks = splitSmsPaste(text);
+  if (chunks.length === 0) return false;
+  return chunks.every(function (chunk) {
+    var parsed = parseTransactionText(chunk, { channel: "sms" });
+    if (parsed && parsed.kind === "transaction" && parsed.templateId && parsed.templateId !== PARSER_GENERIC_ID) {
+      return true;
+    }
+    if (parsed && parsed.kind === "ignored" && parsed.reason === "otp" && looksLikeTransactionText(chunk)) {
+      return true;
+    }
+    var t = normalizeTransactionText(chunk);
+    var hasVerbAmt =
+      _P_VERB_AMOUNT_PATTERNS.some(function (re) {
+        return re.test(t);
+      }) || _P_TXN_OF_PATTERN.test(t);
+    if (!hasVerbAmt) return false;
+    return (
+      _P_ACCOUNT.test(t) ||
+      _P_REFERENCE_PATTERNS.some(function (re) {
+        return re.test(t);
+      }) ||
+      _P_STRICT_BANK_MARKERS.test(t)
+    );
+  });
+}
+
 // Split a paste that may hold several SMS: blank lines first; a single chunk
 // is split per line only when every line has its own transaction verb +
 // amount (a balance/limit line on its own is part of the SMS above it).
@@ -569,6 +602,7 @@ export {
   PARSER_COMPARED_FIELDS,
   normalizeTransactionText,
   looksLikeTransactionText,
+  isStrictBankSms,
   splitSmsPaste,
   parseTransactionText,
   validateExtraction,

@@ -1,21 +1,15 @@
 // Telegram update dispatcher.
+//
+// Personal DMs are commandless: only `/start` and `/cancel` (plus unlisted
+// `/sms`) are handled as slash commands. Deterministic fast-paths handle card
+// replies, strict bank SMS pastes, and bare onboarding emails; everything else
+// flows through the central LLM orchestrator.
 import { getTenant } from "../db/tenants.js";
-import {
-  handleStart,
-  handleHelp,
-  handleSheet,
-  handleRegister,
-  handleRegisterReply,
-  handleAccount,
-  handleRecent,
-  handleStats
-} from "./commands.js";
-import { handleBackfill } from "./backfill.js";
+import { handleStart, registerEmailForChat } from "./commands.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
 import { handleTagReply, handleAmountReply, handleCancel } from "./cardActions.js";
-import { handleAsk, handleAskResume, handlePendingAsk } from "./ask.js";
-import { handleExport, handleDeleteMyData } from "./data.js";
+import { handleOrchestrator, handleAskResume, handlePendingAsk } from "./orchestrator.js";
 import { isUsable, gateText } from "./onboarding.js";
 import {
   handleGroupStart,
@@ -27,23 +21,6 @@ import {
   handleMembershipUpdate
 } from "./groups.js";
 
-const ONBOARDING = ["/start", "/register", "/account", "/deletemydata"];
-
-const PERSONAL_COMMANDS = {
-  "/start": (ctx, m) => handleStart(ctx, m.chatId, m.username),
-  "/register": (ctx, m) => handleRegister(ctx, m.chatId, m.username, m.text),
-  "/account": (ctx, m) => handleAccount(ctx, m.chatId),
-  "/help": (ctx, m) => handleHelp(ctx, m.chatId),
-  "/sheet": (ctx, m) => handleSheet(ctx, m.chatId),
-  "/recent": (ctx, m) => handleRecent(ctx, m.chatId, m.text),
-  "/stats": (ctx, m) => handleStats(ctx, m.chatId),
-  "/backfill": (ctx, m) => handleBackfill(ctx, m.chatId, m.text),
-  "/cancel": (ctx, m) => handleCancel(ctx, m),
-  "/ask": (ctx, m) => handleAsk(ctx, m),
-  "/export": (ctx, m) => handleExport(ctx, m.chatId, m.text),
-  "/deletemydata": (ctx, m, tenant) => handleDeleteMyData(ctx, m.chatId, tenant)
-};
-
 const GROUP_COMMANDS = {
   "/start": handleGroupStart,
   "/help": handleGroupHelp,
@@ -53,15 +30,24 @@ const GROUP_COMMANDS = {
   "/settle": handleGroupSettle
 };
 
-// Plain-text flows that run before SMS paste: /ask replies, 🏷 tag, 💰 amount,
-// bare /ask.
-const PLAIN_TEXT_STEPS = [handleAskResume, handleTagReply, handleAmountReply, handlePendingAsk];
+const EMAIL_TOKEN_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function commandOf(text) {
   return String(text || "")
     .split(/\s+/)[0]
     .split("@")[0]
     .toLowerCase();
+}
+
+// Deterministic email capture (0 LLM tokens) for bare email replies during
+// onboarding or explicit "register alice@gmail.com" messages.
+export function extractDirectRegistrationEmail(text, tenant) {
+  const s = String(text || "").trim();
+  if (!s) return null;
+  const regMatch = s.match(/^\/?register(?:@\w+)?\s+(\S+)$/i);
+  if (regMatch) return regMatch[1];
+  if (!isUsable(tenant) && EMAIL_TOKEN_RE.test(s)) return s;
+  return null;
 }
 
 export async function handleMessage(ctx, message) {
@@ -85,25 +71,49 @@ export async function handleMessage(ctx, message) {
     return;
   }
 
+  const command = text.startsWith("/") ? commandOf(text) : null;
+  if (command === "/start") return handleStart(ctx, chatId, m.username);
+  if (command === "/cancel") return handleCancel(ctx, m);
+
   const tenant = await getTenant(ctx.db, chatId);
-  if (text.startsWith("/")) {
-    const command = commandOf(text);
-    if (!ONBOARDING.includes(command) && !isUsable(tenant)) {
-      await ctx.tg.sendMessage(chatId, gateText(tenant));
+
+  // Unlisted power-user / debug escape hatch for forcing SMS parsing.
+  if (command === "/sms") {
+    const rawSms = text.replace(/^\/sms(@\w+)?\s*/i, "").trim();
+    if (!rawSms) {
+      await ctx.tg.sendMessage(chatId, "Paste the bank SMS text right after `/sms`.");
       return;
     }
-    const handler = PERSONAL_COMMANDS[command];
-    if (handler) await handler(ctx, m, tenant);
-    else await ctx.tg.sendMessage(chatId, "❌ *Unknown command!*\n\nUse /help to see available commands.");
+    if (!(await handleSmsPaste(ctx, tenant, chatId, rawSms, { force: true }))) {
+      await ctx.tg.sendMessage(chatId, "ℹ️ No transaction found in that.", { parse_mode: null });
+    }
     return;
   }
 
-  // Plain text: reply flows first, then pending inputs, then SMS paste.
-  for (const step of PLAIN_TEXT_STEPS) {
-    if (await step(ctx, m, tenant)) return;
+  // Deterministic pending card inputs.
+  if (await handleTagReply(ctx, m)) return;
+  if (await handleAmountReply(ctx, m)) return;
+
+  // Deterministic strict bank SMS paste (0 LLM tokens when matching templates).
+  if (await handleSmsPaste(ctx, tenant, chatId, text)) return;
+
+  // Deterministic email registration (0 LLM tokens).
+  const directEmail = extractDirectRegistrationEmail(text, tenant);
+  if (directEmail) {
+    await registerEmailForChat(ctx, chatId, m.username, directEmail);
+    return;
   }
-  if (await handleRegisterReply(ctx, chatId, m.username, text)) return;
-  await handleSmsPaste(ctx, tenant, chatId, text);
+
+  // Unregistered chats never burn LLM tokens — prompt to onboard instead.
+  if (!tenant) {
+    await ctx.tg.sendMessage(chatId, gateText(null));
+    return;
+  }
+
+  // Active conversation resume (swipe reply or open ask_user) -> central orchestrator.
+  if (await handleAskResume(ctx, m, tenant)) return;
+  if (await handlePendingAsk(ctx, m, tenant)) return;
+  await handleOrchestrator(ctx, m, tenant);
 }
 
 export async function handleUpdate(ctx, update) {

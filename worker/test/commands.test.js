@@ -54,37 +54,49 @@ async function addTxn(ctx, tenantId, o = {}) {
   );
 }
 
-describe("onboarding commands", () => {
-  it("/start welcomes strangers and shows help to active users", async () => {
+describe("commandless onboarding & account ops", () => {
+  const toolCall = (name, args = {}) => ({
+    role: "assistant",
+    content: null,
+    tool_calls: [{ id: "tc-" + name, type: "function", function: { name, arguments: JSON.stringify(args) } }]
+  });
+
+  it("/start welcomes strangers and pins + shows plain-English guide to active users", async () => {
     const ctx = testContext();
     await handleUpdate(ctx, msg("555", "/start"));
     expect(texts(ctx)[0]).toMatch(/^✌️ Hey Alice! Track your spends/);
     await seedTenant(ctx, "111");
     await handleUpdate(ctx, msg("111", "/start"));
-    expect(texts(ctx)[1]).toMatch(/^\*Commands\*/);
+    // First message is the pinned live summary, second is the plain-English guide.
+    expect(texts(ctx)[1]).toMatch(/^📌 \*Oct 2026\*/);
+    expect(texts(ctx)[2]).toMatch(/^\*Just type in plain English\*/);
+    expect(ctx.tg.of("pinChatMessage")).toHaveLength(1);
   });
 
-  it("gates everything but onboarding for unknown and pending chats", async () => {
-    const ctx = testContext();
-    await handleUpdate(ctx, msg("555", "/recent"));
+  it("guards unregistered chats from burning LLM tokens while routing pending chats to AccountOpsAgent", async () => {
+    const replies = [];
+    const ctx = testContext({ llmReplies: replies });
+    await handleUpdate(ctx, msg("555", "how much did I spend?"));
     expect(texts(ctx)[0]).toMatch(/I don't know this chat yet/);
-    await seedTenant(ctx, "111", { status: "pending" });
-    await handleUpdate(ctx, msg("111", "/stats"));
-    expect(texts(ctx)[1]).toMatch(/setup isn't active yet/);
-    await handleUpdate(ctx, msg("111", "/account"));
-    expect(texts(ctx)[2]).toMatch(/^\*Your account\*\nStatus: `pending`/);
+    expect(ctx.llm.calls).toHaveLength(0);
+
+    await seedTenant(ctx, "111", { email: "a@x.com", status: "pending" });
+    replies.push(toolCall("get_account_status"), "Your setup is pending for a@x.com.");
+    await handleUpdate(ctx, msg("111", "what is my account status?"));
+    expect(texts(ctx)[1]).toBe("Your setup is pending for a@x.com.");
   });
 
-  it("dormant users can use commands", async () => {
-    const ctx = testContext();
+  it("dormant users can chat with the orchestrator", async () => {
+    const ctx = testContext({ llmReplies: ["Welcome back."] });
     await seedTenant(ctx, "111", { status: "dormant" });
-    await handleUpdate(ctx, msg("111", "/help"));
-    expect(texts(ctx)[0]).toMatch(/^\*Commands\*/);
+    await handleUpdate(ctx, msg("111", "how much this month?"));
+    expect(texts(ctx)[0]).toBe("Welcome back.");
   });
 
-  it("/register <email> creates a pending tenant and asks Apps Script to send the setup email", async () => {
+  it("bare email reply deterministically creates a pending tenant (0 LLM calls) and sends setup email", async () => {
     const ctx = testContext();
-    await handleUpdate(ctx, msg("111", "/register Alice@X.com"));
+    await handleUpdate(ctx, msg("111", "Alice@X.com"));
+    expect(ctx.llm.calls).toHaveLength(0);
     expect(await getTenant(ctx.db, "111")).toMatchObject({ status: "pending", name: "Alice" });
     expect(ctx.asCalls).toEqual([
       expect.objectContaining({ action: "send_setup_email", payload: { chatId: "111", emails: ["alice@x.com"] } })
@@ -94,21 +106,20 @@ describe("onboarding commands", () => {
     expect(body.sig).toBe(await hmacHex("int", body.ts + ".send_setup_email." + body.payload));
   });
 
-  it("bare /register waits for the address; invalid and taken addresses are refused", async () => {
+  it("refuses invalid and taken addresses cleanly", async () => {
     const ctx = testContext();
     await seedTenant(ctx, "222", { email: "taken@x.com" });
-    await handleUpdate(ctx, msg("111", "/register"));
-    expect(texts(ctx)[0]).toMatch(/What's the Gmail address/);
-    await handleUpdate(ctx, msg("111", "not-an-email"));
-    expect(texts(ctx)[1]).toMatch(/doesn't look like a valid email/);
-    await handleUpdate(ctx, msg("111", "/register taken@x.com"));
-    expect(texts(ctx)[2]).toBe("❌ That email is already registered to another account.");
+    await handleUpdate(ctx, msg("111", "register not-an-email"));
+    expect(texts(ctx)[0]).toMatch(/doesn't look like a valid email/);
+    await handleUpdate(ctx, msg("111", "taken@x.com"));
+    expect(texts(ctx)[1]).toBe("❌ That email is already registered to another account.");
+    expect(ctx.llm.calls).toHaveLength(0);
   });
 
   it("active users adding an email get the list and a setup email for just the new one", async () => {
     const ctx = testContext();
     await seedTenant(ctx, "111", { email: "a@x.com" });
-    await handleUpdate(ctx, msg("111", "/register b@x.com"));
+    await handleUpdate(ctx, msg("111", "register b@x.com"));
     expect(texts(ctx)[0]).toMatch(/Added `b@x.com`.*\n\nRegistered emails:\n• `a@x.com`\n• `b@x.com`/s);
     expect(ctx.asCalls[0].payload.emails).toEqual(["b@x.com"]);
     expect(await getTenantEmails(ctx.db, "111")).toEqual(["a@x.com", "b@x.com"]);
@@ -116,77 +127,57 @@ describe("onboarding commands", () => {
 
   it("tells the user when the setup email couldn't be sent", async () => {
     const ctx = testContext({ appsScript: () => ({ ok: false, error: "quota" }) });
-    await handleUpdate(ctx, msg("111", "/register a@x.com"));
+    await handleUpdate(ctx, msg("111", "a@x.com"));
     expect(texts(ctx)[0]).toMatch(/Couldn't email setup instructions/);
   });
 
-  it("/account shows status, emails and a resend button that works for pending users", async () => {
+  it("resend_setup button works for pending users; group chats ignore non-commands and unknown commands", async () => {
     const ctx = testContext();
     await seedTenant(ctx, "111", { email: "a@x.com", status: "pending" });
-    await handleUpdate(ctx, msg("111", "/account"));
-    const [, text, opts] = ctx.tg.of("sendMessage")[0].args;
-    expect(text).toMatch(/Emails: `a@x.com`\nData: stored with the bot/);
-    expect(opts.reply_markup.inline_keyboard[0][0].callback_data).toBe("resend_setup");
-
     await handleUpdate(ctx, tap("111", "resend_setup"));
     expect(ctx.tg.of("answerCallbackQuery")[0].args[1]).toBe("📬 Sending...");
     expect(ctx.asCalls[0].action).toBe("send_setup_email");
-  });
 
-  it("unknown commands get a hint; group chats ignore non-commands and unknown commands", async () => {
-    const ctx = testContext();
-    await seedTenant(ctx, "111");
-    await handleUpdate(ctx, msg("111", "/nope"));
-    expect(texts(ctx)[0]).toMatch(/Unknown command/);
     const group = (text) => ({ message: { chat: { id: -100, type: "group" }, from: { id: 111 }, text } });
     await handleUpdate(ctx, group("hello"));
     await handleUpdate(ctx, group("/othercmd@otherbot"));
     expect(texts(ctx)).toHaveLength(1);
   });
 
-  it("/sheet points to /export", async () => {
+  it("unlisted /sms escape hatch forces SMS parsing on loose text", async () => {
     const ctx = testContext();
     await seedTenant(ctx, "111");
-    await handleUpdate(ctx, msg("111", "/sheet"));
-    expect(texts(ctx)[0]).toMatch(/\/export/);
+    await handleUpdate(ctx, msg("111", "/sms Rs. 92.50 was spent on your card"));
+    expect(texts(ctx)[0]).toContain("₹93");
+    await handleUpdate(ctx, msg("111", "/sms nothing here"));
+    expect(texts(ctx).at(-1)).toBe("ℹ️ No transaction found in that.");
   });
 });
 
-describe("/recent and /stats", () => {
-  it("/recent lists confirmed transactions newest first, with a user filter", async () => {
+describe("pinned dashboard callbacks (Recent & Trends)", () => {
+  it("Recent lists confirmed transactions newest first; Trends toggles weekly/monthly", async () => {
     const ctx = testContext();
     await seedTenant(ctx, "111");
     await addTxn(ctx, "111", { merchant: "Old", occurredOn: "2026-10-01" });
     await addTxn(ctx, "111", { merchant: "Bob's", forwarder: "bob" });
     await addTxn(ctx, "111", { merchant: "Pending", status: "review" });
-    await handleUpdate(ctx, msg("111", "/recent"));
-    expect(texts(ctx)[0]).toMatch(
+
+    await handleUpdate(ctx, tap("111", "stats_recent"));
+    const recentEdit = ctx.tg.of("editMessageText")[0].args[2];
+    expect(recentEdit).toMatch(
       /^📅 \*Recent Transactions\*\n\n🔴 \*Bob's\* ₹450 · Food\n {3}_6 Oct 2026_\n\n🔴 \*Old\* ₹450 · Food\n {3}_1 Oct 2026_/
     );
-    expect(texts(ctx)[0]).not.toMatch(/Pending/);
-    await handleUpdate(ctx, msg("111", "/recent 10 bob"));
-    expect(texts(ctx)[1]).toMatch(/\(user: bob\)/);
-    expect(texts(ctx)[1]).not.toMatch(/Old/);
-  });
+    expect(recentEdit).not.toMatch(/Pending/);
 
-  it("/stats opens the menu; Trends edits in place and toggles weekly/monthly", async () => {
-    const ctx = testContext();
-    await seedTenant(ctx, "111");
-    await addTxn(ctx, "111");
-    await handleUpdate(ctx, msg("111", "/stats"));
-    expect(ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard[0].map((b) => b.callback_data)).toEqual([
-      "stats_recent",
-      "stats_trends"
-    ]);
     await handleUpdate(ctx, tap("111", "stats_trends"));
-    const [, mid, text, opts] = ctx.tg.of("editMessageText")[0].args;
+    const [, mid, text, opts] = ctx.tg.of("editMessageText")[1].args;
     expect(mid).toBe(50);
     expect(text).toMatch(/Weekly/);
     expect(opts.reply_markup.inline_keyboard[0][0].callback_data).toBe("stats_trendsmonthly");
     await handleUpdate(ctx, tap("111", "stats_trendsmonthly"));
-    expect(ctx.tg.of("editMessageText")[1].args[2]).toMatch(/Monthly/);
+    expect(ctx.tg.of("editMessageText")[2].args[2]).toMatch(/Monthly/);
     await handleUpdate(ctx, tap("111", "stats_back"));
-    expect(ctx.tg.of("editMessageText")[2].args[2]).toBe("📊 *Stats* — pick a view:");
+    expect(ctx.tg.of("editMessageText")[3].args[2]).toBe("📊 *Stats* — pick a view:");
   });
 });
 
@@ -262,31 +253,48 @@ describe("/backfill", () => {
     expect(formatDurationMs(90061000)).toBe("1d 1h 1m");
   });
 
-  it("records the job, asks Apps Script to run it, and refuses a second one", async () => {
-    const ctx = testContext();
+  it("records the job via AccountOpsAgent, asks Apps Script to run it, and refuses a second one", async () => {
+    const tc = (range) => ({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        { id: "bf", type: "function", function: { name: "start_backfill", arguments: JSON.stringify({ range }) } }
+      ]
+    });
+    const ctx = testContext({ llmReplies: [tc("2d"), "", tc("1d"), ""] });
     await seedTenant(ctx, "111", { email: "a@x.com" });
-    await handleUpdate(ctx, msg("111", "/backfill 2d"));
+    await handleUpdate(ctx, msg("111", "backfill last 2 days"));
     expect(ctx.asCalls[0]).toMatchObject({
       action: "backfill_range",
       payload: { chatId: "111", emails: ["a@x.com"], startMs: NOW - 2 * 86400000, endMs: NOW }
     });
     expect(texts(ctx)[0]).toMatch(/^⏳ \*Backfill started\* _\(2d\)_/);
-    await handleUpdate(ctx, msg("111", "/backfill 1d"));
+    await handleUpdate(ctx, msg("111", "backfill 1 day"));
     expect(texts(ctx)[1]).toMatch(/already running/);
   });
 
   it("drops the job if Apps Script can't start it", async () => {
-    const ctx = testContext({ appsScript: () => ({ ok: false }) });
+    const tc = {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "bf", type: "function", function: { name: "start_backfill", arguments: '{"range":"1d"}' } }]
+    };
+    const ctx = testContext({ appsScript: () => ({ ok: false }), llmReplies: [tc, ""] });
     await seedTenant(ctx, "111");
-    await handleUpdate(ctx, msg("111", "/backfill 1d"));
+    await handleUpdate(ctx, msg("111", "backfill 1 day"));
     expect(texts(ctx)[0]).toMatch(/Couldn't start the backfill/);
     expect(await ctx.db.prepare("SELECT COUNT(*) AS n FROM backfill_jobs").first("n")).toBe(0);
   });
 
   it("progress reports update the job; the final one summarises and clears it", async () => {
-    const ctx = testContext();
+    const tc = {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "bf", type: "function", function: { name: "start_backfill", arguments: '{"range":"1d"}' } }]
+    };
+    const ctx = testContext({ llmReplies: [tc, ""] });
     await seedTenant(ctx, "111");
-    await handleUpdate(ctx, msg("111", "/backfill 1d"));
+    await handleUpdate(ctx, msg("111", "backfill 1 day"));
     const post = async (payload, secret = "int") => {
       const body = JSON.stringify(payload);
       const headers = await signedHeaders(secret, body, ctx.now());

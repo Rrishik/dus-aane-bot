@@ -3,7 +3,6 @@ import { handleIngestEmail } from "./app/ingestRoute.js";
 import { handleBackfillProgress } from "./app/backfill.js";
 import { handleUpdate } from "./app/webhook.js";
 import { runScheduled } from "./app/cron.js";
-import { looksLikeTransactionText } from "./parser/index.js";
 
 // GET /healthz reports whether the D1 binding answers.
 export async function healthz(env) {
@@ -37,18 +36,17 @@ export default {
   }
 };
 
-// Updates that wait on the LLM or Apps Script can outlive waitUntil's 30s,
-// so they go through the queue; everything else is handled straight away.
-const SLOW_COMMANDS = ["/ask", "/register", "/backfill", "/export"];
+// Updates that wait on the LLM orchestrator or Apps Script can outlive
+// waitUntil's 30s, so every private-chat text message except `/start` and
+// `/cancel` goes through the queue; inline button taps run straight away.
+const FAST_PRIVATE_COMMANDS = ["/start", "/cancel"];
 export function isSlowUpdate(update) {
   const cb = update.callback_query;
   if (cb) return /^(rr|export)_/.test(cb.data || "") || cb.data === "resend_setup";
   const m = update.message;
   if (!m || !m.text || !m.chat || m.chat.type !== "private") return false;
-  // Plain text: /ask replies and pasted SMS hit the LLM; a 🏷 tag reply doesn't.
-  if (!m.text.startsWith("/")) return !!m.reply_to_message || looksLikeTransactionText(m.text);
   const command = m.text.split(/\s+/)[0].split("@")[0].toLowerCase();
-  return SLOW_COMMANDS.includes(command);
+  return !FAST_PRIVATE_COMMANDS.includes(command);
 }
 
 // Telegram webhook: verify Telegram's secret header, ack at once and process

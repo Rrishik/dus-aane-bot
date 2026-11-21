@@ -1,16 +1,22 @@
 // Card button actions (personal chats): tag, category, ⋯ menu, fix
 // (direction / amount), back, delete, report, Re-read and review Save/Discard.
-import { updateTransaction, softDeleteTransaction, updateSource } from "../db/transactions.js";
-import { upsertMerchantRule } from "../db/merchantRules.js";
+import {
+  getTransaction,
+  updateTransaction,
+  softDeleteTransaction,
+  updateSource,
+  listUntaggedTransactions
+} from "../db/transactions.js";
+import { getMerchantRules, resolveMerchant, upsertMerchantRule } from "../db/merchantRules.js";
 import { touchActivity } from "../db/tenants.js";
 import { logParserEvent, countParserEvents, disableTemplate } from "../db/settings.js";
 import { putEphemeral, takeEphemeral } from "../db/ephemeral.js";
 import { validateExtraction, diffExtractions, guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
-import { getMerchantRules } from "../db/merchantRules.js";
-import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
-import { categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard, fixMenuKeyboard } from "./cards.js";
-import { categoriesFor, TAG_MAX_LEN } from "./constants.js";
-import { escapeMarkdown, money, formatDayMonth } from "./format.js";
+import { loadCardState, renderCard, defaultKeyboard, refreshCardMessage } from "./cardState.js";
+import { refreshPersonalPin } from "./personalPin.js";
+import { cardText, categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard, fixMenuKeyboard } from "./cards.js";
+import { CATEGORIES, CREDIT_CATEGORIES, CATEGORY_EMOJIS, categoriesFor, TAG_MAX_LEN } from "./constants.js";
+import { escapeMarkdown, money, formatDayMonth, shortCategoryName } from "./format.js";
 import { extractWithLlm } from "./extraction.js";
 import { callAppsScript } from "./appsScript.js";
 import { setPending, getPending, takePending, clearPending } from "./pending.js";
@@ -136,8 +142,10 @@ const ACTIONS = {
     await updateTransaction(ctx.db, chatId, state.txn.id, { category, kind }, ctx.now());
     Object.assign(state.txn, { category, kind });
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
-    // Teach this user's future transactions from the same merchant.
-    if (state.txn.merchant) await upsertMerchantRule(ctx.db, chatId, state.txn.merchant, { category }, ctx.now());
+    // Teach this user's future transactions from the same merchant / VPA pattern.
+    await teachCategoryRules(ctx.db, chatId, state.txn, category, ctx.now());
+    await applyLearnedCategoryToUntagged(ctx, chatId);
+    await refreshPersonalPin(ctx, chatId);
   },
 
   async help(ctx, { chatId, messageId, state }) {
@@ -167,6 +175,7 @@ const ACTIONS = {
     Object.assign(t, { direction, category, kind });
     await editCard(ctx, chatId, messageId, state);
     await logUserFix(ctx, chatId, state, ["transaction_type"]);
+    await refreshPersonalPin(ctx, chatId);
   },
 
   async amt(ctx, { chatId, userId, messageId, state }) {
@@ -197,6 +206,7 @@ const ACTIONS = {
     }
     await softDeleteTransaction(ctx.db, chatId, state.txn.id, ctx.now());
     await ctx.tg.editMessageText(chatId, messageId, "🗑️ *Transaction deleted*");
+    await refreshPersonalPin(ctx, chatId);
   },
 
   async report(ctx, { chatId, messageId, state, from }) {
@@ -244,6 +254,7 @@ const ACTIONS = {
       await updateTransaction(ctx.db, chatId, state.txn.id, { status: "confirmed", reviewNote: null }, ctx.now());
       state.txn.status = "confirmed";
       await touchActivity(ctx.db, chatId, ctx.now());
+      await refreshPersonalPin(ctx, chatId);
     }
     await editCard(ctx, chatId, messageId, state);
   },
@@ -388,6 +399,7 @@ async function rereadAccept(ctx, { chatId, messageId, state }) {
 
   const fresh = await loadCardState(ctx, chatId, state.txn.id);
   await editCard(ctx, chatId, messageId, fresh);
+  await refreshPersonalPin(ctx, chatId);
   await logParserEvent(
     ctx.db,
     {
@@ -452,7 +464,7 @@ export async function autoDisableIfNeeded(ctx, templateId) {
 
 // ─── Tag reply ───────────────────────────────────────────────────────
 
-// /cancel: drop whatever reply the bot is waiting for (tag, /ask, /register).
+// /cancel: drop whatever reply the bot is waiting for (tag, amount, open question, register).
 export async function handleCancel(ctx, m) {
   if (await takePending(ctx, "tag", m.userId)) {
     await ctx.tg.sendMessage(m.chatId, "↩️ *Tag unchanged.*");
@@ -462,8 +474,12 @@ export async function handleCancel(ctx, m) {
     await ctx.tg.sendMessage(m.chatId, "↩️ *Amount unchanged.*");
     return;
   }
-  const others = await Promise.all([takePending(ctx, "ask", m.chatId), takePending(ctx, "register", m.chatId)]);
-  await ctx.tg.sendMessage(m.chatId, others.some(Boolean) ? "↩️ Cancelled." : "Nothing to cancel.", {
+  const openAsk = await takeEphemeral(ctx.db, "ask_open:" + m.chatId, ctx.now());
+  if (openAsk && openAsk.messageId) {
+    await takeEphemeral(ctx.db, "ask:" + m.chatId + ":" + openAsk.messageId, ctx.now());
+  }
+  const pendingAsk = await takePending(ctx, "ask", m.chatId);
+  await ctx.tg.sendMessage(m.chatId, openAsk || pendingAsk ? "↩️ Cancelled." : "Nothing to cancel.", {
     parse_mode: null
   });
 }
@@ -491,6 +507,7 @@ export async function handleAmountReply(ctx, m) {
     await updateTransaction(ctx.db, m.chatId, state.txn.id, { amountMinor }, ctx.now());
     state.txn.amount_minor = amountMinor;
     await logUserFix(ctx, m.chatId, state, ["amount"]);
+    await refreshPersonalPin(ctx, m.chatId);
   }
   if (pending.messageId) await editCard(ctx, m.chatId, pending.messageId, state);
   return true;
@@ -515,13 +532,139 @@ export async function handleTagReply(ctx, m) {
     return true;
   }
   const previous = state.txn.merchant || state.txn.merchant_raw;
-  await updateTransaction(ctx.db, m.chatId, state.txn.id, { merchant: text }, ctx.now());
-  state.txn.merchant = text;
+  const patch = { merchant: text };
+  if (!state.txn.category) {
+    const rules = await getMerchantRules(ctx.db, m.chatId);
+    const resolved = resolveMerchant(text, rules);
+    const valid = categoriesFor(state.txn.direction);
+    const guessed =
+      (resolved.category && valid.includes(resolved.category) && resolved.category) ||
+      guessCategory(text, state.txn.direction === "credit" ? "Credit" : "Debit") ||
+      null;
+    if (guessed && valid.includes(guessed)) {
+      patch.category = guessed;
+      patch.kind = defaultKind(state.txn.direction, guessed);
+    }
+  }
+  await updateTransaction(ctx.db, m.chatId, state.txn.id, patch, ctx.now());
+  Object.assign(state.txn, patch);
   if (pending.messageId) await editCard(ctx, m.chatId, pending.messageId, state);
   if (previous) {
+    const fields = patch.category ? { name: text, category: patch.category } : { name: text };
     const short = shortenMerchantPattern(previous);
-    if (short && short !== previous) await upsertMerchantRule(ctx.db, m.chatId, short, { name: text }, ctx.now());
-    await upsertMerchantRule(ctx.db, m.chatId, previous, { name: text }, ctx.now());
+    if (short && short !== previous) await upsertMerchantRule(ctx.db, m.chatId, short, fields, ctx.now());
+    await upsertMerchantRule(ctx.db, m.chatId, previous, fields, ctx.now());
   }
+  if (patch.category) await applyLearnedCategoryToUntagged(ctx, m.chatId);
+  await refreshPersonalPin(ctx, m.chatId);
   return true;
+}
+
+export async function teachCategoryRules(db, tenantId, txn, category, now) {
+  const seen = new Set();
+  for (const raw of [txn.merchant, shortenMerchantPattern(txn.merchant), shortenMerchantPattern(txn.merchant_raw)]) {
+    const key = raw && String(raw).trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    await upsertMerchantRule(db, tenantId, key, { category }, now);
+  }
+}
+
+// Backfill newly taught personal merchant rules onto any other untagged
+// transactions from the same payee so repeat merchants categorize in one tap.
+export async function applyLearnedCategoryToUntagged(ctx, tenantId) {
+  const untagged = await listUntaggedTransactions(ctx.db, tenantId, { limit: 50 });
+  if (!untagged.length) return 0;
+  const rules = await getMerchantRules(ctx.db, tenantId);
+  let filled = 0;
+  for (const row of untagged) {
+    const raw = row.merchant || row.merchant_raw;
+    if (!raw) continue;
+    const resolved = resolveMerchant(raw, rules);
+    const valid = categoriesFor(row.direction);
+    if (!resolved.category || !valid.includes(resolved.category)) continue;
+    const patch = {
+      category: resolved.category,
+      kind: defaultKind(row.direction, resolved.category)
+    };
+    if (!row.merchant && resolved.merchant) patch.merchant = resolved.merchant;
+    await updateTransaction(ctx.db, tenantId, row.id, patch, ctx.now());
+    await refreshCardMessage(ctx, tenantId, row.id);
+    filled++;
+  }
+  return filled;
+}
+
+// ─── 1-tap untagged stepper (from Daily Recap / pinned dashboard) ────
+
+function tagStepperKeyboard(txn) {
+  const cats = txn.direction === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
+  const rows = [];
+  for (let i = 0; i < cats.length; i += 3) {
+    rows.push(
+      cats.slice(i, i + 3).map((c, j) => ({
+        text: (CATEGORY_EMOJIS[c] ? CATEGORY_EMOJIS[c] + " " : "") + shortCategoryName(c),
+        callback_data: "tagqc_" + txn.id + "_" + (i + j)
+      }))
+    );
+  }
+  rows.push([
+    { text: "🏷 Name merchant", callback_data: "tag_" + txn.id },
+    { text: "⏭ Skip", callback_data: "tagq_skip_" + txn.id }
+  ]);
+  return { inline_keyboard: rows };
+}
+
+export async function handleTagQueueCallback(ctx, { chatId, messageId, action, payload }) {
+  if (action === "tagqc") {
+    const sep = payload.lastIndexOf("_");
+    const txnId = payload.slice(0, sep);
+    const idx = parseInt(payload.slice(sep + 1), 10);
+    const txn = await getTransaction(ctx.db, chatId, txnId);
+    if (txn && txn.status === "confirmed") {
+      const list = categoriesFor(txn.direction);
+      if (!isNaN(idx) && idx >= 0 && idx < list.length) {
+        const category = list[idx];
+        const kind = defaultKind(txn.direction, category);
+        await updateTransaction(ctx.db, chatId, txn.id, { category, kind }, ctx.now());
+        Object.assign(txn, { category, kind });
+        await teachCategoryRules(ctx.db, chatId, txn, category, ctx.now());
+        await applyLearnedCategoryToUntagged(ctx, chatId);
+        await refreshCardMessage(ctx, chatId, txn.id);
+        await refreshPersonalPin(ctx, chatId);
+      }
+    }
+    return renderNextUntaggedStep(ctx, chatId, messageId, null);
+  }
+
+  const skipId = payload.startsWith("skip_") ? payload.slice(5) : null;
+  return renderNextUntaggedStep(ctx, chatId, messageId, skipId);
+}
+
+async function renderNextUntaggedStep(ctx, chatId, messageId, skipId) {
+  const list = await listUntaggedTransactions(ctx.db, chatId, { limit: 25 });
+  if (list.length === 0) {
+    await ctx.tg.editMessageText(chatId, messageId, "✅ *All caught up!*\nEvery recent transaction has a category.", {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🕒 Recent", callback_data: "stats_recent" },
+            { text: "📉 Trends", callback_data: "stats_trends" }
+          ]
+        ]
+      }
+    });
+    return;
+  }
+
+  let idx = 0;
+  if (skipId) {
+    const found = list.findIndex((t) => t.id === skipId);
+    if (found >= 0) idx = (found + 1) % list.length;
+  }
+  const current = list[idx];
+  const header = "🏷 *Categorize* _(" + (idx + 1) + " of " + list.length + " left)_\n\n";
+  await ctx.tg.editMessageText(chatId, messageId, header + cardText(current), {
+    reply_markup: tagStepperKeyboard(current)
+  });
 }

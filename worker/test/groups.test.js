@@ -118,7 +118,7 @@ describe("group setup + membership", () => {
     expect(await getGroupMembers(ctx.db, "-100")).toEqual(["111"]);
     const msgs = sent(ctx);
     expect(msgs.find((m) => m.chat === "-100" && m.text.includes("is set up"))).toBeTruthy();
-    expect(msgs.find((m) => m.chat === "222").text).toContain("/register");
+    expect(msgs.find((m) => m.chat === "222").text).toContain("your.email@gmail.com");
     expect(await takeGroupInvites(ctx.db, "222")).toEqual(["-100"]);
 
     await handleUpdate(ctx, groupMsg("/start"));

@@ -1,7 +1,7 @@
 // Transaction cards: body text and every keyboard shape, from D1 rows.
 // Callback data carries the transaction id (26-char ULID); group callbacks
 // use ":" separators, card callbacks "_".
-import { CATEGORY_EMOJIS } from "./constants.js";
+import { CATEGORY_EMOJIS, categoriesFor } from "./constants.js";
 import { escapeMarkdown, money, pillLabel, shortCategoryName, formatLongDate } from "./format.js";
 
 // txn: transactions row. opts: { user, extraLine }.
@@ -28,20 +28,44 @@ export function pillsRow(txnId, merchant, category) {
   ];
 }
 
+const QUICK_DEBIT_CATEGORIES = ["Food & Dining", "Groceries", "Shopping", "Travel", "Bills & Utilities"];
+const QUICK_CREDIT_CATEGORIES = ["Transfer In", "Refund", "Reimbursement", "Salary", "Cashback"];
+
+// Quick 1-tap category pills shown directly on arrival when a confirmed
+// transaction has no category yet.
+export function quickCategoryRows(txnId, direction) {
+  const all = categoriesFor(direction);
+  const picks = (direction === "credit" ? QUICK_CREDIT_CATEGORIES : QUICK_DEBIT_CATEGORIES).filter((c) =>
+    all.includes(c)
+  );
+  const btn = (c) => ({
+    text: (CATEGORY_EMOJIS[c] ? CATEGORY_EMOJIS[c] + " " : "") + shortCategoryName(c),
+    callback_data: "cat_" + txnId + "_" + all.indexOf(c)
+  });
+  return [
+    picks.slice(0, 3).map(btn),
+    [...picks.slice(3, 5).map(btn), { text: "📂 More ▾", callback_data: "editcat_" + txnId }]
+  ];
+}
+
 // groups: tenants rows of the groups the payer belongs to. quickSplit
 // ({ groupId, otherName }) puts the common case — 50-50 in a 2-person
 // group — one tap away, with the full menu next to it.
 export function level0Keyboard(txn, groups, quickSplit) {
-  const rows = (groups || []).map((g) =>
-    quickSplit && quickSplit.groupId === g.id
-      ? [
-          {
-            text: "👥 50-50 with " + pillLabel(quickSplit.otherName, "partner"),
-            callback_data: "gsp:" + txn.id + ":" + g.id + ":50"
-          },
-          { text: "More ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
-        ]
-      : [{ text: "👥 Split with " + (g.name || "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id }]
+  const rows = [];
+  if (!txn.category) rows.push(...quickCategoryRows(txn.id, txn.direction));
+  rows.push(
+    ...(groups || []).map((g) =>
+      quickSplit && quickSplit.groupId === g.id
+        ? [
+            {
+              text: "👥 50-50 with " + pillLabel(quickSplit.otherName, "partner"),
+              callback_data: "gsp:" + txn.id + ":" + g.id + ":50"
+            },
+            { text: "More ▾", callback_data: "gnav:" + txn.id + ":" + g.id }
+          ]
+        : [{ text: "👥 Split with " + (g.name || "Group") + " ▾", callback_data: "gnav:" + txn.id + ":" + g.id }]
+    )
   );
   rows.push(pillsRow(txn.id, txn.merchant, txn.category));
   return { inline_keyboard: rows };

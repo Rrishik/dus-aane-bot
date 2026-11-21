@@ -74,7 +74,7 @@ export const CURRENCY_SYMBOLS = {
 
 export const TAG_MAX_LEN = 18;
 export const MAX_GROUP_MEMBERS = 4;
-export const FREE_ASK_LIMIT = 5;
+export const FREE_ASK_LIMIT = 20;
 export const SMS_PASTE_MAX = 10;
 export const BOT_INBOX_EMAIL = "dusaanebot.inbox@gmail.com";
 

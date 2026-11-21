@@ -9,7 +9,7 @@ This bot runs on **your** infrastructure: a Cloudflare Worker with a Cloudflare 
 - The bot never sees OTPs, statements, login codes, marketing, or anything else not on the allowlist.
 - Transactions are stored in the deployment's D1 database, scoped to your Telegram chat. Nobody else using the bot can see them.
 - Bank emails and SMS are read by a deterministic parser first. The LLM (Azure OpenAI) only sees a message when the parser can't read it confidently, when the parser is in comparison ("shadow") mode, or when you tap 🔄 Re-read.
-- `/export` gives you all your data; `/deletemydata` removes it.
+- Ask in plain English to export all your data (CSV or Google Sheet) or to delete all your data (confirmed via button).
 
 ## What the bot reads
 
@@ -38,7 +38,7 @@ A forwarded email or pasted SMS is sent to Azure OpenAI when:
 
 **For extraction, the LLM sees** one message body at a time, a fixed system prompt and the category list. When it's unsure of a category it can look up a merchant name in the merchant rules (the deployment's shared defaults and your own corrections) and gets back that merchant's category.
 
-**For `/ask`, the LLM sees** your question, the follow-ups in that conversation, and the results of the tools it calls on **your** data only: totals and breakdowns, and, for `search_transactions`, the matching transactions (date, merchant, amount, currency, category, type, forwarder). It can't query anyone else's data.
+**For chat messages, the LLM sees** your plain-English request, any follow-ups in that conversation, and the results of the tools the specialist agent calls on **your** data only (spending totals, breakdowns, account status, or matching transactions). Bank SMS matching deterministic templates, inline button taps, and bare onboarding email replies are handled directly in code without calling the LLM. It can't query anyone else's data.
 
 Azure OpenAI's data handling follows Microsoft's Azure terms — prompts are not used for training. Review Microsoft's current policy; the code doesn't override it.
 
@@ -88,9 +88,9 @@ Transactions are kept until you delete them. Forwarded mail stays in the bot inb
 
 ## Export & deletion
 
-- **`/export`** — a CSV of all your transactions (or a month / date range), plus an optional Google Sheet copy.
-- **🗑️ Delete** on a card — removes that transaction from your stats and `/ask` (kept as deleted so the same message isn't re-imported).
-- **`/deletemydata`** — after a confirmation, removes your account, registered emails, transactions and their sources, merchant corrections, and settings. Group splits you paid are removed from the group's balances. What stays, so other members' balances still add up: your shares in splits other people paid, and settlements between you and them. Parser telemetry rows are kept with your chat id removed.
+- **Export** — ask for a CSV export of all your transactions (or a month / date range), plus an optional Google Sheet copy.
+- **🗑️ Delete** on a card — removes that transaction from your stats and queries (kept as deleted so the same message isn't re-imported).
+- **Delete all data** — ask `"delete all my data"` and confirm on the inline button prompt; removes your account, registered emails, transactions and their sources, merchant corrections, and settings. Group splits you paid are removed from the group's balances. What stays, so other members' balances still add up: your shares in splits other people paid, and settlements between you and them. Parser telemetry rows are kept with your chat id removed.
 - **Stop forwarding** — delete the Gmail filter and the forwarding address `dusaanebot.inbox@gmail.com` in your Gmail settings. Exported sheets and the old archive sheet aren't affected by `/deletemydata`; ask the admin to delete those.
 
 ## Telegram's own data

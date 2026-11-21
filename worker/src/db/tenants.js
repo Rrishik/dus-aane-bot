@@ -205,10 +205,10 @@ export async function groupsForMember(db, memberId) {
   return rows.results;
 }
 
-export async function setPinMessageId(db, groupId, pinMessageId) {
+export async function setPinMessageId(db, tenantId, pinMessageId) {
   await db
-    .prepare("UPDATE tenants SET pin_message_id = ? WHERE id = ? AND kind = 'group'")
-    .bind(pinMessageId == null ? null : String(pinMessageId), String(groupId))
+    .prepare("UPDATE tenants SET pin_message_id = ? WHERE id = ?")
+    .bind(pinMessageId == null ? null : String(pinMessageId), String(tenantId))
     .run();
 }
 

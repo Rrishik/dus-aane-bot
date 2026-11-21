@@ -6,7 +6,16 @@ import { getTenant } from "../src/db/tenants.js";
 import { putEphemeral } from "../src/db/ephemeral.js";
 import { logParserEvent, disableTemplate } from "../src/db/settings.js";
 import { TelegramError } from "../src/telegram/client.js";
-import { shouldNudge, formatParserDigest, runScheduled, nudgeDormantTenants } from "../src/app/cron.js";
+import {
+  shouldNudge,
+  formatParserDigest,
+  runScheduled,
+  nudgeDormantTenants,
+  sendDailyRecaps
+} from "../src/app/cron.js";
+import { handleUpdate } from "../src/app/webhook.js";
+import { listUntaggedTransactions } from "../src/db/transactions.js";
+import { ensurePersonalPin } from "../src/app/personalPin.js";
 
 const DAY = 86400000;
 // NOW is a Wednesday; these are the next matching weekdays at 08:00 IST.
@@ -131,5 +140,136 @@ describe("runScheduled", () => {
     await worker.scheduled({ scheduledTime: NOW }, { DB: testContext().db }, { waitUntil: (p) => waited.push(p) });
     expect(waited).toHaveLength(1);
     expect(await waited[0]).toEqual(["purge"]);
+  });
+
+  it("21:00 IST daily recap skips quiet users, summarizes today's spends + untagged count, and drives the 1-tap tagq_ stepper", async () => {
+    // 15:30 UTC on 2026-10-07 = 21:00 IST
+    const EVENING = Date.UTC(2026, 9, 7, 15, 30);
+    const ctx = testContext({ now: EVENING });
+    const alice = await seedTenant(ctx, "111");
+    await seedTenant(ctx, "222"); // quiet user — must receive nothing
+
+    // 1 categorized + 2 untagged (two payments to RAHUL + one to KIRANA)
+    await ingest(ctx, {
+      tenant: alice,
+      source: "sms",
+      sourceRef: "s-swiggy",
+      text: "Sent Rs.900.00 From HDFC Bank A/C *1234 To SWIGGY On 07/10/26 Ref 628012345678"
+    });
+    await ingest(ctx, {
+      tenant: alice,
+      source: "sms",
+      sourceRef: "s-rahul-1",
+      text: "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL 111 On 07/10/26 Ref 628011111111"
+    });
+    await ingest(ctx, {
+      tenant: alice,
+      source: "sms",
+      sourceRef: "s-rahul-2",
+      text: "Sent Rs.150.00 From HDFC Bank A/C *1234 To RAHUL 222 On 06/10/26 Ref 628022222222"
+    });
+    await ingest(ctx, {
+      tenant: alice,
+      source: "sms",
+      sourceRef: "s-kirana",
+      text: "Sent Rs.250.00 From HDFC Bank A/C *1234 To KIRANA STORE On 07/10/26 Ref 628033333333"
+    });
+    ctx.tg.calls.length = 0;
+
+    expect(await runScheduled(ctx, EVENING)).toEqual(["daily_recap"]);
+    const sent = ctx.tg.of("sendMessage");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].args[0]).toBe("111");
+    expect(sent[0].args[1]).toContain("*Today's Recap*");
+    expect(sent[0].args[1]).toContain("*3 expenses need a category*");
+    expect(sent[0].args[2].reply_markup.inline_keyboard[0][0]).toEqual({
+      text: "🏷 Categorize 3 untagged",
+      callback_data: "tagq_next"
+    });
+    const recapMsgId = sent[0].result.message_id;
+
+    // Open stepper -> shows Kirana Store (most recent untagged, 1 of 3 left).
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb1",
+        data: "tagq_next",
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: recapMsgId }
+      }
+    });
+    let edit = ctx.tg.of("editMessageText").at(-1).args;
+    expect(edit[2]).toContain("1 of 3 left");
+    expect(edit[2]).toContain("Kirana Store");
+    const kiranaCatCall = edit[3].reply_markup.inline_keyboard[0][1].callback_data; // Groceries (index 1)
+
+    // Categorize Kirana -> Groceries; advances automatically to Rahul 111 (1 of 2 left).
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb2",
+        data: kiranaCatCall,
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: recapMsgId }
+      }
+    });
+    edit = ctx.tg.of("editMessageText").at(-1).args;
+    expect(edit[2]).toContain("1 of 2 left");
+    expect(edit[2]).toContain("Rahul 111");
+    const rahulFoodCall = edit[3].reply_markup.inline_keyboard[0][2].callback_data; // Food (index 2)
+
+    // Categorize Rahul 111 -> Food; shortened rule "rahul" auto-fills Rahul 222 too -> All caught up!
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb3",
+        data: rahulFoodCall,
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: recapMsgId }
+      }
+    });
+    expect(await listUntaggedTransactions(ctx.db, "111")).toHaveLength(0);
+    expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("*All caught up!*");
+
+    // Quiet user check via direct stats
+    ctx.tg.calls.length = 0;
+    const stats = await sendDailyRecaps(ctx);
+    // Alice still had todayRows > 0 so sent: 1, Bob had 0 today & 0 untagged so skipped: 1
+    expect(stats).toMatchObject({ sent: 1, skipped: 1 });
+  });
+
+  it("personal live pin updates automatically on ingest and category fixes, and stats_back restores it", async () => {
+    const ctx = testContext({ now: NOW });
+    const alice = await seedTenant(ctx, "111");
+    const pin = await ensurePersonalPin(ctx, "111");
+    expect(pin.created).toBe(true);
+    expect(ctx.tg.of("pinChatMessage")).toHaveLength(1);
+
+    await ingest(ctx, {
+      tenant: alice,
+      source: "sms",
+      sourceRef: "s-1",
+      text: "Sent Rs.500.00 From HDFC Bank A/C *1234 To RAHUL On 07/10/26 Ref 628099998888"
+    });
+    const pinEdit = ctx.tg.of("editMessageText").find((c) => c.args[1] === pin.messageId);
+    expect(pinEdit.args[2]).toContain("₹500 spent");
+    expect(pinEdit.args[2]).toContain("🏷 1 untagged");
+
+    // Navigate to Recent inside the pinned message, then Back restores the live pin text!
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb-r",
+        data: "stats_recent",
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: pin.messageId }
+      }
+    });
+    expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("*Recent Transactions*");
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb-b",
+        data: "stats_back",
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: pin.messageId }
+      }
+    });
+    expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("📌 *Oct 2026* · ₹500 spent · 🏷 1 untagged");
   });
 });

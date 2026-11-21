@@ -4,15 +4,24 @@ import { getTenant, getTenantEmails } from "../db/tenants.js";
 import { recentMessage, statsMenuKeyboard, sendSetupEmail } from "./commands.js";
 import { monthlyTrends, weeklyTrends, formatTrendsMessage } from "./analytics.js";
 import { isUsable, gateText } from "./onboarding.js";
-import { handleCardAction } from "./cardActions.js";
+import { handleCardAction, handleTagQueueCallback } from "./cardActions.js";
 import { isGroupCallback, handleGroupCallback } from "./groups.js";
 import { handleAskFollowUp } from "./ask.js";
 import { handleExportSheet, handleWipeCallback } from "./data.js";
+import { personalPinData, formatPersonalPin, personalPinKeyboard } from "./personalPin.js";
 
 const statsBackRow = [{ text: "🔙 Back", callback_data: "stats_back" }];
 
-export async function handleStatsCallback(ctx, chatId, messageId, view) {
+export async function handleStatsCallback(ctx, chatId, messageId, view, tenant) {
   if (view === "back") {
+    if (tenant && tenant.pin_message_id && Number(tenant.pin_message_id) === Number(messageId)) {
+      const data = await personalPinData(ctx, chatId);
+      await ctx.tg.editMessageText(chatId, messageId, formatPersonalPin(data), {
+        disable_web_page_preview: true,
+        reply_markup: personalPinKeyboard(data.untaggedCount)
+      });
+      return;
+    }
     await ctx.tg.editMessageText(chatId, messageId, "📊 *Stats* — pick a view:", { reply_markup: statsMenuKeyboard() });
     return;
   }
@@ -82,7 +91,10 @@ export async function handleCallback(ctx, cb) {
   const action = sep < 0 ? data : data.slice(0, sep);
   const payload = sep < 0 ? "" : data.slice(sep + 1);
 
-  if (action === "stats") return handleStatsCallback(ctx, chatId, messageId, payload);
+  if (action === "stats") return handleStatsCallback(ctx, chatId, messageId, payload, tenant);
+  if (action === "tagq" || action === "tagqc") {
+    return handleTagQueueCallback(ctx, { chatId, messageId, action, payload });
+  }
   if (action === "askfu") return handleAskFollowUp(ctx, chatId, messageId);
   if (action === "export" && payload.startsWith("sheet_")) return handleExportSheet(ctx, chatId, payload.slice(6));
   if (data === "premium_info") {

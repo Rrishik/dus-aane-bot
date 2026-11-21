@@ -189,6 +189,32 @@ export async function listTransactions(db, tenantId, opts = {}) {
   ).results;
 }
 
+// Confirmed transactions still missing a category (so they fall into
+// "Uncategorized" in analytics until the user tags them).
+export async function listUntaggedTransactions(db, tenantId, { from, to, limit = 25 } = {}) {
+  const where = ["tenant_id = ?", "status = 'confirmed'", "(category IS NULL OR category = '')"];
+  const params = [String(tenantId)];
+  if (from) {
+    where.push("occurred_on >= ?");
+    params.push(from);
+  }
+  if (to) {
+    where.push("occurred_on <= ?");
+    params.push(to);
+  }
+  params.push(limit);
+  return (
+    await db
+      .prepare(
+        "SELECT * FROM transactions WHERE " +
+          where.join(" AND ") +
+          " ORDER BY occurred_on DESC, created_at DESC LIMIT ?"
+      )
+      .bind(...params)
+      .all()
+  ).results;
+}
+
 // Is this incoming read the same payment as an existing transaction?
 //   strength "reference" — same UPI ref / RRN / UTR and direction: certain.
 //   strength "account"   — same account/card, amount, currency, direction,

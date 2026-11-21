@@ -4,8 +4,12 @@
 import { listTenants, recordNag, setTenantStatus } from "../db/tenants.js";
 import { purgeExpired } from "../db/ephemeral.js";
 import { getParserMode, getDisabledTemplates, parserEventSummary } from "../db/settings.js";
+import { listEffectiveTransactions } from "../db/analytics.js";
+import { listUntaggedTransactions } from "../db/transactions.js";
 import { weekRangeFor, weeklyDigestData, formatWeeklyMessage } from "./analytics.js";
-import { istDate } from "../util/dates.js";
+import { refreshPersonalPin } from "./personalPin.js";
+import { escapeMarkdown, money, shortCategoryName, formatDayMonth } from "./format.js";
+import { istDate, shiftIsoDate } from "../util/dates.js";
 
 const DAY_MS = 86400000;
 const IST_OFFSET_MS = 5.5 * 3600 * 1000;
@@ -123,12 +127,109 @@ export async function sendParserDigest(ctx) {
   await ctx.tg.sendMessage(ctx.adminChatId, text);
 }
 
+// ─── 21:00 IST daily recap + untagged reminder ───────────────────────
+
+export function formatDailyRecap(todayIso, todayRows, untaggedRows) {
+  const spendRows = todayRows.filter((r) => r.kind === "spend");
+  const spendByCurrency = {};
+  for (const r of spendRows) spendByCurrency[r.currency] = (spendByCurrency[r.currency] || 0) + r.effective_minor;
+  const spendText = Object.keys(spendByCurrency)
+    .map((c) => money(spendByCurrency[c], c))
+    .join(" + ");
+
+  const lines = [];
+  if (todayRows.length > 0) {
+    lines.push("🌙 *Today's Recap* _(" + escapeMarkdown(formatDayMonth(todayIso)) + ")_");
+    lines.push(
+      spendRows.length > 0
+        ? "Spent *" + spendText + "* across " + spendRows.length + " transaction" + (spendRows.length === 1 ? "" : "s")
+        : todayRows.length + " transaction" + (todayRows.length === 1 ? "" : "s") + " recorded today"
+    );
+    lines.push("");
+    for (const r of todayRows.slice(0, 5)) {
+      const label = escapeMarkdown(r.merchant || r.merchant_raw || "Untagged");
+      const cat = r.category ? escapeMarkdown(shortCategoryName(r.category)) : "_needs category_";
+      lines.push("• *" + label + "* — " + money(r.effective_minor, r.currency) + " · " + cat);
+    }
+    if (todayRows.length > 5) lines.push("_+" + (todayRows.length - 5) + " more today_");
+  } else {
+    lines.push("🏷 *Untagged Expenses*");
+  }
+
+  if (untaggedRows.length > 0) {
+    if (todayRows.length > 0) lines.push("");
+    lines.push(
+      "🏷 *" +
+        untaggedRows.length +
+        " expense" +
+        (untaggedRows.length === 1 ? " needs" : "s need") +
+        " a category* — tagging sharpens your category insights."
+    );
+    const earlier = untaggedRows.filter((u) => u.occurred_on !== todayIso).slice(0, 4);
+    for (const u of earlier) {
+      const label = escapeMarkdown(u.merchant || u.merchant_raw || "Untagged");
+      lines.push(
+        "• " +
+          escapeMarkdown(formatDayMonth(u.occurred_on)) +
+          " · *" +
+          label +
+          "* — " +
+          money(u.amount_minor, u.currency)
+      );
+    }
+    lines.push("", '_Tap below for 1-tap pills, or reply in plain English (e.g. "Rahul is Food")._');
+  }
+  return lines.join("\n");
+}
+
+export async function sendDailyRecaps(ctx) {
+  const today = istDate(ctx.now());
+  const weekAgo = shiftIsoDate(today, -7);
+  const stats = { sent: 0, skipped: 0, dormant: 0, failed: 0 };
+  for (const t of await listTenants(ctx.db, { kind: "personal", statuses: ["active"] })) {
+    try {
+      await refreshPersonalPin(ctx, t.id);
+      const [todayRows, untagged] = await Promise.all([
+        listEffectiveTransactions(ctx.db, t.id, { from: today, to: today }),
+        listUntaggedTransactions(ctx.db, t.id, { from: weekAgo, to: today, limit: 25 })
+      ]);
+      if (todayRows.length === 0 && untagged.length === 0) {
+        stats.skipped++;
+        continue;
+      }
+      const opts = { disable_web_page_preview: true };
+      if (untagged.length > 0) {
+        opts.reply_markup = {
+          inline_keyboard: [[{ text: "🏷 Categorize " + untagged.length + " untagged", callback_data: "tagq_next" }]]
+        };
+      }
+      await ctx.tg.sendMessage(t.id, formatDailyRecap(today, todayRows, untagged), opts);
+      stats.sent++;
+    } catch (e) {
+      if (e && e.code === 403) {
+        await setTenantStatus(ctx.db, t.id, "dormant");
+        stats.dormant++;
+      } else {
+        stats.failed++;
+        console.error("[daily_recap] " + t.id + ":", e && e.message);
+      }
+    }
+  }
+  console.log("[daily_recap]", JSON.stringify(stats));
+  return stats;
+}
+
 export async function runScheduled(ctx, scheduledTime) {
-  const weekday = new Date(scheduledTime + IST_OFFSET_MS).getUTCDay();
-  const jobs = [["purge", () => purgeExpired(ctx.db, ctx.now())]];
-  if (weekday === 5) jobs.push(["digest", () => sendWeeklyDigests(ctx)]);
-  if (weekday === 2) jobs.push(["nudge", () => nudgeDormantTenants(ctx)]);
-  if (weekday === 1) jobs.push(["parser", () => sendParserDigest(ctx)]);
+  const ist = new Date(scheduledTime + IST_OFFSET_MS);
+  const istHour = ist.getUTCHours();
+  const weekday = ist.getUTCDay();
+  const jobs =
+    istHour >= 18 ? [["daily_recap", () => sendDailyRecaps(ctx)]] : [["purge", () => purgeExpired(ctx.db, ctx.now())]];
+  if (istHour < 18) {
+    if (weekday === 5) jobs.push(["digest", () => sendWeeklyDigests(ctx)]);
+    if (weekday === 2) jobs.push(["nudge", () => nudgeDormantTenants(ctx)]);
+    if (weekday === 1) jobs.push(["parser", () => sendParserDigest(ctx)]);
+  }
   for (const [name, job] of jobs) {
     try {
       await job();

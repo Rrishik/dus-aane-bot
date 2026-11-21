@@ -28,6 +28,7 @@ max_batch_size = 1
 max_batch_timeout = 0
 max_retries = 0
 
-# 08:00 IST daily; src/app/cron.js picks the jobs by IST weekday.
+# 08:00 IST daily (purge + weekly jobs by IST weekday) and 21:00 IST daily
+# (evening spend recap + untagged reminder).
 [triggers]
-crons = ["30 2 * * *"]
+crons = ["30 2 * * *", "30 15 * * *"]

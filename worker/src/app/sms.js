@@ -1,6 +1,6 @@
 // Pasted bank SMS → transactions. Each SMS gets a content-hash source ref
 // (sms-<16 hex>), so pasting the same text twice is a no-op.
-import { looksLikeTransactionText, splitSmsPaste, normalizeTransactionText } from "../parser/index.js";
+import { looksLikeTransactionText, isStrictBankSms, splitSmsPaste, normalizeTransactionText } from "../parser/index.js";
 import { sha256Hex } from "./auth.js";
 import { ingest } from "./ingest.js";
 import { SMS_PASTE_MAX } from "./constants.js";
@@ -10,10 +10,11 @@ export async function smsSourceRef(sms) {
   return "sms-" + (await sha256Hex(normalizeTransactionText(sms).toLowerCase())).slice(0, 16);
 }
 
-// Returns false when the text isn't a paste (no amount) so the caller can
-// stay silent, true when handled.
-export async function handleSmsPaste(ctx, tenant, chatId, text) {
-  if (!looksLikeTransactionText(text)) return false;
+// Returns false when the text isn't a bank SMS paste so the caller can pass it
+// to the conversational orchestrator, or true when handled. `force: true` is
+// used by the unlisted `/sms` escape hatch and the orchestrator's ingest tool.
+export async function handleSmsPaste(ctx, tenant, chatId, text, { force = false } = {}) {
+  if (!(force ? looksLikeTransactionText(text) : isStrictBankSms(text))) return false;
   if (!tenant || (!isUsable(tenant) && tenant.status !== "pending")) {
     await ctx.tg.sendMessage(chatId, gateText(tenant));
     return true;

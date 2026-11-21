@@ -22,6 +22,7 @@ import {
   groupBalances
 } from "../db/splits.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
+import { refreshPersonalPin } from "./personalPin.js";
 import { MAX_GROUP_MEMBERS } from "./constants.js";
 import { escapeMarkdown, money, currencySymbol, formatAmount, shortCategoryName } from "./format.js";
 import { isUsable } from "./onboarding.js";
@@ -362,10 +363,13 @@ export async function undoGroupLink(ctx, { payerId, txnId }) {
 // ─── Live balance pin ────────────────────────────────────────────────
 
 export async function refreshBalancesPin(ctx, group) {
-  if (!group || group.status !== "active" || group.pin_message_id === PIN_SKIP) return;
+  if (!group || group.status !== "active") return;
+  const members = await getGroupMembers(ctx.db, group.id);
+  for (const m of members) await refreshPersonalPin(ctx, m);
+  if (group.pin_message_id === PIN_SKIP) return;
   try {
     const names = {};
-    for (const m of await getGroupMembers(ctx.db, group.id)) names[m] = await memberName(ctx, group.id, m);
+    for (const m of members) names[m] = await memberName(ctx, group.id, m);
     const text = formatBalancesPin(
       simplifyDebts(await groupBalances(ctx.db, group.id)),
       (id) => names[id] || id,
@@ -620,7 +624,7 @@ export async function handleGroupStart(ctx, m) {
       "",
       "*Need to register:* " +
         unregistered.map((r) => escapeMarkdown(r.name)).join(", ") +
-        " — DM me `/register` first."
+        " — DM me your Gmail address first."
     );
   }
   await ctx.tg.sendMessage(chatId, prefix + lines.join("\n"), { disable_web_page_preview: true });
@@ -631,7 +635,7 @@ export async function handleGroupStart(ctx, m) {
         u.id,
         "👋 You've been added to *" +
           escapeMarkdown(groupName) +
-          "* on Dus Aane Bot.\n\nTo start splitting expenses, send me `/register your.email@gmail.com` here in DM."
+          "* on Dus Aane Bot.\n\nTo start splitting expenses, reply here in DM with your Gmail address (e.g. `your.email@gmail.com`)."
       );
     } catch (_) {}
   }
@@ -836,7 +840,7 @@ async function memberChanged(ctx, ev) {
           uid,
           "👋 You've been added to *" +
             escapeMarkdown(group.name || "a group") +
-            "* on Dus Aane Bot.\n\nSend me `/register your.email@gmail.com` here in DM to start splitting expenses with the group."
+            "* on Dus Aane Bot.\n\nReply here in DM with your Gmail address (e.g. `your.email@gmail.com`) to start splitting expenses with the group."
         );
       } catch (_) {}
     }

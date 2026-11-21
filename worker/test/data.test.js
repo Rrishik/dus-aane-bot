@@ -52,8 +52,17 @@ describe("/export", () => {
     );
   });
 
-  it("sends a CSV with your share for split rows, and a Sheets button", async () => {
-    const { ctx, ids } = await withTxns();
+  it("sends a CSV with your share for split rows via AccountOpsAgent, and a Sheets button", async () => {
+    const expCall = (range) => ({
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        { id: "ex", type: "function", function: { name: "export_transactions", arguments: JSON.stringify({ range }) } }
+      ]
+    });
+    const { ctx, ids } = await withTxns({
+      llmReplies: [expCall(""), "", expCall("2026-09"), "", expCall("2025-01"), ""]
+    });
     await seedTenant(ctx, "222");
     await seedGroup(ctx, "-100", ["111", "222"]);
     await createSplit(ctx.db, {
@@ -66,7 +75,7 @@ describe("/export", () => {
         { holderId: "222", amountMinor: 45000 }
       ]
     });
-    await handleUpdate(ctx, msg("/export"));
+    await handleUpdate(ctx, msg("export all my transactions"));
     const [doc] = ctx.tg.of("sendDocument");
     const { filename, content, caption, replyMarkup } = doc.args[1];
     expect(filename).toBe("dus-aane-bot-all.csv");
@@ -77,9 +86,9 @@ describe("/export", () => {
     expect(lines[2]).toMatch(/^2026-10-07,.*,900,INR,Debit,.*,450,1234,628012345678,/);
     expect(replyMarkup.inline_keyboard[0][0].callback_data).toBe("export_sheet_all");
 
-    await handleUpdate(ctx, msg("/export 2026-09"));
+    await handleUpdate(ctx, msg("export september 2026 csv"));
     expect(ctx.tg.of("sendDocument")[1].args[1].caption).toBe("1 transactions · 2026-09-01 → 2026-09-30");
-    await handleUpdate(ctx, msg("/export 2025-01"));
+    await handleUpdate(ctx, msg("export jan 2025 csv"));
     expect(ctx.tg.of("sendMessage").at(-1).args[1]).toContain("No transactions");
   });
 
@@ -112,10 +121,16 @@ describe("/export", () => {
   });
 });
 
-describe("/deletemydata", () => {
-  it("asks first; Keep leaves everything", async () => {
-    const { ctx } = await withTxns();
-    await handleUpdate(ctx, msg("/deletemydata"));
+describe("delete my data", () => {
+  const delCall = () => ({
+    role: "assistant",
+    content: null,
+    tool_calls: [{ id: "del", type: "function", function: { name: "prompt_delete_all_data", arguments: "{}" } }]
+  });
+
+  it("asks first via inline confirmation; Keep leaves everything", async () => {
+    const { ctx } = await withTxns({ llmReplies: [delCall(), ""] });
+    await handleUpdate(ctx, msg("delete all my data"));
     const kb = ctx.tg.of("sendMessage").at(-1).args[2].reply_markup.inline_keyboard[0];
     expect(kb.map((b) => b.callback_data)).toEqual(["wipe_yes", "wipe_no"]);
     await handleUpdate(ctx, tap("wipe_no"));
@@ -177,13 +192,13 @@ describe("/deletemydata", () => {
     expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("all your data is deleted");
 
     await handleUpdate(ctx, msg("/start"));
-    expect(ctx.tg.of("sendMessage").at(-1).args[1]).toContain("/register");
+    expect(ctx.tg.of("sendMessage").at(-1).args[1]).toContain("your.email@gmail.com");
   });
 
   it("works for pending tenants", async () => {
-    const ctx = testContext();
+    const ctx = testContext({ llmReplies: [delCall(), ""] });
     await seedTenant(ctx, "111", { status: "pending" });
-    await handleUpdate(ctx, msg("/deletemydata"));
+    await handleUpdate(ctx, msg("delete all my data"));
     await handleUpdate(ctx, tap("wipe_yes"));
     expect(await getTenant(ctx.db, "111")).toBeNull();
   });

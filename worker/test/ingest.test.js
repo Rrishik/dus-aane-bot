@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { testContext, seedTenant, seedGroup, llmTxn } from "./helpers/app.js";
 import { ingest } from "../src/app/ingest.js";
-import { getSources, listTransactions } from "../src/db/transactions.js";
+import { getSources, listTransactions, listUntaggedTransactions } from "../src/db/transactions.js";
 import { upsertMerchantRule } from "../src/db/merchantRules.js";
 import { setSetting, disableTemplate } from "../src/db/settings.js";
 
@@ -214,6 +214,23 @@ describe("ingest — merchant rules and cards", () => {
     });
     await ingest(ctx, email(tenant));
     expect((await listTransactions(ctx.db, "111"))[0].kind).toBe("card_payment");
+  });
+
+  it("leaves unknown UPI payees and generic merchantless debits uncategorized so they appear in listUntaggedTransactions", async () => {
+    const { ctx, tenant } = await setup({
+      llmReplies: [llmTxn({ merchant: "", category: "Shopping", amount: 250 })]
+    });
+    const rahulSms =
+      "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL SHARMA On 07/10/26 Ref 628011112222 Not You? Call 18002586161";
+    await ingest(ctx, sms(tenant, rahulSms, "sms-rahul"));
+    await ingest(ctx, email(tenant, "Rs.250.00 debited from A/C **1234 on 07-10-26.", "g-generic"));
+    await ingest(ctx, sms(tenant)); // Swiggy -> Food & Dining
+
+    const untagged = await listUntaggedTransactions(ctx.db, "111");
+    expect(untagged.map((r) => [r.merchant, r.category])).toEqual([
+      [null, null],
+      ["Rahul Sharma", null]
+    ]);
   });
 
   it("group members get a Split button per group on the card", async () => {

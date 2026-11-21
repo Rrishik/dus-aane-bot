@@ -20,8 +20,8 @@ export function gateText(tenant) {
   return tenant && tenant.status === "pending"
     ? "⏳ Your setup isn't active yet. Forward any bank email to `" +
         BOT_INBOX_EMAIL +
-        "` (or paste a bank SMS here) to activate, or run `/account` to resend setup instructions."
-    : "👋 I don't know this chat yet. Send `/start` to onboard.";
+        "` (or paste a bank SMS here) to activate, or ask me to resend setup instructions."
+    : "👋 I don't know this chat yet. Send `/start` or reply with your Gmail address to onboard.";
 }
 
 // Pending → active on the first real transaction (forwarded email or pasted
@@ -31,7 +31,7 @@ export async function activateWithWelcome(ctx, tenant) {
   try {
     await ctx.tg.sendMessage(
       tenant.id,
-      "🎉 *Your first transaction is in!*\n\nEvery bank email you forward (or SMS you paste) becomes a card here. Send /export any time for a copy of your data."
+      "🎉 *Your first transaction is in!*\n\nEvery bank email you forward (or SMS you paste) becomes a card here. Ask anything in plain English, or ask to export your data any time."
     );
   } catch (e) {
     console.error("[activate] welcome DM failed:", e && e.message);

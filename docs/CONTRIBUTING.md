@@ -9,12 +9,12 @@ The bot is a **Cloudflare Worker** (`worker/`) with a **D1** (SQLite) database. 
 ```
 worker/
   src/index.js          # Routes: Telegram webhook, /ingest/email, /internal/backfill, /healthz; cron; queue consumer
-  src/app/              # Bot logic: webhook.js (dispatch), commands, cards + cardActions, ingest, sms,
-                        #   groups, ask (/ask tools), cron (weekly jobs), data (/export, /deletemydata),
-                        #   appsScript.js + auth.js (signed calls to/from Apps Script)
+  src/app/              # Bot logic: webhook.js (dispatch), orchestrator.js (4-specialist router),
+                        #   cards + cardActions + personalPin, ingest, sms, groups, cron (08:00 & 21:00 IST),
+                        #   data (CSV/Sheet export, wipe), appsScript.js + auth.js (signed calls)
   src/db/               # D1 data layer — every query is scoped by tenant id
   src/parser/           # Deterministic parser: templates.js (data) + parser.js (rules, validation)
-  src/llm/, src/telegram/  # Azure OpenAI and Telegram clients
+  src/llm/, src/telegram/  # Azure OpenAI + zero-dep multi-agent runner (agents.js) and Telegram clients
   src/admin/            # Read-only admin dashboard (separate Worker, wrangler.admin.toml)
   migrations/           # D1 schema (NNNN_*.sql)
   scripts/              # set-webhook.mjs, smoke.mjs (run by CI)
@@ -68,16 +68,13 @@ Then add a parser template in [worker/src/parser/templates.js](../worker/src/par
 - Email templates are checked in `shadow` mode first (the `parser.mode` setting in D1's `settings` table): the LLM result is saved and the parser's read is only compared (`parser_events`). Switch to `on` once agreement is consistently high; the Monday parser digest shows the numbers.
 - If you change a template's behaviour, bump its version suffix so telemetry for the old and new versions stays separate.
 
-## Adding a command
+## Adding a conversational capability or specialist tool
 
-1. Write the handler (usually in `worker/src/app/commands.js`) and register it in `PERSONAL_COMMANDS` or `GROUP_COMMANDS` in `webhook.js`. Commands usable before registration also go in `ONBOARDING`.
-2. If it calls the LLM or Apps Script, add it to `SLOW_COMMANDS` in `worker/src/index.js` so it runs from the queue.
-3. Zero-argument commands can go in the slash menu: `PRIVATE_COMMANDS` / `GROUP_COMMANDS` in `worker/scripts/set-webhook.mjs` (applied on the next deploy).
-4. Document it in `README.md` and the `/help` text.
+Personal DMs are commandless (only `/start` and `/cancel` are slash commands in `worker/scripts/set-webhook.mjs`). To add a new capability:
 
-## Adding a `/ask` tool
-
-Add a definition to `ASK_TOOLS` and an implementation in `askToolExecutor` (`worker/src/app/ask.js`). Keep inputs flat and few — the LLM is better at short parameter lists. Tools only ever read the calling user's data.
+1. Add a tool schema to the appropriate specialist (`ANALYTICS_TOOLS`, `LEDGER_TOOLS`, `GROUP_TOOLS`, or `ACCOUNT_TOOLS`) and implement it in `askToolExecutor` (`worker/src/app/orchestrator.js`).
+2. Keep tool parameters flat and few, and always scope D1 reads/writes to the bound `tenantId` (`tid`), never an LLM argument.
+3. Document example phrases in `README.md`.
 
 ## Telegram formatting
 

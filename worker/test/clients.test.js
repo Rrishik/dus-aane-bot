@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createTelegram, TelegramError } from "../src/telegram/client.js";
 import { createLlm, runToolLoop, parseJsonContent, LlmError } from "../src/llm/azure.js";
+import { defineAgent, runAgentLoop } from "../src/llm/agents.js";
 
 const json = (status, body) => new Response(JSON.stringify(body), { status });
 
@@ -195,5 +196,114 @@ describe("runToolLoop", () => {
     expect(parseJsonContent('```json\n{"a":1}\n```')).toEqual({ a: 1 });
     expect(parseJsonContent("Sorry")).toBeNull();
     expect(parseJsonContent("{broken")).toBeNull();
+  });
+});
+
+describe("runAgentLoop (multi-agent handoffs)", () => {
+  const toolCall = (id, name, args = "{}") => ({ id, type: "function", function: { name, arguments: args } });
+
+  it("transfers 1-way from triage to a specialist, swaps prompt/tools, and reports quotaExempt", async () => {
+    const opsTool = { type: "function", function: { name: "export_csv", parameters: { type: "object" } } };
+    const opsAgent = defineAgent({
+      name: "account_ops",
+      description: "Exports and account setup",
+      instructions: (ctx) => "Ops specialist for " + ctx.user,
+      tools: [opsTool],
+      quotaExempt: true,
+      executeTool: vi.fn(async (name) => ({ ran: name }))
+    });
+    const analyticsAgent = defineAgent({
+      name: "analytics",
+      description: "Spending queries",
+      instructions: "Analytics specialist",
+      quotaExempt: false
+    });
+    const triage = defineAgent({
+      name: "triage",
+      instructions: "Route the user request",
+      handoffs: [analyticsAgent, opsAgent]
+    });
+
+    const seen = [];
+    const llm = {
+      async chat({ messages, tools }) {
+        seen.push({ system: messages[0].content, toolNames: tools.map((t) => t.function.name) });
+        if (seen.length === 1) {
+          return { message: { role: "assistant", tool_calls: [toolCall("h1", "route_to_account_ops")] } };
+        }
+        if (seen.length === 2) {
+          return { message: { role: "assistant", tool_calls: [toolCall("t1", "export_csv")] } };
+        }
+        return { message: { role: "assistant", content: "CSV exported." } };
+      }
+    };
+
+    const out = await runAgentLoop(llm, {
+      rootAgent: triage,
+      messages: [{ role: "user", content: "download my csv" }],
+      runCtx: { user: "Alice" }
+    });
+    expect(out).toMatchObject({
+      kind: "final",
+      content: "CSV exported.",
+      activeAgent: "account_ops",
+      quotaExempt: true,
+      iterations: 3
+    });
+    expect(seen[0]).toEqual({
+      system: "Route the user request",
+      toolNames: ["route_to_analytics", "route_to_account_ops"]
+    });
+    expect(seen[1]).toEqual({
+      system: "Ops specialist for Alice",
+      toolNames: ["export_csv"]
+    });
+  });
+
+  it("resumes directly in activeAgent after ask_user suspension and caps handoff loops", async () => {
+    const ledger = defineAgent({
+      name: "ledger",
+      instructions: "Ledger tagger",
+      quotaExempt: true
+    });
+    const other = defineAgent({
+      name: "other",
+      instructions: "Other",
+      handoffs: [ledger]
+    });
+    ledger.handoffs.push(other);
+    const triage = defineAgent({ name: "triage", instructions: "Triage", handoffs: [ledger] });
+
+    const { llm } = llmWith([
+      choice({ role: "assistant", tool_calls: [toolCall("h1", "route_to_ledger")] }),
+      choice({ role: "assistant", tool_calls: [toolCall("q1", "ask_user", '{"question":"Which category?"}')] }),
+      choice({ role: "assistant", content: "Tagged Food." })
+    ]);
+
+    const paused = await runAgentLoop(llm, {
+      rootAgent: triage,
+      messages: [{ role: "user", content: "tag rahul" }]
+    });
+    expect(paused).toMatchObject({ kind: "suspend", activeAgent: "ledger", quotaExempt: true });
+
+    const resumed = await runAgentLoop(llm, {
+      rootAgent: triage,
+      activeAgent: paused.activeAgent,
+      messages: paused.messages.concat([{ role: "tool", tool_call_id: "q1", content: "Food" }])
+    });
+    expect(resumed).toMatchObject({ kind: "final", content: "Tagged Food.", activeAgent: "ledger" });
+
+    // Handoff ping-pong stops once MAX_HANDOFFS_PER_TURN is reached.
+    const pingPongLlm = {
+      async chat() {
+        return { message: { role: "assistant", tool_calls: [toolCall("x", "route_to_other")] } };
+      }
+    };
+    const exhausted = await runAgentLoop(pingPongLlm, {
+      rootAgent: ledger,
+      messages: [{ role: "user", content: "loop" }],
+      maxIterations: 2
+    });
+    expect(exhausted.kind).toBe("exhausted");
   });
 });

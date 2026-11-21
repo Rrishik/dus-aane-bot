@@ -55,6 +55,40 @@ describe("category picker", () => {
     await handleUpdate(ctx, tap("cat_" + id + "_99"));
     expect(sent(ctx).at(-1)).toBe("❌ *Invalid category*");
   });
+
+  it("shows 1-tap quick category pills on uncategorized arrival cards, collapses on pick, and teaches shortened patterns", async () => {
+    const rahulSms =
+      "Sent Rs.400.00 From HDFC Bank A/C *1234 To RAHUL 9821 On 07/10/26 Ref 628011112222 Not You? Call 18002586161";
+    const { ctx, id } = await withCard({ text: rahulSms });
+    const initialRows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
+    expect(initialRows[0].map((b) => b.text)).toEqual(["🍕 Food", "🥦 Groceries", "🛍 Shopping"]);
+    expect(initialRows[1].map((b) => b.text)).toEqual(["✈️ Travel", "💡 Bills", "📂 More ▾"]);
+
+    // One tap on "🍕 Food" (index 2) sets category, collapses quick rows, and teaches shortened pattern.
+    await handleUpdate(ctx, tap("cat_" + id + "_2"));
+    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Food & Dining", kind: "spend" });
+    expect(lastMarkup(ctx).inline_keyboard).toHaveLength(1);
+    expect(lastMarkup(ctx).inline_keyboard[0][1].text).toBe("📂 Food ▾");
+    expect((await getMerchantRules(ctx.db, "111")).map((r) => [r.pattern, r.category])).toEqual(
+      expect.arrayContaining([
+        ["rahul 9821", "Food & Dining"],
+        ["rahul", "Food & Dining"]
+      ])
+    );
+  });
+
+  it("tagging an uncategorized row to a known brand auto-fills its category", async () => {
+    const rahulSms =
+      "Sent Rs.320.00 From HDFC Bank A/C *1234 To PAYTMQR 5544 On 07/10/26 Ref 628033334444 Not You? Call 18002586161";
+    const { ctx, id } = await withCard({ text: rahulSms });
+    await handleUpdate(ctx, tap("tag_" + id));
+    await handleUpdate(ctx, reply("Starbucks"));
+    expect(await getTransaction(ctx.db, "111", id)).toMatchObject({
+      merchant: "Starbucks",
+      category: "Food & Dining",
+      kind: "spend"
+    });
+  });
 });
 
 describe("🏷 tag", () => {
