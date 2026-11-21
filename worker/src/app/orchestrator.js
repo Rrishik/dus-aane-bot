@@ -1099,8 +1099,7 @@ export async function handleAskResume(ctx, m, tenant) {
   if (m.replyTo && m.replyTo.message_id) {
     convo = await takeEphemeral(ctx.db, convoKey(m.chatId, m.replyTo.message_id), ctx.now());
     if (convo) await deleteEphemeral(ctx.db, openAskKey(m.chatId));
-  }
-  if (!convo) {
+  } else {
     const open = await takeEphemeral(ctx.db, openAskKey(m.chatId), ctx.now());
     if (open && open.messageId) {
       convo = await takeEphemeral(ctx.db, convoKey(m.chatId, open.messageId), ctx.now());

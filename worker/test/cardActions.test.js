@@ -6,6 +6,7 @@ import { getTransaction, getSources } from "../src/db/transactions.js";
 import { getMerchantRules } from "../src/db/merchantRules.js";
 import { createSplit } from "../src/db/splits.js";
 import { getDisabledTemplates, logParserEvent } from "../src/db/settings.js";
+import { putEphemeral } from "../src/db/ephemeral.js";
 import { shortenMerchantPattern, parseAmountInput } from "../src/app/cardActions.js";
 import { categoriesFor } from "../src/app/constants.js";
 
@@ -101,7 +102,9 @@ describe("category picker", () => {
     });
     expect(ctx.tg.of("setMessageReaction")[0].args).toEqual(["111", 777, "👍"]);
 
-    // Swipe-reply with just a category emoji ("🍕")
+    // Swipe-reply with just a category emoji ("🍕"), even while an unrelated ask_user question is open!
+    await putEphemeral(ctx.db, "ask_open:111", { messageId: 9999 }, 600, ctx.now());
+    await putEphemeral(ctx.db, "ask:111:9999", { messages: [], askCallId: "q1", turn: 1 }, 600, ctx.now());
     await handleUpdate(ctx, {
       message: {
         message_id: 778,
@@ -111,6 +114,7 @@ describe("category picker", () => {
         reply_to_message: { message_id: cardMsgId }
       }
     });
+    expect(ctx.llm.calls).toHaveLength(0);
     expect((await getTransaction(ctx.db, "111", id)).category).toBe("Food & Dining");
   });
 
