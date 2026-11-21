@@ -10,7 +10,12 @@
 //                  delete-data prompt, live dashboard pin (exempt)
 import { defineAgent, runAgentLoop } from "../llm/agents.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
-import { getTransaction, updateTransaction, listUntaggedTransactions } from "../db/transactions.js";
+import {
+  getTransaction,
+  updateTransaction,
+  listUntaggedTransactions,
+  isUntaggedTransaction
+} from "../db/transactions.js";
 import { upsertMerchantRule } from "../db/merchantRules.js";
 import { getTenant, getTenantEmails, groupsForMember, getGroupMembers } from "../db/tenants.js";
 import { groupBalances, recordSettlement, setSettlementGroupMessage, deleteSettlement } from "../db/splits.js";
@@ -66,12 +71,25 @@ const SEARCH_TOOL = fn(
     ...DATE_PARAMS,
     merchant: { type: "string", description: "Merchant name (case-insensitive partial match)" },
     category: { type: "string", description: "Exact category filter" },
-    untagged_only: { type: "boolean", description: "When true, return only rows missing a category" },
+    untagged_only: {
+      type: "boolean",
+      description:
+        "When true, return only untagged rows (missing merchant/'Unknown' OR missing category/'Uncategorized')."
+    },
     user: { type: "string", description: "Forwarder filter (partial match)" },
     min_amount: { type: "number", description: "Minimum transaction amount" },
     max_amount: { type: "number", description: "Maximum transaction amount" },
     transaction_type: { type: "string", description: "Debit or Credit" },
     limit: { type: "number", description: "Max results to return. Default 10." }
+  }
+);
+
+const LIST_UNTAGGED_TOOL = fn(
+  "list_untagged_transactions",
+  "List confirmed transactions that are untagged — i.e. missing a merchant tag ('Unknown' / 'Untagged') OR missing a category ('Uncategorized'). Supports optional start_date and end_date filters.",
+  {
+    ...DATE_PARAMS,
+    limit: { type: "number", description: "Max rows to return. Default 15." }
   }
 );
 
@@ -109,13 +127,12 @@ export const ANALYTICS_TOOLS = [
     ["granularity"]
   ),
   SEARCH_TOOL,
+  LIST_UNTAGGED_TOOL,
   ASK_USER_TOOL
 ];
 
 export const LEDGER_TOOLS = [
-  fn("list_untagged_transactions", "List recent confirmed transactions that do not have a category yet.", {
-    limit: { type: "number", description: "Max rows to return. Default 15." }
-  }),
+  LIST_UNTAGGED_TOOL,
   SEARCH_TOOL,
   fn(
     "update_transaction",
@@ -238,7 +255,9 @@ export const ACCOUNT_TOOLS = [
 // Combined tool schema list preserved for compatibility / introspection.
 export const ASK_TOOLS = [
   ...ANALYTICS_TOOLS.filter((t) => t.function.name !== "ask_user"),
-  ...LEDGER_TOOLS.filter((t) => !["search_transactions", "ask_user"].includes(t.function.name)),
+  ...LEDGER_TOOLS.filter(
+    (t) => !["search_transactions", "list_untagged_transactions", "ask_user"].includes(t.function.name)
+  ),
   ...GROUP_TOOLS.filter((t) => !["search_transactions", "ask_user"].includes(t.function.name)),
   ...ACCOUNT_TOOLS.filter((t) => t.function.name !== "ask_user"),
   ASK_USER_TOOL
@@ -274,7 +293,12 @@ export function askSystemPrompt(today) {
     "\n- Available credit categories: " +
     CREDIT_CATEGORIES.join(", ") +
     "\n- Fix obvious merchant typos before searching (flipart → flipkart, swiggi → swiggy, amzn → amazon).\n" +
-    "- If untagged_count > 0 in category breakdown, briefly mention how many expenses still need categorizing.\n" +
+    "- An 'untagged' transaction is any row missing its merchant tag (Unknown/Untagged) OR missing its category (Uncategorized). Use list_untagged_transactions (passing start_date and end_date when a timeframe is given; e.g. 'past 2 days' means " +
+    shiftIsoDate(today, -2) +
+    " to " +
+    today +
+    ") to count or list them.\n" +
+    "- If untagged_count > 0 in category breakdown, briefly mention how many transactions still need tagging.\n" +
     "- If the user wants to tag/edit, split/settle, or export/backfill/manage their account, transfer via the matching route_to_* tool."
   );
 }
@@ -291,7 +315,12 @@ function ledgerSystemPrompt(today) {
     CATEGORIES.join(", ") +
     "\n- Credit categories: " +
     CREDIT_CATEGORIES.join(", ") +
-    "\n- Never guess transaction_id: find it via list_untagged_transactions or search_transactions first.\n" +
+    "\n- An 'untagged' transaction is any confirmed row missing its merchant tag (Unknown/Untagged) OR missing its category (Uncategorized). Call list_untagged_transactions (passing start_date and end_date when a timeframe is asked, e.g. 'past 2 days' = " +
+    shiftIsoDate(today, -2) +
+    " to " +
+    today +
+    ") to count or list them.\n" +
+    "- Never guess transaction_id: find it via list_untagged_transactions or search_transactions first.\n" +
     "- When multiple plausible rows match, call ask_user to disambiguate before mutating.\n" +
     "- When the user categorizes multiple items in one message (e.g. 'Rahul is Food, Kirana is Groceries'), call batch_update_transactions.\n" +
     "- Only call ingest_transaction_text when the user pasted a genuine bank/card payment alert that wasn't auto-saved. If a message like 'paid 500 to Rahul' matches an existing untagged ₹500 row from today, tag that row instead of creating a duplicate.\n" +
@@ -477,12 +506,12 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       const rows = await rowsFor(args);
       const spend = rows.filter((r) => r.kind === "spend");
       const credits = rows.filter((r) => r.direction === "credit");
-      const untagged = spend.filter((r) => !r.category);
+      const untagged = rows.filter(isUntaggedTransaction);
       return {
         total_transactions: rows.length,
         spend_count: spend.length,
         credit_count: credits.length,
-        untagged_spend_count: untagged.length,
+        untagged_count: untagged.length,
         spend_by_currency: sumByCurrency(spend),
         non_spend_debits_by_currency: sumByCurrency(rows.filter((r) => r.direction === "debit" && r.kind !== "spend")),
         credits_by_currency: sumByCurrency(credits)
@@ -490,8 +519,9 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
     },
 
     async get_category_breakdown(args) {
-      const debits = (await rowsFor(args)).filter((r) => r.direction === "debit");
-      const untaggedCount = debits.filter((r) => !r.category).length;
+      const allRows = await rowsFor(args);
+      const debits = allRows.filter((r) => r.direction === "debit");
+      const untaggedCount = allRows.filter(isUntaggedTransaction).length;
       return {
         untagged_count: untaggedCount,
         categories: aggregate(debits, (r) => r.category || "Uncategorized").map(({ rows, ...c }) => ({
@@ -543,7 +573,7 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
 
     async search_transactions(args) {
       let rows = await rowsFor(args);
-      if (args.untagged_only) rows = rows.filter((r) => !r.category);
+      if (args.untagged_only) rows = rows.filter(isUntaggedTransaction);
       if (args.merchant) {
         const m = String(args.merchant).toLowerCase();
         rows = rows.filter(
@@ -574,6 +604,7 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
             type: r.direction === "debit" ? "Debit" : "Credit",
             user: r.forwarder || ""
           };
+          if (isUntaggedTransaction(r)) out.untagged = true;
           if (r.split_id || r.settlement_id) {
             out.split = true;
             out.your_share = fromMinor(r.effective_minor);
@@ -584,17 +615,30 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
     },
 
     async list_untagged_transactions(args) {
-      const rows = await listUntaggedTransactions(ctx.db, tid, { limit: Math.min(25, Math.max(1, args.limit || 15)) });
+      const rows = await listUntaggedTransactions(ctx.db, tid, {
+        from: args.start_date,
+        to: args.end_date,
+        limit: Math.min(25, Math.max(1, args.limit || 15))
+      });
       return {
         count: rows.length,
-        transactions: rows.map((r) => ({
-          transaction_id: r.id,
-          date: r.occurred_on,
-          merchant: r.merchant || r.merchant_raw || "",
-          amount: fromMinor(r.amount_minor),
-          currency: r.currency,
-          type: r.direction === "debit" ? "Debit" : "Credit"
-        }))
+        transactions: rows.map((r) => {
+          const m = String(r.merchant || "").trim();
+          const c = String(r.category || "").trim();
+          const missingMerchant = !m || m.toLowerCase() === "unknown";
+          const missingCategory = !c || c.toLowerCase() === "uncategorized";
+          return {
+            transaction_id: r.id,
+            date: r.occurred_on,
+            merchant: missingMerchant ? "Untagged" : m,
+            category: missingCategory ? "Uncategorized" : c,
+            missing_merchant: missingMerchant,
+            missing_category: missingCategory,
+            amount: fromMinor(r.amount_minor),
+            currency: r.currency,
+            type: r.direction === "debit" ? "Debit" : "Credit"
+          };
+        })
       };
     },
 

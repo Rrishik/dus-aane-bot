@@ -189,10 +189,35 @@ export async function listTransactions(db, tenantId, opts = {}) {
   ).results;
 }
 
-// Confirmed transactions still missing a category (so they fall into
-// "Uncategorized" in analytics until the user tags them).
-export async function listUntaggedTransactions(db, tenantId, { from, to, limit = 25 } = {}) {
-  const where = ["tenant_id = ?", "status = 'confirmed'", "(category IS NULL OR category = '')"];
+export function isUntaggedTransaction(r) {
+  if (!r) return false;
+  const m = String(r.merchant || "")
+    .trim()
+    .toLowerCase();
+  const c = String(r.category || "")
+    .trim()
+    .toLowerCase();
+  return !m || m === "unknown" || !c || c === "uncategorized";
+}
+
+const UNTAGGED_WHERE_CLAUSE =
+  "((category IS NULL OR TRIM(category) = '' OR LOWER(TRIM(category)) = 'uncategorized') " +
+  "OR (merchant IS NULL OR TRIM(merchant) = '' OR LOWER(TRIM(merchant)) = 'unknown'))";
+
+// Confirmed transactions missing either a merchant tag ("🏷 Untagged" /
+// "Unknown") or a category ("📂 Uncategorized").
+export async function listUntaggedTransactions(
+  db,
+  tenantId,
+  { from, to, onlyMissingCategory = false, limit = 25 } = {}
+) {
+  const where = [
+    "tenant_id = ?",
+    "status = 'confirmed'",
+    onlyMissingCategory
+      ? "(category IS NULL OR TRIM(category) = '' OR LOWER(TRIM(category)) = 'uncategorized')"
+      : UNTAGGED_WHERE_CLAUSE
+  ];
   const params = [String(tenantId)];
   if (from) {
     where.push("occurred_on >= ?");

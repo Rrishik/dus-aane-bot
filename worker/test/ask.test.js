@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { testContext, seedTenant, seedGroup, llmTxn, NOW } from "./helpers/app.js";
 import { handleUpdate } from "../src/app/webhook.js";
 import { ingest } from "../src/app/ingest.js";
-import { getTransaction } from "../src/db/transactions.js";
+import { getTransaction, insertTransaction } from "../src/db/transactions.js";
 import { getMerchantRules } from "../src/db/merchantRules.js";
 import { getSplitForTransaction, createSplit } from "../src/db/splits.js";
 import { capHitMessage, askToolExecutor, classifyFastAgent } from "../src/app/ask.js";
@@ -264,6 +264,88 @@ describe("/ask", () => {
     expect(await run("show_dashboard", {})).toMatchObject({ ok: true });
     expect(await run("get_account_status", {})).toMatchObject({ ok: true, status: "active" });
     expect(await run("nope")).toEqual({ error: "Unknown tool: nope" });
+  });
+
+  it("treats Unknown (missing merchant) rows as untagged even when category is set, and filters by date range", async () => {
+    const { ctx } = await setup();
+    await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-07",
+        amountMinor: 89900,
+        currency: "INR",
+        direction: "debit",
+        kind: "transfer",
+        merchant: null,
+        category: "Transfer Out"
+      },
+      { source: "email", sourceRef: "g-unk-1" },
+      NOW
+    );
+    await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-06",
+        amountMinor: 8000,
+        currency: "INR",
+        direction: "credit",
+        kind: "transfer",
+        merchant: null,
+        category: "Transfer In"
+      },
+      { source: "email", sourceRef: "g-unk-2" },
+      NOW
+    );
+    await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-09-20",
+        amountMinor: 5000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        category: null
+      },
+      { source: "email", sourceRef: "g-old" },
+      NOW
+    );
+
+    const run = askToolExecutor(ctx, "111");
+    const recentUntagged = await run("list_untagged_transactions", {
+      start_date: "2026-10-05",
+      end_date: "2026-10-07"
+    });
+    expect(recentUntagged.count).toBe(2);
+    expect(recentUntagged.transactions).toEqual([
+      expect.objectContaining({
+        date: "2026-10-07",
+        amount: 899,
+        merchant: "Untagged",
+        category: "Transfer Out",
+        missing_merchant: true,
+        missing_category: false
+      }),
+      expect.objectContaining({
+        date: "2026-10-06",
+        amount: 80,
+        merchant: "Untagged",
+        category: "Transfer In",
+        missing_merchant: true,
+        missing_category: false
+      })
+    ]);
+
+    const searched = await run("search_transactions", {
+      start_date: "2026-10-05",
+      end_date: "2026-10-07",
+      untagged_only: true
+    });
+    expect(searched.count).toBe(2);
+    expect(searched.transactions.every((t) => t.untagged === true)).toBe(true);
   });
 
   it("cap message counts down to IST midnight", () => {

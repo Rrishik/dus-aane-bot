@@ -5,7 +5,8 @@ import {
   updateTransaction,
   softDeleteTransaction,
   updateSource,
-  listUntaggedTransactions
+  listUntaggedTransactions,
+  isUntaggedTransaction
 } from "../db/transactions.js";
 import { getMerchantRules, resolveMerchant, upsertMerchantRule } from "../db/merchantRules.js";
 import { touchActivity } from "../db/tenants.js";
@@ -570,10 +571,10 @@ export async function teachCategoryRules(db, tenantId, txn, category, now) {
   }
 }
 
-// Backfill newly taught personal merchant rules onto any other untagged
+// Backfill newly taught personal merchant rules onto any other uncategorized
 // transactions from the same payee so repeat merchants categorize in one tap.
 export async function applyLearnedCategoryToUntagged(ctx, tenantId) {
-  const untagged = await listUntaggedTransactions(ctx.db, tenantId, { limit: 50 });
+  const untagged = await listUntaggedTransactions(ctx.db, tenantId, { onlyMissingCategory: true, limit: 50 });
   if (!untagged.length) return 0;
   const rules = await getMerchantRules(ctx.db, tenantId);
   let filled = 0;
@@ -600,6 +601,13 @@ export async function applyLearnedCategoryToUntagged(ctx, tenantId) {
 function tagStepperKeyboard(txn) {
   const cats = txn.direction === "credit" ? CREDIT_CATEGORIES : CATEGORIES;
   const rows = [];
+  const missingMerchant = !txn.merchant || String(txn.merchant).trim().toLowerCase() === "unknown";
+  if (missingMerchant && txn.category) {
+    rows.push([
+      { text: "🏷 Name merchant", callback_data: "tag_" + txn.id },
+      { text: "✓ Keep as " + shortCategoryName(txn.category), callback_data: "tagqm_" + txn.id }
+    ]);
+  }
   for (let i = 0; i < cats.length; i += 3) {
     rows.push(
       cats.slice(i, i + 3).map((c, j) => ({
@@ -608,19 +616,31 @@ function tagStepperKeyboard(txn) {
       }))
     );
   }
-  rows.push([
-    { text: "🏷 Name merchant", callback_data: "tag_" + txn.id },
-    { text: "⏭ Skip", callback_data: "tagq_skip_" + txn.id }
-  ]);
+  const footer = [];
+  if (!(missingMerchant && txn.category)) footer.push({ text: "🏷 Name merchant", callback_data: "tag_" + txn.id });
+  footer.push({ text: "⏭ Skip", callback_data: "tagq_skip_" + txn.id });
+  rows.push(footer);
   return { inline_keyboard: rows };
 }
 
 export async function handleTagQueueCallback(ctx, { chatId, messageId, action, payload }) {
+  if (action === "tagqm") {
+    const txn = await getTransaction(ctx.db, chatId, payload);
+    if (txn && txn.status === "confirmed" && !txn.merchant) {
+      const fallbackName = shortCategoryName(txn.category) || (txn.direction === "credit" ? "Credit" : "Expense");
+      await updateTransaction(ctx.db, chatId, txn.id, { merchant: fallbackName }, ctx.now());
+      await refreshCardMessage(ctx, chatId, txn.id);
+      await refreshPersonalPin(ctx, chatId);
+    }
+    return renderNextUntaggedStep(ctx, chatId, messageId, null);
+  }
+
   if (action === "tagqc") {
     const sep = payload.lastIndexOf("_");
     const txnId = payload.slice(0, sep);
     const idx = parseInt(payload.slice(sep + 1), 10);
     const txn = await getTransaction(ctx.db, chatId, txnId);
+    let stillUntagged = false;
     if (txn && txn.status === "confirmed") {
       const list = categoriesFor(txn.direction);
       if (!isNaN(idx) && idx >= 0 && idx < list.length) {
@@ -632,9 +652,10 @@ export async function handleTagQueueCallback(ctx, { chatId, messageId, action, p
         await applyLearnedCategoryToUntagged(ctx, chatId);
         await refreshCardMessage(ctx, chatId, txn.id);
         await refreshPersonalPin(ctx, chatId);
+        stillUntagged = isUntaggedTransaction(txn);
       }
     }
-    return renderNextUntaggedStep(ctx, chatId, messageId, null);
+    return renderNextUntaggedStep(ctx, chatId, messageId, stillUntagged ? txnId : null);
   }
 
   const skipId = payload.startsWith("skip_") ? payload.slice(5) : null;

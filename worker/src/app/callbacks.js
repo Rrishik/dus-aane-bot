@@ -92,7 +92,7 @@ export async function handleCallback(ctx, cb) {
   const payload = sep < 0 ? "" : data.slice(sep + 1);
 
   if (action === "stats") return handleStatsCallback(ctx, chatId, messageId, payload, tenant);
-  if (action === "tagq" || action === "tagqc") {
+  if (action === "tagq" || action === "tagqc" || action === "tagqm") {
     return handleTagQueueCallback(ctx, { chatId, messageId, action, payload });
   }
   if (action === "askfu") return handleAskFollowUp(ctx, chatId, messageId);

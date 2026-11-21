@@ -92,17 +92,12 @@ export async function ingest(ctx, input) {
     if (resolved.personalCategory || !category || category === "Uncategorized") category = resolved.category;
   }
   if (!allowed.includes(category)) category = guessCategory(resolved.merchant, d.transaction_type) || null;
-  // Generic alerts with no merchant cannot have a confident spend category
-  // unless explicitly a card bill payment or investment.
-  if (
-    !resolved.merchant &&
-    !resolved.category &&
-    direction === "debit" &&
-    category &&
-    category !== "CC Bill Payment" &&
-    category !== "Investment"
-  ) {
-    category = null;
+  // Generic alerts with no merchant cannot have a confident spend/transfer
+  // category unless explicitly a card bill payment, salary, refund, cashback,
+  // interest/dividend, or investment.
+  if (!resolved.merchant && !resolved.category && category) {
+    const keepWithoutMerchant = ["CC Bill Payment", "Investment", "Salary", "Refund", "Cashback", "Interest/Dividend"];
+    if (!keepWithoutMerchant.includes(category)) category = null;
   }
 
   // The LLM may omit account/reference; the parser's read of the same text
