@@ -1,12 +1,14 @@
 // 1-tap in-place untagged stepper (driven from the 21:00 IST Daily Recap and
 // the pinned DM summary card). Also accepts direct 0-LLM swipe-replies (e.g.
 // "Kirana, Groceries" or "Starbucks") on the stepper message to name & advance.
+import { getTenant } from "../db/tenants.js";
 import { getTransaction, listUntaggedTransactions, isUntaggedTransaction } from "../db/transactions.js";
 import { getMerchantRules } from "../db/merchantRules.js";
 import { putEphemeral, getEphemeral, deleteEphemeral } from "../db/ephemeral.js";
 import { mutateTransaction } from "./ledger.js";
 import { parseCardQuickReply, applyCardQuickReply } from "./cardActions.js";
 import { cardText } from "./cards.js";
+import { refreshPersonalPin } from "./personalPin.js";
 import { CATEGORIES, CREDIT_CATEGORIES, CATEGORY_EMOJIS, categoriesFor } from "./constants.js";
 
 const STEPPER_TTL_SEC = 86400;
@@ -27,11 +29,75 @@ function tagStepperKeyboard(txn) {
       }))
     );
   }
-  rows.push([{ text: "⏭ Skip", callback_data: "tagq_skip_" + txn.id }]);
+  rows.push([
+    { text: "⏭ Skip", callback_data: "tagq_skip_" + txn.id },
+    { text: "✖ Done", callback_data: "tagq_done" }
+  ]);
   return { inline_keyboard: rows };
 }
 
+function stepBody(current, idx, total) {
+  const header = "🏷 *Categorize* _(" + (idx + 1) + " of " + total + " left)_\n\n";
+  return (
+    header + cardText(current, { extraLine: current.merchant ? "_Tap a category or swipe-reply a new name_" : null })
+  );
+}
+
+async function isPinnedMessage(db, chatId, messageId) {
+  const tenant = await getTenant(db, chatId);
+  return Boolean(tenant && tenant.pin_message_id && String(tenant.pin_message_id) === String(messageId));
+}
+
 export async function handleTagQueueCallback(ctx, { chatId, messageId, action, payload, ack }) {
+  if (action === "tagq" && payload === "done") {
+    await deleteEphemeral(ctx.db, stepperKey(chatId, messageId));
+    if (await isPinnedMessage(ctx.db, chatId, messageId)) {
+      await refreshPersonalPin(ctx, chatId);
+    } else {
+      let deleted = false;
+      try {
+        await ctx.tg.deleteMessage(chatId, messageId);
+        deleted = true;
+      } catch (_) {}
+      if (!deleted) {
+        await ctx.tg.editMessageText(
+          chatId,
+          messageId,
+          "👍 *Paused tagging.* Tap the pinned summary anytime to resume.",
+          {
+            reply_markup: { inline_keyboard: [] }
+          }
+        );
+      }
+    }
+    if (ack) await ack.toast("👍 Done");
+    return;
+  }
+
+  if (action === "tagq" && payload === "next" && (await isPinnedMessage(ctx.db, chatId, messageId))) {
+    const list = await listUntaggedTransactions(ctx.db, chatId, { limit: 25 });
+    if (list.length === 0) {
+      await refreshPersonalPin(ctx, chatId);
+      if (ack) await ack.toast("✅ All caught up!");
+      return;
+    }
+    const current = list[0];
+    const posted = await ctx.tg.sendMessage(chatId, stepBody(current, 0, list.length), {
+      reply_markup: tagStepperKeyboard(current)
+    });
+    if (posted && posted.message_id) {
+      await putEphemeral(
+        ctx.db,
+        stepperKey(chatId, posted.message_id),
+        { txnId: current.id },
+        STEPPER_TTL_SEC,
+        ctx.now()
+      );
+    }
+    if (ack) await ack.toast("🏷 Let's categorize");
+    return;
+  }
+
   if (action === "tagqm") {
     const txn = await getTransaction(ctx.db, chatId, payload);
     if (txn && txn.status === "confirmed" && !txn.merchant) {
@@ -96,15 +162,12 @@ async function renderNextUntaggedStep(ctx, chatId, messageId, skipId) {
   const list = await listUntaggedTransactions(ctx.db, chatId, { limit: 25 });
   if (list.length === 0) {
     await deleteEphemeral(ctx.db, stepperKey(chatId, messageId));
+    if (await isPinnedMessage(ctx.db, chatId, messageId)) {
+      await refreshPersonalPin(ctx, chatId);
+      return;
+    }
     await ctx.tg.editMessageText(chatId, messageId, "✅ *All caught up!*\nEvery recent transaction has a category.", {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "🕒 Recent", callback_data: "stats_recent" },
-            { text: "📉 Trends", callback_data: "stats_trends" }
-          ]
-        ]
-      }
+      reply_markup: { inline_keyboard: [] }
     });
     return;
   }
@@ -116,11 +179,7 @@ async function renderNextUntaggedStep(ctx, chatId, messageId, skipId) {
   }
   const current = list[idx];
   await putEphemeral(ctx.db, stepperKey(chatId, messageId), { txnId: current.id }, STEPPER_TTL_SEC, ctx.now());
-  const header = "🏷 *Categorize* _(" + (idx + 1) + " of " + list.length + " left)_\n\n";
-  await ctx.tg.editMessageText(
-    chatId,
-    messageId,
-    header + cardText(current, { extraLine: current.merchant ? "_Tap a category or swipe-reply a new name_" : null }),
-    { reply_markup: tagStepperKeyboard(current) }
-  );
+  await ctx.tg.editMessageText(chatId, messageId, stepBody(current, idx, list.length), {
+    reply_markup: tagStepperKeyboard(current)
+  });
 }

@@ -53,7 +53,7 @@ export function quickCategoryRows(txnId, direction) {
 export function level0Keyboard(txn, groups, quickSplit) {
   const rows = [];
   if (!txn.category) rows.push(...quickCategoryRows(txn.id, txn.direction));
-  const list = groups || [];
+  const list = txn.direction === "debit" ? groups || [] : [];
   const pills = pillsRow(txn.id, txn.category);
   if (list.length === 1) {
     const g = list[0];

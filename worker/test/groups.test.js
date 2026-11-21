@@ -86,6 +86,7 @@ describe("pure helpers (values frozen from the Apps Script originals)", () => {
     }
     const text = formatBalancesPin(per, (id) => id.toUpperCase(), "Flat");
     expect(text).toContain("• A → B: ₹5");
+    expect(text).not.toContain("*INR*");
     expect(text).not.toContain("GBP");
     expect(text).toContain("_+2 more currencies (see /stats)_");
     expect(formatBalancesPin({}, String, "Flat")).toContain("All settled up");
@@ -343,7 +344,52 @@ describe("split / settle / undo from the DM card", () => {
       .of("editMessageText")
       .filter((c) => c.args[0] === "-100" && c.args[1] === Number(split.group_message_id));
     expect(groupEdits.at(-1).args[2]).toContain("*Zepto* — ₹900");
-    expect(groupEdits.at(-1).args[2]).toContain("📂 Groceries");
+    expect(groupEdits.at(-1).args[2]).toContain("🥦 Groceries");
+  });
+
+  it("hides group split buttons on credit cards and refuses splitting credits", async () => {
+    const ctx = testContext();
+    const alice = await seedTenant(ctx, "111");
+    await seedTenant(ctx, "222");
+    await seedGroup(ctx, "-100", ["111", "222"], "Flat");
+    const creditSms =
+      "Rs.1500.00 credited to HDFC Bank A/c *1234 on 07-10-26 by a/c linked to VPA employer@hdfcbank (UPI Ref No 628099887766).";
+    const res = await ingest(ctx, { tenant: alice, source: "sms", sourceRef: "s-cred", text: creditSms });
+    const rows = ctx.tg.of("sendMessage")[0].args[2].reply_markup.inline_keyboard;
+    expect(rows.flat().some((b) => b.callback_data.startsWith("gsp:") || b.callback_data.startsWith("gnav:"))).toBe(
+      false
+    );
+    await handleUpdate(ctx, tap("gsp:" + res.transactionId + ":-100:50"));
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("Only money-out expenses can be split");
+    expect(await getSplitForTransaction(ctx.db, res.transactionId)).toBeNull();
+  });
+
+  it("syncs renamed group titles from new_chat_title events, /start, and DM /start", async () => {
+    const { ctx, id } = await groupWithCard();
+    await handleUpdate(ctx, tap("gsp:" + id + ":-100:50"));
+    const groupPinId = Number((await getTenant(ctx.db, "-100")).pin_message_id);
+
+    // Telegram new_chat_title service message updates tenant name and refreshes group pin.
+    await handleUpdate(ctx, {
+      message: {
+        chat: { id: -100, type: "supergroup", title: "💲Transactions" },
+        from: { id: 111, first_name: "U111" },
+        new_chat_title: "💲Transactions"
+      }
+    });
+    expect((await getTenant(ctx.db, "-100")).name).toBe("💲Transactions");
+    expect(
+      ctx.tg
+        .of("editMessageText")
+        .some((c) => c.args[0] === "-100" && c.args[1] === groupPinId && c.args[2].includes("*💲Transactions*"))
+    ).toBe(true);
+
+    // DM /start reconciles group titles via getChat when renamed while offline.
+    ctx.tg.getChat = async () => ({ id: -100, title: "Home Expenses" });
+    await handleUpdate(ctx, {
+      message: { chat: { id: 111, type: "private" }, from: { id: 111, first_name: "U111" }, text: "/start" }
+    });
+    expect((await getTenant(ctx.db, "-100")).name).toBe("Home Expenses");
   });
 });
 

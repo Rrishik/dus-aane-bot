@@ -9,8 +9,10 @@ import {
   removeGroupMember,
   setGroupMembers,
   setTenantStatus,
+  setTenantName,
   setPinMessageId,
-  addGroupInvite
+  addGroupInvite,
+  groupsForMember
 } from "../db/tenants.js";
 import {
   createSplit,
@@ -25,8 +27,8 @@ import {
 import { getTransaction } from "../db/transactions.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
-import { MAX_GROUP_MEMBERS } from "./constants.js";
-import { escapeMarkdown, money, currencySymbol, formatAmount, formatLongDate } from "./format.js";
+import { MAX_GROUP_MEMBERS, CATEGORY_EMOJIS } from "./constants.js";
+import { escapeMarkdown, money, currencySymbol, formatAmount, formatDayMonth } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { fromMinor, toMinor } from "../util/money.js";
 
@@ -162,8 +164,7 @@ export function formatBalancesPin(perCurrency, nameOf, groupName) {
   if (!ranked.length) return header + "\n\n✅ _All settled up._\n\n_Auto-updates after each split or settle._";
   const shown = ranked.slice(0, PIN_CURRENCY_CAP);
   const lines = [header, ""];
-  shown.forEach(({ ccy }, i) => {
-    lines.push("*" + escapeMarkdown(ccy) + "*");
+  for (const { ccy } of shown) {
     for (const e of perCurrency[ccy]) {
       lines.push(
         "• " +
@@ -174,8 +175,7 @@ export function formatBalancesPin(perCurrency, nameOf, groupName) {
           money(e.amountMinor, ccy)
       );
     }
-    if (i < shown.length - 1) lines.push("");
-  });
+  }
   const hidden = ranked.length - shown.length;
   if (hidden > 0) lines.push("", "_+" + hidden + " more currenc" + (hidden === 1 ? "y" : "ies") + " (see /stats)_");
   return lines.join("\n");
@@ -196,21 +196,24 @@ export function parseSettleCommand(text) {
 function splitNotification(txn, payerName, holders, shares, nameOf) {
   const amount = money(txn.amount_minor, txn.currency);
   const emoji = txn.direction === "debit" ? "🔴" : "🟢";
-  const lines = [
-    txn.merchant ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount : emoji + " *" + amount + "*"
-  ];
-  const date = escapeMarkdown(formatLongDate(txn.occurred_on));
-  lines.push(txn.category ? "📂 " + escapeMarkdown(txn.category) + " · " + date : "🗓 " + date);
-  lines.push("👤 *" + escapeMarkdown(payerName) + "* paid");
-  lines.push(
-    "👥 " +
-      holders
-        .map(
-          (h, i) => escapeMarkdown(nameOf(h)) + " " + currencySymbol(txn.currency) + formatAmount(fromMinor(shares[i]))
-        )
-        .join(" · ")
+  const title = txn.merchant
+    ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount
+    : emoji + " *" + amount + "*";
+  const cat = txn.category ? " · " + (CATEGORY_EMOJIS[txn.category] || "📂") + " " + escapeMarkdown(txn.category) : "";
+  const shareList = holders
+    .map((h, i) => escapeMarkdown(nameOf(h)) + " " + currencySymbol(txn.currency) + formatAmount(fromMinor(shares[i])))
+    .join(" · ");
+  return (
+    title +
+    " · _" +
+    escapeMarkdown(formatDayMonth(txn.occurred_on)) +
+    "_" +
+    cat +
+    "\n👤 *" +
+    escapeMarkdown(payerName) +
+    "* paid → " +
+    shareList
   );
-  return lines.join("\n");
 }
 
 function escapeHtml(s) {
@@ -232,6 +235,7 @@ export async function splitTransaction(ctx, { payerId, txnId, groupId, mode }) {
   if (!members.includes(payer)) return { ok: false, error: "You're not a member of this group." };
   const state = await loadCardState(ctx, payer, txnId);
   if (!state || state.txn.status !== "confirmed") return { ok: false, error: "Transaction not found." };
+  if (state.txn.direction !== "debit") return { ok: false, error: "Only money-out expenses can be split." };
   if (state.isSplit) return { ok: false, error: "Already split — undo first." };
   const set = computeSplitShareSet(members, payer, mode, state.txn.amount_minor);
   if (!set) return { ok: false, error: "Invalid split for this group." };
@@ -285,6 +289,7 @@ export async function settleTransaction(ctx, { payerId, txnId, groupId, target: 
   if (target === payer) return { ok: false, error: "Can't settle with yourself." };
   const state = await loadCardState(ctx, payer, txnId);
   if (!state || state.txn.status !== "confirmed") return { ok: false, error: "Transaction not found." };
+  if (state.txn.direction !== "debit") return { ok: false, error: "Only money-out expenses can be settled." };
   if (state.isSplit) return { ok: false, error: "Already split — undo first." };
 
   let settlementId;
@@ -635,8 +640,9 @@ export async function handleGroupStart(ctx, m) {
   }
   const existing = await getTenant(ctx.db, chatId);
   let prefix = "";
+  let renamedExisting = false;
   if (existing && existing.kind === "group") {
-    // Re-sync: add registered admins, keep members who joined since.
+    // Re-sync: add registered admins, keep members who joined since, and update title if renamed.
     const current = await getGroupMembers(ctx.db, chatId);
     const merged = [...current, ...registered.map((r) => r.id).filter((id) => !current.includes(id))].slice(
       0,
@@ -644,6 +650,10 @@ export async function handleGroupStart(ctx, m) {
     );
     await setGroupMembers(ctx.db, chatId, merged, ctx.now());
     if (existing.status !== "active") await setTenantStatus(ctx.db, chatId, "active");
+    if (chat.title && existing.name !== groupName) {
+      await setTenantName(ctx.db, chatId, groupName);
+      renamedExisting = true;
+    }
     prefix = "🔄 Already set up — re-synced member list.\n\n";
   } else {
     await createGroup(ctx.db, {
@@ -656,12 +666,19 @@ export async function handleGroupStart(ctx, m) {
   }
   const groupRow = await getTenant(ctx.db, chatId);
   const activeMembers = await getGroupMembers(ctx.db, chatId);
+  if (renamedExisting && groupRow) {
+    if (groupRow.pin_message_id && groupRow.pin_message_id !== PIN_SKIP) {
+      await refreshBalancesPin(ctx, groupRow);
+    } else {
+      for (const id of activeMembers) await refreshPersonalPin(ctx, id);
+    }
+  }
   const memberLabels = [];
   for (const id of activeMembers) memberLabels.push(escapeMarkdown(await memberName(ctx, chatId, id)));
   const ccy = (groupRow && groupRow.primary_currency) || "INR";
 
   const lines = [
-    "✅ *" + escapeMarkdown((existing && existing.name) || groupName) + "* is set up!",
+    "✅ *" + escapeMarkdown((groupRow && groupRow.name) || groupName) + "* is set up!",
     "Members (" +
       activeMembers.length +
       "/" +
@@ -691,6 +708,30 @@ export async function handleGroupStart(ctx, m) {
           "* on Dus Aane Bot.\n\nTo start splitting expenses, reply here in DM with your Gmail address (e.g. `your.email@gmail.com`)."
       );
     } catch (_) {}
+  }
+}
+
+export async function syncGroupTitle(ctx, chatId, title) {
+  const next = String(title || "").trim();
+  if (!next) return false;
+  const group = await activeGroup(ctx, chatId);
+  if (!group || group.name === next) return false;
+  await setTenantName(ctx.db, group.id, next);
+  const updated = { ...group, name: next };
+  if (updated.pin_message_id && updated.pin_message_id !== PIN_SKIP) {
+    await refreshBalancesPin(ctx, updated);
+  } else {
+    for (const m of await getGroupMembers(ctx.db, group.id)) await refreshPersonalPin(ctx, m);
+  }
+  return true;
+}
+
+// Reconcile group titles against live Telegram chat metadata (used on DM /start).
+export async function syncMemberGroupTitles(ctx, memberId) {
+  if (!ctx.tg.getChat) return;
+  for (const g of await groupsForMember(ctx.db, memberId)) {
+    const chat = await ctx.tg.getChat(g.id).catch(() => null);
+    if (chat && chat.title) await syncGroupTitle(ctx, g.id, chat.title);
   }
 }
 

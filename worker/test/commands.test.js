@@ -70,6 +70,7 @@ describe("commandless onboarding & account ops", () => {
     // First message is the pinned live summary, second is the plain-English guide.
     expect(texts(ctx)[1]).toMatch(/^📌 \*Oct 2026\*/);
     expect(texts(ctx)[2]).toMatch(/^\*Just type in plain English\*/);
+    expect(texts(ctx)[2]).not.toMatch(/_[^_\n]*`[^`\n]+`[^_\n]*_/);
     expect(ctx.tg.of("pinChatMessage")).toHaveLength(1);
   });
 

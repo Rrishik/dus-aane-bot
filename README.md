@@ -176,7 +176,7 @@ Want to host it for your friend group? One deployment serves everyone — they s
 1. **Fork** this repo. If you use a different bot inbox, change `BOT_INBOX_EMAIL` in [Constants.js](Constants.js) and [worker/src/app/constants.js](worker/src/app/constants.js).
 2. **Apps Script project** — `clasp login` as the bot Gmail → `clasp create --type standalone --title "dus-aane-bot" --rootDir .` → `clasp push` → open the script editor and authorize the scopes (Gmail, Gmail send, Sheets, Drive, URL fetch). Deploy it as a **Web App** (execute as the bot account, access: Anyone) and note the `/exec` URL and deployment id.
 3. **Cloudflare** — create the database (`npx wrangler d1 create dus-aane-bot`) and put its id in [worker/wrangler.toml](worker/wrangler.toml). Create an API token with Workers, D1 and Queues edit rights. Deploy once (`npx wrangler deploy` in `worker/`) to get the Worker's URL.
-4. **GitHub secrets** — `BOT_TOKEN`, `WEBHOOK_SECRET` and `INTERNAL_SECRET` (random, `[A-Za-z0-9_-]{32,}`), `GROUP_CHAT_ID` (your Telegram chat id, for admin messages), `AZURE_OPENAI_ENDPOINT` / `_API_KEY` / `_DEPLOYMENT_NAME` / `_API_VERSION`, `WORKER_PROXY_URL` (Worker URL), `SCRIPT_APP_URL` (`/exec` URL), `CLASP_TOKEN` (contents of `~/.clasprc.json`), `DEPLOYMENT_ID`, `CLOUDFLARE_API_TOKEN`.
+4. **GitHub secrets** — `BOT_TOKEN`, `WEBHOOK_SECRET` and `INTERNAL_SECRET` (random, `[A-Za-z0-9_-]{32,}`), `ADMIN_CHAT_ID` (your personal Telegram chat id, for admin digests and parser reports), `AZURE_OPENAI_ENDPOINT` / `_API_KEY` / `_DEPLOYMENT_NAME` / `_API_VERSION`, `WORKER_PROXY_URL` (Worker URL), `SCRIPT_APP_URL` (`/exec` URL), `CLASP_TOKEN` (contents of `~/.clasprc.json`), `DEPLOYMENT_ID`, `CLOUDFLARE_API_TOKEN`.
 5. **Push to `main`** (or run **Actions → Deploy**). CI applies the D1 schema, deploys the Worker and Apps Script, points Telegram's webhook at the Worker and runs a smoke test.
 6. **Gmail trigger** — in the script editor, run `installEmailTrigger()` once.
 
@@ -184,7 +184,7 @@ That's it — share the bot's Telegram handle; people self-onboard with `/start`
 
 #### Updating the bank sender allowlist
 
-Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank (`scripts/gen-gmail-filter.js` prints the resulting filter). Existing users' filters won't match the new sender until they re-paste the filter from a fresh setup email (`/account` → Resend setup). See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#adding-a-new-bank) for adding a parser template too.
+Edit `TRANSACTION_SENDERS` in [Constants.js](Constants.js) to add a new bank (`scripts/gen-gmail-filter.js` prints the resulting filter). Existing users' filters won't match the new sender until they re-paste the filter from a fresh setup email (ask the bot `"resend setup email"` in DM). See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md#adding-a-new-bank) for adding a parser template too.
 
 </details>
 

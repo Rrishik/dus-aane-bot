@@ -94,6 +94,14 @@ export async function setTenantStatus(db, tenantId, status) {
   return res.meta.changes > 0;
 }
 
+export async function setTenantName(db, tenantId, name) {
+  const res = await db
+    .prepare("UPDATE tenants SET name = ? WHERE id = ?")
+    .bind(String(name || ""), String(tenantId))
+    .run();
+  return res.meta.changes > 0;
+}
+
 // Fresh activity (forward, SMS save) stamps last_activity_at and undoes a
 // dormant verdict. Returns { reactivated }.
 export async function touchActivity(db, tenantId, now = Date.now()) {

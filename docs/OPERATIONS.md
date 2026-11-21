@@ -6,7 +6,7 @@ Day-to-day running of a deployment. The bot is a Cloudflare Worker (`dus-aane-bo
 
 Every push to `main` runs **Actions → Deploy**: tests → Apps Script (`clasp push` + deploy) → D1 migrations → Worker deploy → Telegram webhook + command menus → smoke test (`worker/scripts/smoke.mjs`). Re-run it by hand with **Run workflow** after changing a secret.
 
-GitHub secrets it uses: `BOT_TOKEN`, `WEBHOOK_SECRET`, `INTERNAL_SECRET`, `GROUP_CHAT_ID` (admin chat, becomes `ADMIN_CHAT_ID`), `AZURE_OPENAI_ENDPOINT` / `_API_KEY` / `_DEPLOYMENT_NAME` / `_API_VERSION`, `WORKER_PROXY_URL` (the Worker's URL), `SCRIPT_APP_URL` (the Apps Script `/exec` URL), `CLASP_TOKEN`, `DEPLOYMENT_ID`, `CLOUDFLARE_API_TOKEN` (needs Workers, D1 and Queues edit).
+GitHub secrets it uses: `BOT_TOKEN`, `WEBHOOK_SECRET`, `INTERNAL_SECRET`, `ADMIN_CHAT_ID` (personal admin DM chat id; falls back to `GROUP_CHAT_ID`), `AZURE_OPENAI_ENDPOINT` / `_API_KEY` / `_DEPLOYMENT_NAME` / `_API_VERSION`, `WORKER_PROXY_URL` (the Worker's URL), `SCRIPT_APP_URL` (the Apps Script `/exec` URL), `CLASP_TOKEN`, `DEPLOYMENT_ID`, `CLOUDFLARE_API_TOKEN` (needs Workers, D1 and Queues edit).
 
 ## Rotating secrets
 

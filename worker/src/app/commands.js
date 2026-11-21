@@ -5,6 +5,7 @@ import { BOT_INBOX_EMAIL } from "./constants.js";
 import { escapeMarkdown, money, formatLongDate } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { ensurePersonalPin } from "./personalPin.js";
+import { syncMemberGroupTitles } from "./groups.js";
 import { callAppsScript } from "./appsScript.js";
 
 const README_URL = "https://github.com/Rrishik/dus-aane-bot#readme";
@@ -12,6 +13,7 @@ const README_URL = "https://github.com/Rrishik/dus-aane-bot#readme";
 export async function handleStart(ctx, chatId, username) {
   const tenant = await getTenant(ctx.db, chatId);
   if (isUsable(tenant)) {
+    await syncMemberGroupTitles(ctx, chatId);
     await ensurePersonalPin(ctx, chatId);
     return sendWelcomeGuide(ctx, chatId);
   }
@@ -36,7 +38,7 @@ async function sendWelcomeGuide(ctx, chatId) {
       "• _Tag Rahul as Food_\n" +
       "• _Split dinner 50/50_\n" +
       "• _Export September CSV_\n\n" +
-      "_Swipe-reply on any card to rename, fix `₹amount`, `50-50`, or `del` — or swipe-reply on any answer to follow up._",
+      "💡 *Swipe-reply* on any card with a merchant name, `₹amount`, `50-50`, or `del` — or swipe-reply on any answer to follow up.",
     { reply_markup: { inline_keyboard: [[{ text: "📖 README", url: README_URL }]] } }
   );
 }

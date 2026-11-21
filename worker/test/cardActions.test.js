@@ -320,6 +320,10 @@ describe("⋯ menu, back and delete", () => {
     expect(lastMarkup(ctx).inline_keyboard[0][0].text).toBe("📩 Reported — thanks!");
     const evt = await ctx.db.prepare("SELECT event, template_id FROM parser_events WHERE event = 'report'").first();
     expect(evt).toEqual({ event: "report", template_id: "hdfc_upi_sent_sms_v1" });
+
+    // Tapping ← Back restores clean card text + default keyboard.
+    await handleUpdate(ctx, tap("back_" + id));
+    expect(lastEdit(ctx)[2]).toBe("🔴 *Swiggy* — ₹250 · _7 Oct_");
   });
 });
 

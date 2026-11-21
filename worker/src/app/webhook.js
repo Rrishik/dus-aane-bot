@@ -12,7 +12,13 @@ import { handleCardReply, handleCancel } from "./cardActions.js";
 import { handleStepperReply } from "./tagStepper.js";
 import { handleOrchestrator, handleAskResume } from "./orchestrator.js";
 import { isUsable, gateText } from "./onboarding.js";
-import { handleGroupStart, handleGroupStats, handleGroupSettle, handleMembershipUpdate } from "./groups.js";
+import {
+  handleGroupStart,
+  handleGroupStats,
+  handleGroupSettle,
+  handleMembershipUpdate,
+  syncGroupTitle
+} from "./groups.js";
 
 const GROUP_COMMANDS = {
   "/start": handleGroupStart,
@@ -41,9 +47,30 @@ export function extractDirectRegistrationEmail(text, tenant) {
 }
 
 export async function handleMessage(ctx, message) {
-  const text = message.text;
-  if (!text) return;
   const chatId = String(message.chat.id);
+  const text = message.text;
+  if (message.chat.type === "group" || message.chat.type === "supergroup") {
+    const liveTitle = message.new_chat_title || message.chat.title;
+    if (liveTitle && (message.new_chat_title || (text && text.startsWith("/")))) {
+      await syncGroupTitle(ctx, chatId, liveTitle);
+    }
+    if (!text || !text.startsWith("/")) return;
+    const handler = GROUP_COMMANDS[commandOf(text)];
+    // Unknown commands stay silent — they may be for another bot.
+    if (handler) {
+      await handler(ctx, {
+        chatId,
+        text,
+        username: (message.from && (message.from.first_name || message.from.username)) || "",
+        userId: message.from ? String(message.from.id) : chatId,
+        replyTo: message.reply_to_message || null,
+        raw: message
+      });
+    }
+    return;
+  }
+
+  if (!text) return;
   const m = {
     chatId,
     text,
@@ -52,14 +79,6 @@ export async function handleMessage(ctx, message) {
     replyTo: message.reply_to_message || null,
     raw: message
   };
-
-  if (message.chat.type === "group" || message.chat.type === "supergroup") {
-    if (!text.startsWith("/")) return;
-    const handler = GROUP_COMMANDS[commandOf(text)];
-    // Unknown commands stay silent — they may be for another bot.
-    if (handler) await handler(ctx, m);
-    return;
-  }
 
   const command = text.startsWith("/") ? commandOf(text) : null;
   if (command === "/start") return handleStart(ctx, chatId, m.username);

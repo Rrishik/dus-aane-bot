@@ -77,37 +77,36 @@ export function formatPersonalPin(data) {
   if (data.untaggedCount > 0) headParts.push("🏷 " + data.untaggedCount + " untagged");
   const lines = [headParts.join(" · ")];
 
+  const bullets = [];
   if (data.topCategories.length > 0) {
-    lines.push(
-      "",
-      data.topCategories
-        .map(
-          (c) =>
-            (CATEGORY_EMOJIS[c.category] || "•") +
-            " " +
-            escapeMarkdown(c.category) +
-            " ₹" +
-            formatAmountCompact(fromMinor(c.minor))
-        )
-        .join(" · ")
+    bullets.push(
+      "• " +
+        data.topCategories
+          .map(
+            (c) =>
+              (CATEGORY_EMOJIS[c.category] || "•") +
+              " " +
+              escapeMarkdown(c.category) +
+              " ₹" +
+              formatAmountCompact(fromMinor(c.minor))
+          )
+          .join(" · ")
     );
   } else if (data.txnCount === 0) {
-    lines.push("", "_No confirmed spends yet this month._");
+    bullets.push("_No confirmed spends yet this month._");
   }
 
-  if (data.groupNets.length > 0) {
-    lines.push("");
-    for (const g of data.groupNets) {
-      const status =
-        g.netMinor > 0
-          ? "owed " + money(g.netMinor, g.currency)
-          : g.netMinor < 0
-            ? "owe " + money(-g.netMinor, g.currency)
-            : "_settled up_";
-      lines.push("👥 *" + escapeMarkdown(g.name) + "*: " + status);
-    }
+  for (const g of data.groupNets) {
+    const status =
+      g.netMinor > 0
+        ? "owed " + money(g.netMinor, g.currency)
+        : g.netMinor < 0
+          ? "owe " + money(-g.netMinor, g.currency)
+          : "_settled up_";
+    bullets.push("• 👥 *" + escapeMarkdown(g.name) + "*: " + status);
   }
 
+  if (bullets.length > 0) lines.push("", ...bullets);
   return lines.join("\n");
 }
 

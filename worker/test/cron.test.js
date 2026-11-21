@@ -272,5 +272,34 @@ describe("runScheduled", () => {
       }
     });
     expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("📌 *Oct 2026* · ₹500 spent · 🏷 1 untagged");
+
+    // Tapping Categorize on the pinned message opens a fresh bottom stepper (preserving the pin), and Done deletes it.
+    const sendCountBefore = ctx.tg.of("sendMessage").length;
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb-step",
+        data: "tagq_next",
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: pin.messageId }
+      }
+    });
+    const stepperSend = ctx.tg.of("sendMessage").at(-1);
+    expect(ctx.tg.of("sendMessage")).toHaveLength(sendCountBefore + 1);
+    expect(stepperSend.args[1]).toContain("🏷 *Categorize* _(1 of 1 left)_");
+    expect(stepperSend.args[2].reply_markup.inline_keyboard.at(-1).map((b) => b.callback_data)).toEqual([
+      expect.stringMatching(/^tagq_skip_/),
+      "tagq_done"
+    ]);
+
+    const stepperMsgId = stepperSend.result.message_id;
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb-done",
+        data: "tagq_done",
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: stepperMsgId }
+      }
+    });
+    expect(ctx.tg.of("deleteMessage").some((c) => c.args[0] === "111" && c.args[1] === stepperMsgId)).toBe(true);
   });
 });

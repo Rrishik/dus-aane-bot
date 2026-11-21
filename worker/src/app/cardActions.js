@@ -142,7 +142,7 @@ const ACTIONS = {
   },
 
   async back(ctx, { chatId, messageId, state }) {
-    await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
+    await editCard(ctx, chatId, messageId, state);
   },
 
   async del(ctx, { chatId, messageId, state }) {
@@ -390,6 +390,10 @@ export async function applyCardQuickReply(ctx, chatId, txn, parsed, { cardMessag
   }
 
   if (parsed.action === "split") {
+    if (txn.direction !== "debit") {
+      await ctx.tg.sendMessage(chatId, "❌ Only money-out expenses can be split.", { parse_mode: null });
+      return { handled: true };
+    }
     const groups = await groupsForMember(ctx.db, chatId);
     if (groups.length !== 1) return { handled: false }; // Let Groups agent disambiguate
     const members = await getGroupMembers(ctx.db, groups[0].id);
