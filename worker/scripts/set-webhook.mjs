@@ -14,10 +14,9 @@ export const PRIVATE_COMMANDS = [
 ];
 
 export const GROUP_COMMANDS = [
-  { command: "start", description: "Set up / re-sync this group" },
-  { command: "stats", description: "Who owes whom" },
-  { command: "account", description: "This group's setup" },
-  { command: "help", description: "Group commands" }
+  { command: "stats", description: "Who owes whom & simplify debts" },
+  { command: "settle", description: "Record a cash payment (@member <amount>)" },
+  { command: "start", description: "Set up / re-sync group members" }
 ];
 
 export async function setWebhook(tg, url, { secret, dropPending = false }) {
@@ -27,6 +26,8 @@ export async function setWebhook(tg, url, { secret, dropPending = false }) {
     allowedUpdates: ALLOWED_UPDATES,
     dropPending
   });
+  await tg.call("deleteMyCommands", { scope: { type: "default" } });
+  await tg.call("deleteMyCommands", { scope: { type: "all_chat_administrators" } });
   await tg.call("setMyCommands", { scope: { type: "all_private_chats" }, commands: PRIVATE_COMMANDS });
   await tg.call("setMyCommands", { scope: { type: "all_group_chats" }, commands: GROUP_COMMANDS });
   const me = await tg.call("getMe");

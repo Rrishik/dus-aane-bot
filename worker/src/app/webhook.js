@@ -12,19 +12,10 @@ import { handleCardReply, handleCancel } from "./cardActions.js";
 import { handleStepperReply } from "./tagStepper.js";
 import { handleOrchestrator, handleAskResume } from "./orchestrator.js";
 import { isUsable, gateText } from "./onboarding.js";
-import {
-  handleGroupStart,
-  handleGroupHelp,
-  handleGroupAccount,
-  handleGroupStats,
-  handleGroupSettle,
-  handleMembershipUpdate
-} from "./groups.js";
+import { handleGroupStart, handleGroupStats, handleGroupSettle, handleMembershipUpdate } from "./groups.js";
 
 const GROUP_COMMANDS = {
   "/start": handleGroupStart,
-  "/help": handleGroupHelp,
-  "/account": handleGroupAccount,
   "/stats": handleGroupStats,
   "/settle": handleGroupSettle
 };

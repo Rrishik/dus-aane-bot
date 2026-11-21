@@ -29,8 +29,13 @@ describe("set-webhook", () => {
         drop_pending_updates: false
       }
     });
+    const cleared = calls.filter((c) => c.method === "deleteMyCommands").map((c) => c.body.scope.type);
+    expect(cleared).toEqual(["default", "all_chat_administrators"]);
     const menus = calls.filter((c) => c.method === "setMyCommands").map((c) => c.body.scope.type);
     expect(menus).toEqual(["all_private_chats", "all_group_chats"]);
+    const groupCmds = calls.find((c) => c.method === "setMyCommands" && c.body.scope.type === "all_group_chats").body
+      .commands;
+    expect(groupCmds.map((c) => c.command)).toEqual(["stats", "settle", "start"]);
     for (const c of calls.filter((x) => x.method === "setMyCommands")) {
       for (const cmd of c.body.commands) expect(cmd.command).toMatch(/^[a-z]{1,32}$/);
     }

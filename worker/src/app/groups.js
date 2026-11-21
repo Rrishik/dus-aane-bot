@@ -654,12 +654,23 @@ export async function handleGroupStart(ctx, m) {
       now: ctx.now()
     });
   }
-  const total = registered.length + unregistered.length;
+  const groupRow = await getTenant(ctx.db, chatId);
+  const activeMembers = await getGroupMembers(ctx.db, chatId);
+  const memberLabels = [];
+  for (const id of activeMembers) memberLabels.push(escapeMarkdown(await memberName(ctx, chatId, id)));
+  const ccy = (groupRow && groupRow.primary_currency) || "INR";
+
   const lines = [
     "✅ *" + escapeMarkdown((existing && existing.name) || groupName) + "* is set up!",
-    registered.length + " of " + total + " admin" + (total === 1 ? "" : "s") + " ready to split."
+    "Members (" +
+      activeMembers.length +
+      "/" +
+      MAX_GROUP_MEMBERS +
+      ") · `" +
+      ccy +
+      "`: " +
+      (memberLabels.length ? memberLabels.join(", ") : "_none yet_")
   ];
-  if (registered.length) lines.push("", "*Ready:* " + registered.map((r) => escapeMarkdown(r.name)).join(", "));
   if (unregistered.length) {
     lines.push(
       "",
@@ -668,6 +679,7 @@ export async function handleGroupStart(ctx, m) {
         " — DM me your Gmail address first."
     );
   }
+  lines.push("", "_Commands:_ `/stats` _(balances)_ · `/settle @member <amount>` _(cash)_ · `/start` _(re-sync)_");
   await ctx.tg.sendMessage(chatId, prefix + lines.join("\n"), { disable_web_page_preview: true });
   for (const u of unregistered) {
     await addGroupInvite(ctx.db, u.id, chatId, ctx.now());
@@ -680,36 +692,6 @@ export async function handleGroupStart(ctx, m) {
       );
     } catch (_) {}
   }
-}
-
-export async function handleGroupHelp(ctx, m) {
-  if (!(await requireGroup(ctx, m.chatId))) return;
-  await ctx.tg.sendMessage(
-    m.chatId,
-    "*Group commands*\n" +
-      "• `/start` — re-sync the member list from this chat\n" +
-      "• `/account` — show this group's setup\n" +
-      "• `/stats` — who owes whom (per currency)\n" +
-      "• `/settle @member <amount>` — record a cash payment to a member\n" +
-      "• `/help` — this message\n\n" +
-      "_Email-based settlements: forward the UPI confirmation in DM, tap_ 👥 *Split with <group>* _→_ 🤝 *Settle up* _→ recipient._"
-  );
-}
-
-export async function handleGroupAccount(ctx, m) {
-  const group = await requireGroup(ctx, m.chatId);
-  if (!group) return;
-  const members = await getGroupMembers(ctx.db, group.id);
-  const labels = [];
-  for (const id of members) labels.push(escapeMarkdown(await memberName(ctx, group.id, id)));
-  const lines = [
-    "*" + escapeMarkdown(group.name || "Group") + "*",
-    "Status: `" + group.status + "`",
-    "Currency: `" + group.primary_currency + "`",
-    "Members (" + members.length + "/" + MAX_GROUP_MEMBERS + "): " + (labels.length ? labels.join(", ") : "_none yet_")
-  ];
-  if (group.admin_id) lines.push("Admin: " + escapeMarkdown(await memberName(ctx, group.id, group.admin_id)));
-  await ctx.tg.sendMessage(m.chatId, lines.join("\n"), { disable_web_page_preview: true });
 }
 
 export async function handleGroupStats(ctx, m) {

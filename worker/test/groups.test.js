@@ -371,11 +371,9 @@ describe("group commands", () => {
     expect(view[2]).toContain("• U222 → U111 INR 200");
     expect(view[2]).toContain("• U333 → U111 INR 100");
 
-    await handleUpdate(ctx, groupMsg("/help"));
-    expect(sent(ctx).at(-1).text).toContain("/settle @member");
-    await handleUpdate(ctx, groupMsg("/account"));
-    expect(sent(ctx).at(-1).text).toContain("Members (3/4): U111, U222, U333");
+    // Unknown or retired commands in groups stay silent.
+    const countBefore = sent(ctx).length;
     await handleUpdate(ctx, groupMsg("/unknown"));
-    expect(sent(ctx).at(-1).text).toContain("Members (3/4)");
+    expect(sent(ctx)).toHaveLength(countBefore);
   });
 });
