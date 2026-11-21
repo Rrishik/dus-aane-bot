@@ -9,8 +9,9 @@ The bot is a **Cloudflare Worker** (`worker/`) with a **D1** (SQLite) database. 
 ```
 worker/
   src/index.js          # Routes: Telegram webhook, /ingest/email, /internal/backfill, /healthz; cron; queue consumer
-  src/app/              # Bot logic: webhook.js (dispatch), orchestrator.js (4-specialist router),
-                        #   cards + cardActions + personalPin, ingest, sms, groups, cron (08:00 & 21:00 IST),
+  src/app/              # Bot logic: webhook.js (dispatch), orchestrator*.js (4-specialist router),
+                        #   ledger.js (mutations & rule learning), cards + cardActions + reread + tagStepper,
+                        #   personalPin, ingest, sms, groups, cron (08:00 & 21:00 IST),
                         #   data (CSV/Sheet export, wipe), appsScript.js + auth.js (signed calls)
   src/db/               # D1 data layer — every query is scoped by tenant id
   src/parser/           # Deterministic parser: templates.js (data) + parser.js (rules, validation)

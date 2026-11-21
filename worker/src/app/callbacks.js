@@ -4,9 +4,10 @@ import { getTenant, getTenantEmails } from "../db/tenants.js";
 import { recentMessage, statsMenuKeyboard, sendSetupEmail } from "./commands.js";
 import { monthlyTrends, weeklyTrends, formatTrendsMessage } from "./analytics.js";
 import { isUsable, gateText } from "./onboarding.js";
-import { handleCardAction, handleTagQueueCallback } from "./cardActions.js";
+import { handleCardAction } from "./cardActions.js";
+import { handleTagQueueCallback } from "./tagStepper.js";
 import { isGroupCallback, handleGroupCallback } from "./groups.js";
-import { handleAskFollowUp } from "./ask.js";
+import { handleAskFollowUp } from "./orchestrator.js";
 import { handleExportSheet, handleWipeCallback } from "./data.js";
 import { personalPinData, formatPersonalPin, personalPinKeyboard } from "./personalPin.js";
 

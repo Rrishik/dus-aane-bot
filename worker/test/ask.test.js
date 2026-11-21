@@ -5,7 +5,7 @@ import { ingest } from "../src/app/ingest.js";
 import { getTransaction, insertTransaction } from "../src/db/transactions.js";
 import { getMerchantRules } from "../src/db/merchantRules.js";
 import { getSplitForTransaction, createSplit } from "../src/db/splits.js";
-import { capHitMessage, askToolExecutor, classifyFastAgent } from "../src/app/ask.js";
+import { capHitMessage, askToolExecutor, classifyFastAgent } from "../src/app/orchestrator.js";
 import { FREE_ASK_LIMIT } from "../src/app/constants.js";
 
 const SMS = "Sent Rs.900.00 From HDFC Bank A/C *1234 To SWIGGY On 07/10/26 Ref 628012345678 Not You? Call 18002586161";
@@ -182,14 +182,39 @@ describe("/ask", () => {
     expect(cards).toHaveLength(1);
   });
 
-  it("batch_update_transactions tags multiple untagged rows in one call", async () => {
+  it("batch_update_transactions tags multiple untagged rows and coalesces pinned-summary refresh to run once", async () => {
     const { ctx, id } = await setup();
+    const id2 = await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-07",
+        amountMinor: 12000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: "Kirana 99",
+        category: null
+      },
+      { source: "sms", sourceRef: "s-k99" },
+      NOW
+    );
     const run = askToolExecutor(ctx, "111");
+    await run("show_dashboard", {});
+    ctx.tg.calls.length = 0;
+
     const res = await run("batch_update_transactions", {
-      items: [{ transaction_id: id, category: "Groceries", merchant: "Zepto" }]
+      items: [
+        { transaction_id: id, category: "Groceries", merchant: "Zepto" },
+        { transaction_id: id2, category: "Groceries", merchant: "BigBasket" }
+      ]
     });
-    expect(res).toMatchObject({ ok: true, updated: 1 });
+    expect(res).toMatchObject({ ok: true, updated: 2 });
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Groceries", merchant: "Zepto" });
+    expect(await getTransaction(ctx.db, "111", id2)).toMatchObject({ category: "Groceries", merchant: "BigBasket" });
+    // Pinned summary was edited only ONCE for the entire batch, not once per item!
+    const pinEdits = ctx.tg.of("editMessageText").filter((c) => c.args[2].startsWith("📌"));
+    expect(pinEdits).toHaveLength(1);
     expect(classifyFastAgent("how much this week?")).toBe("analytics");
     expect(classifyFastAgent("tag rahul as food")).toBe("ledger");
     expect(classifyFastAgent("split dinner 50/50")).toBe("groups");

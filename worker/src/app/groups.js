@@ -731,6 +731,45 @@ export async function handleGroupStats(ctx, m) {
   await groupStatsView(ctx, m.chatId, m.userId, "d", null);
 }
 
+export async function recordCashSettlement(ctx, { group, fromId, toId, amountMinor, currency }) {
+  const ccy = String(currency || group.primary_currency || "INR").toUpperCase();
+  const [payerName, targetName] = [await memberName(ctx, group.id, fromId), await memberName(ctx, group.id, toId)];
+  let posted;
+  try {
+    posted = await ctx.tg.sendMessage(
+      group.id,
+      "💸 *" +
+        escapeMarkdown(payerName) +
+        "* settled " +
+        ccy +
+        " " +
+        formatAmount(fromMinor(amountMinor)) +
+        " with *" +
+        escapeMarkdown(targetName) +
+        "* _(cash)_",
+      { disable_web_page_preview: true }
+    );
+  } catch (_) {}
+  if (!posted || !posted.message_id) return { ok: false, error: "Couldn't post the settlement." };
+  await recordSettlement(ctx.db, {
+    groupId: group.id,
+    fromId: String(fromId),
+    toId: String(toId),
+    amountMinor,
+    currency: ccy,
+    groupMessageId: posted.message_id,
+    now: ctx.now()
+  });
+  await refreshBalancesPin(ctx, group);
+  return {
+    ok: true,
+    group_chat_id: group.id,
+    to_name: targetName,
+    amount: fromMinor(amountMinor),
+    currency: ccy
+  };
+}
+
 export async function handleGroupSettle(ctx, m) {
   const group = await requireGroup(ctx, m.chatId);
   if (!group) return;
@@ -770,40 +809,14 @@ export async function handleGroupSettle(ctx, m) {
     );
     return;
   }
-  const target = hits[0];
-  const currency = group.primary_currency || "INR";
-  const payerName = await memberName(ctx, group.id, m.userId);
-  const targetName = await memberName(ctx, group.id, target);
-  let posted;
-  try {
-    posted = await ctx.tg.sendMessage(
-      group.id,
-      "💸 *" +
-        escapeMarkdown(payerName) +
-        "* settled " +
-        currency +
-        " " +
-        formatAmount(fromMinor(parsed.amountMinor)) +
-        " with *" +
-        escapeMarkdown(targetName) +
-        "* _(cash)_",
-      { disable_web_page_preview: true }
-    );
-  } catch (_) {}
-  if (!posted || !posted.message_id) {
-    await ctx.tg.sendMessage(m.chatId, "❌ Couldn't post the settlement.", { parse_mode: null });
-    return;
-  }
-  await recordSettlement(ctx.db, {
-    groupId: group.id,
+  const res = await recordCashSettlement(ctx, {
+    group,
     fromId: m.userId,
-    toId: target,
+    toId: hits[0],
     amountMinor: parsed.amountMinor,
-    currency,
-    groupMessageId: posted.message_id,
-    now: ctx.now()
+    currency: group.primary_currency || "INR"
   });
-  await refreshBalancesPin(ctx, group);
+  if (!res.ok) await ctx.tg.sendMessage(m.chatId, "❌ " + res.error, { parse_mode: null });
 }
 
 // ─── Membership events ───────────────────────────────────────────────

@@ -32,8 +32,12 @@ function txnInsert(db, over) {
 
 describe("migrations", () => {
   it("are numbered and apply cleanly to an empty database", async () => {
-    expect(migrationFiles()[0]).toBe("0001_init.sql");
+    expect(migrationFiles()).toEqual(["0001_init.sql", "0002_card_message_idx.sql"]);
     var db = createTestD1();
+    var indexes = (
+      await db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name").all()
+    ).results.map((r) => r.name);
+    expect(indexes).toContain("tx_by_card_msg");
     var tables = (
       await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all()
     ).results.map((r) => r.name);
