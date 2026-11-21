@@ -135,7 +135,7 @@ describe("commandless onboarding & account ops", () => {
     const ctx = testContext();
     await seedTenant(ctx, "111", { email: "a@x.com", status: "pending" });
     await handleUpdate(ctx, tap("111", "resend_setup"));
-    expect(ctx.tg.of("answerCallbackQuery")[0].args[1]).toBe("📬 Sending...");
+    expect(ctx.tg.of("answerCallbackQuery")[0].args[1]).toBe("📬 Sending setup email…");
     expect(ctx.asCalls[0].action).toBe("send_setup_email");
 
     const group = (text) => ({ message: { chat: { id: -100, type: "group" }, from: { id: 111 }, text } });

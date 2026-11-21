@@ -196,7 +196,7 @@ describe("split / settle / undo from the DM card", () => {
     expect(opts.reply_markup.inline_keyboard[0][0].callback_data).toBe("gun:" + id);
 
     await handleUpdate(ctx, tap("gsp:" + id + ":-100:50"));
-    expect(sent(ctx).at(-1).text).toContain("Already split");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("Already split");
   });
 
   it("undo strikes the group post, deletes the split and refreshes the pin", async () => {
@@ -219,7 +219,7 @@ describe("split / settle / undo from the DM card", () => {
     };
     await handleUpdate(ctx, tap("gun:" + id));
     expect(await getSplitForTransaction(ctx.db, id)).not.toBeNull();
-    expect(sent(ctx).at(-1).text).toContain("older than 48h");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("older than 48h");
   });
 
   it("rolls the split back when the group post fails", async () => {
@@ -231,7 +231,7 @@ describe("split / settle / undo from the DM card", () => {
     };
     await handleUpdate(ctx, tap("gsp:" + id + ":-100:50"));
     expect(await getSplitForTransaction(ctx.db, id)).toBeNull();
-    expect(sent(ctx).at(-1).text).toContain("Couldn't post in the group");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("Couldn't post in the group");
   });
 
   it("settle-up from a card records a settlement against the transaction", async () => {
@@ -245,8 +245,9 @@ describe("split / settle / undo from the DM card", () => {
     ]);
 
     await handleUpdate(ctx, tap("gst:" + id + ":-100:u111"));
-    expect(sent(ctx).at(-1).text).toContain("Can't settle with yourself");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("Can't settle with yourself");
     await handleUpdate(ctx, tap("gst:" + id + ":-100:u333"));
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toBe("🤝 Settled ₹900 with U333");
     expect(await getSettlementForTransaction(ctx.db, id)).toMatchObject({
       from_id: "111",
       to_id: "333",
@@ -258,6 +259,7 @@ describe("split / settle / undo from the DM card", () => {
     expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("🤝 Settled with *U333*");
 
     await handleUpdate(ctx, tap("gun:" + id));
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toBe("↩️ Back to personal");
     expect(await getSettlementForTransaction(ctx.db, id)).toBeNull();
   });
 
@@ -273,13 +275,14 @@ describe("split / settle / undo from the DM card", () => {
     // 333 leaves after the keyboard was drawn.
     await removeGroupMember(ctx.db, "-100", "333");
     await handleUpdate(ctx, tap("gst:" + id + ":-100:u333"));
-    expect(sent(ctx).at(-1).text).toContain("no longer in the group");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("no longer in the group");
     await handleUpdate(ctx, tap("gsp:" + id + ":-100:wu333"));
-    expect(sent(ctx).at(-1).text).toContain("Invalid split");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("Invalid split");
     expect(await getSplitForTransaction(ctx.db, id)).toBeNull();
 
     // "Without 444" still drops 444, not whoever now sits at that position.
     await handleUpdate(ctx, tap("gsp:" + id + ":-100:wu444"));
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toBe("👥 Split with Flat · ₹450 each");
     expect((await getSplitForTransaction(ctx.db, id)).shares.map((s) => s.holder_id)).toEqual(["111", "222"]);
   });
 
@@ -299,7 +302,7 @@ describe("split / settle / undo from the DM card", () => {
     const { ctx, id } = await groupWithCard();
     await seedGroup(ctx, "-200", ["222"], "Other");
     await handleUpdate(ctx, tap("gsp:" + id + ":-200:50"));
-    expect(sent(ctx).at(-1).text).toContain("not a member");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("not a member");
     expect(await getSplitForTransaction(ctx.db, id)).toBeNull();
   });
 });

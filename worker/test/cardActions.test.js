@@ -33,6 +33,7 @@ async function withCard(opts = {}) {
 }
 const lastMarkup = (ctx) => ctx.tg.of("editMessageReplyMarkup").at(-1).args[2];
 const lastEdit = (ctx) => ctx.tg.of("editMessageText").at(-1).args;
+const lastToast = (ctx) => ctx.tg.of("answerCallbackQuery").at(-1).args;
 const sent = (ctx) => ctx.tg.of("sendMessage").map((c) => c.args[1]);
 
 describe("category picker", () => {
@@ -46,6 +47,7 @@ describe("category picker", () => {
     await handleUpdate(ctx, tap("cat_" + id + "_12")); // Transfer Out
     expect(await getTransaction(ctx.db, "111", id)).toMatchObject({ category: "Transfer Out", kind: "transfer" });
     expect(lastMarkup(ctx).inline_keyboard.at(-1)[1].text).toBe("📤 ▾");
+    expect(lastToast(ctx)[1]).toBe("📤 Transfer Out");
     expect(await getMerchantRules(ctx.db, "111")).toEqual([
       { pattern: "swiggy", name: null, category: "Transfer Out", kind: null, personal: true }
     ]);
@@ -54,7 +56,7 @@ describe("category picker", () => {
   it("rejects an out-of-range index", async () => {
     const { ctx, id } = await withCard();
     await handleUpdate(ctx, tap("cat_" + id + "_99"));
-    expect(sent(ctx).at(-1)).toBe("❌ *Invalid category*");
+    expect(lastToast(ctx)[1]).toBe("❌ Invalid category");
   });
 
   it("shows a 1-row emoji strip on uncategorized arrival cards, collapses to emoji pill on pick, and teaches shortened patterns", async () => {
@@ -205,10 +207,10 @@ describe("⋯ menu, back and delete", () => {
     await handleUpdate(ctx, tap("help_" + id));
     expect(menu(ctx)).toEqual([["report"], ["back"]]);
     await handleUpdate(ctx, tap("delyes_" + id));
-    expect(sent(ctx).at(-1)).toMatch(/Make it personal again first/);
+    expect(lastToast(ctx)[1]).toMatch(/Make it personal again first/);
     expect((await getTransaction(ctx.db, "111", id)).status).toBe("confirmed");
     await handleUpdate(ctx, tap("flip_" + id));
-    expect(sent(ctx).at(-1)).toMatch(/Make it personal again first, then fix it/);
+    expect(lastToast(ctx)[1]).toMatch(/Make it personal again first, then fix it/);
     expect((await getTransaction(ctx.db, "111", id)).direction).toBe("debit");
     await handleUpdate(ctx, tap("back_" + id));
     expect(lastMarkup(ctx).inline_keyboard[0][0].callback_data).toBe("gun:" + id);
@@ -221,8 +223,9 @@ describe("⋯ menu, back and delete", () => {
     await handleUpdate(ctx, tap("delyes_" + id));
     expect((await getTransaction(ctx.db, "111", id)).status).toBe("deleted");
     expect(lastEdit(ctx)[2]).toBe("🗑️ *Transaction deleted*");
+    expect(lastToast(ctx)[1]).toBe("🗑️ Transaction deleted");
     await handleUpdate(ctx, tap("help_" + id));
-    expect(sent(ctx).at(-1)).toBe("❌ *Transaction not found.*");
+    expect(lastToast(ctx)[1]).toBe("❌ Transaction not found");
   });
 
   it("other tenants' transactions are not found", async () => {
@@ -333,7 +336,7 @@ describe("Re-read", () => {
     ]);
     // An expired / consumed re-read can't be applied twice.
     await handleUpdate(ctx, tap("rra_" + id));
-    expect(sent(ctx).at(-1)).toMatch(/re-read expired/);
+    expect(lastToast(ctx)[1]).toMatch(/re-read expired/);
   });
 
   it("same result marks it re-read and offers Report", async () => {
@@ -342,7 +345,7 @@ describe("Re-read", () => {
     expect(lastEdit(ctx)[2]).toMatch(/_Re-read: same result_$/);
     expect((await getSources(ctx.db, "111", id))[0].reread).toBe(1);
     await handleUpdate(ctx, tap("rr_" + id));
-    expect(sent(ctx).at(-1)).toMatch(/Already re-read/);
+    expect(lastToast(ctx)[1]).toMatch(/Already re-read/);
   });
 
   it("re-reads emails via Apps Script's get_email_body", async () => {

@@ -38,14 +38,16 @@ export function shortenMerchantPattern(raw) {
   return trimmed || raw;
 }
 
-async function notFound(ctx, chatId) {
-  await ctx.tg.sendMessage(chatId, "❌ *Transaction not found.*");
+async function notFound(ctx, chatId, ack) {
+  if (ack) await ack.toast("❌ Transaction not found", true);
+  else await ctx.tg.sendMessage(chatId, "❌ *Transaction not found.*");
 }
 
 // Changing a split transaction would move other people's balances.
-async function refuseIfSplit(ctx, chatId, messageId, state) {
+async function refuseIfSplit(ctx, chatId, messageId, state, ack) {
   if (!state.isSplit) return false;
-  await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then fix it.*");
+  if (ack) await ack.toast("↩️ Make it personal again first, then fix it.", true);
+  else await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then fix it.*");
   await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
   return true;
 }
@@ -87,7 +89,7 @@ async function editCard(ctx, chatId, messageId, state, extraLine, keyboard) {
 
 // Dispatch for "<action>_<txnId>[_<arg>]" card callbacks. Returns false for
 // actions this module doesn't own.
-export async function handleCardAction(ctx, { chatId, userId, messageId, action, payload, from }) {
+export async function handleCardAction(ctx, { chatId, userId, messageId, action, payload, from, ack }) {
   const handler = ACTIONS[action];
   if (!handler) return false;
   let txnId = payload;
@@ -99,10 +101,10 @@ export async function handleCardAction(ctx, { chatId, userId, messageId, action,
   }
   const state = await loadCardState(ctx, chatId, txnId);
   if (!state || state.txn.status === "deleted") {
-    await notFound(ctx, chatId);
+    await notFound(ctx, chatId, ack);
     return true;
   }
-  await handler(ctx, { chatId, userId, messageId, state, arg, from });
+  await handler(ctx, { chatId, userId, messageId, state, arg, from, ack });
   return true;
 }
 
@@ -132,11 +134,12 @@ const ACTIONS = {
     );
   },
 
-  async cat(ctx, { chatId, messageId, state, arg }) {
+  async cat(ctx, { chatId, messageId, state, arg, ack }) {
     const list = categoriesFor(state.txn.direction);
     const idx = parseInt(arg, 10);
     if (isNaN(idx) || idx < 0 || idx >= list.length) {
-      await ctx.tg.sendMessage(chatId, "❌ *Invalid category*");
+      if (ack) await ack.toast("❌ Invalid category", true);
+      else await ctx.tg.sendMessage(chatId, "❌ *Invalid category*");
       return;
     }
     const category = list[idx];
@@ -146,8 +149,13 @@ const ACTIONS = {
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
     // Teach this user's future transactions from the same merchant / VPA pattern.
     await teachCategoryRules(ctx.db, chatId, state.txn, category, ctx.now());
-    await applyLearnedCategoryToUntagged(ctx, chatId);
+    const autoFilled = await applyLearnedCategoryToUntagged(ctx, chatId);
     await refreshPersonalPin(ctx, chatId);
+    if (ack) {
+      const emoji = CATEGORY_EMOJIS[category] ? CATEGORY_EMOJIS[category] + " " : "";
+      const extra = autoFilled > 0 ? " · +" + autoFilled + " auto-tagged" : "";
+      await ack.toast(emoji + category + extra);
+    }
   },
 
   async help(ctx, { chatId, messageId, state }) {
@@ -158,15 +166,15 @@ const ACTIONS = {
     );
   },
 
-  async fix(ctx, { chatId, messageId, state }) {
-    if (await refuseIfSplit(ctx, chatId, messageId, state)) return;
+  async fix(ctx, { chatId, messageId, state, ack }) {
+    if (await refuseIfSplit(ctx, chatId, messageId, state, ack)) return;
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, fixMenuKeyboard(state.txn));
   },
 
   // Money in ↔ money out. The category is kept when it fits the new
   // direction, otherwise re-guessed.
-  async flip(ctx, { chatId, messageId, state }) {
-    if (await refuseIfSplit(ctx, chatId, messageId, state)) return;
+  async flip(ctx, { chatId, messageId, state, ack }) {
+    if (await refuseIfSplit(ctx, chatId, messageId, state, ack)) return;
     const t = state.txn;
     const direction = t.direction === "debit" ? "credit" : "debit";
     const category = categoriesFor(direction).includes(t.category)
@@ -178,10 +186,11 @@ const ACTIONS = {
     await editCard(ctx, chatId, messageId, state);
     await logUserFix(ctx, chatId, state, ["transaction_type"]);
     await refreshPersonalPin(ctx, chatId);
+    if (ack) await ack.toast(direction === "credit" ? "🟢 Flipped to Credit" : "🔴 Flipped to Debit");
   },
 
-  async amt(ctx, { chatId, userId, messageId, state }) {
-    if (await refuseIfSplit(ctx, chatId, messageId, state)) return;
+  async amt(ctx, { chatId, userId, messageId, state, ack }) {
+    if (await refuseIfSplit(ctx, chatId, messageId, state, ack)) return;
     await setPending(ctx, "amount", userId, { txnId: state.txn.id, messageId });
     await ctx.tg.sendMessage(
       chatId,
@@ -200,18 +209,20 @@ const ACTIONS = {
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, deleteConfirmKeyboard(state.txn.id));
   },
 
-  async delyes(ctx, { chatId, messageId, state }) {
+  async delyes(ctx, { chatId, messageId, state, ack }) {
     if (state.isSplit) {
-      await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then delete.*");
+      if (ack) await ack.toast("↩️ Make it personal again first, then delete.", true);
+      else await ctx.tg.sendMessage(chatId, "↩️ *Make it personal again first, then delete.*");
       await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
       return;
     }
     await softDeleteTransaction(ctx.db, chatId, state.txn.id, ctx.now());
     await ctx.tg.editMessageText(chatId, messageId, "🗑️ *Transaction deleted*");
     await refreshPersonalPin(ctx, chatId);
+    if (ack) await ack.toast("🗑️ Transaction deleted");
   },
 
-  async report(ctx, { chatId, messageId, state, from }) {
+  async report(ctx, { chatId, messageId, state, from, ack }) {
     const t = state.txn;
     const src = state.sources[0] || {};
     const name = (from && (from.first_name || from.username)) || chatId;
@@ -245,13 +256,14 @@ const ACTIONS = {
       },
       ctx.now()
     );
+    if (ack) await ack.toast("📩 Reported — thanks!");
   },
 
   rr: reread,
   rra: rereadAccept,
   rrk: rereadKeep,
 
-  async rvok(ctx, { chatId, messageId, state }) {
+  async rvok(ctx, { chatId, messageId, state, ack }) {
     if (state.txn.status === "review") {
       await updateTransaction(ctx.db, chatId, state.txn.id, { status: "confirmed", reviewNote: null }, ctx.now());
       state.txn.status = "confirmed";
@@ -259,11 +271,13 @@ const ACTIONS = {
       await refreshPersonalPin(ctx, chatId);
     }
     await editCard(ctx, chatId, messageId, state);
+    if (ack) await ack.toast("✅ Saved");
   },
 
-  async rvno(ctx, { chatId, messageId, state }) {
+  async rvno(ctx, { chatId, messageId, state, ack }) {
     await softDeleteTransaction(ctx.db, chatId, state.txn.id, ctx.now());
     await ctx.tg.editMessageText(chatId, messageId, "✖ *Discarded*");
+    if (ack) await ack.toast("✖ Discarded");
   }
 };
 
@@ -293,18 +307,18 @@ function describeChanges(fresh, changed) {
   return parts.join(" · ");
 }
 
-async function reread(ctx, { chatId, messageId, state }) {
+async function reread(ctx, { chatId, messageId, state, ack }) {
   const src = state.sources[0];
   if (!state.canReread) {
-    await ctx.tg.sendMessage(
-      chatId,
-      state.isSplit
-        ? "↩️ *Make it personal again first, then re-read.*"
-        : "ℹ️ *Already re-read.* Use ⚠️ Report error if it's still wrong."
-    );
+    const msg = state.isSplit
+      ? "↩️ Make it personal again first, then re-read."
+      : "ℹ️ Already re-read. Use ⚠️ Report error if it's still wrong.";
+    if (ack) await ack.toast(msg, true);
+    else await ctx.tg.sendMessage(chatId, msg);
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
     return;
   }
+  if (ack) await ack.toast("🔄 Re-reading message…");
   await ctx.tg.editMessageReplyMarkup(chatId, messageId, {
     inline_keyboard: [[{ text: "⏳ Re-reading…", callback_data: "back_" + state.txn.id }]]
   });
@@ -375,10 +389,11 @@ async function reread(ctx, { chatId, messageId, state }) {
   });
 }
 
-async function rereadAccept(ctx, { chatId, messageId, state }) {
+async function rereadAccept(ctx, { chatId, messageId, state, ack }) {
   const pending = await takeEphemeral(ctx.db, rereadKey(chatId, state.txn.id), ctx.now());
   if (!pending || !pending.fields) {
-    await ctx.tg.sendMessage(chatId, "⌛ *That re-read expired.* Tap ⋯ → 🔄 Re-read to try again.");
+    if (ack) await ack.toast("⌛ That re-read expired — tap ⋯ → 🔄 Re-read to try again.", true);
+    else await ctx.tg.sendMessage(chatId, "⌛ *That re-read expired.* Tap ⋯ → 🔄 Re-read to try again.");
     await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
     return;
   }
@@ -402,6 +417,7 @@ async function rereadAccept(ctx, { chatId, messageId, state }) {
   const fresh = await loadCardState(ctx, chatId, state.txn.id);
   await editCard(ctx, chatId, messageId, fresh);
   await refreshPersonalPin(ctx, chatId);
+  if (ack) await ack.toast("✅ Updated from re-read");
   await logParserEvent(
     ctx.db,
     {
@@ -417,7 +433,7 @@ async function rereadAccept(ctx, { chatId, messageId, state }) {
   await autoDisableIfNeeded(ctx, templateId);
 }
 
-async function rereadKeep(ctx, { chatId, messageId, state }) {
+async function rereadKeep(ctx, { chatId, messageId, state, ack }) {
   await takeEphemeral(ctx.db, rereadKey(chatId, state.txn.id), ctx.now());
   const src = state.sources[0];
   if (src && !src.reread) {
@@ -426,6 +442,7 @@ async function rereadKeep(ctx, { chatId, messageId, state }) {
     state.canReread = false;
   }
   await editCard(ctx, chatId, messageId, state);
+  if (ack) await ack.toast("↩ Kept original");
   if (src) {
     await logParserEvent(
       ctx.db,
@@ -753,7 +770,7 @@ function tagStepperKeyboard(txn) {
   return { inline_keyboard: rows };
 }
 
-export async function handleTagQueueCallback(ctx, { chatId, messageId, action, payload }) {
+export async function handleTagQueueCallback(ctx, { chatId, messageId, action, payload, ack }) {
   if (action === "tagqm") {
     const txn = await getTransaction(ctx.db, chatId, payload);
     if (txn && txn.status === "confirmed" && !txn.merchant) {
@@ -761,6 +778,7 @@ export async function handleTagQueueCallback(ctx, { chatId, messageId, action, p
       await updateTransaction(ctx.db, chatId, txn.id, { merchant: fallbackName }, ctx.now());
       await refreshCardMessage(ctx, chatId, txn.id);
       await refreshPersonalPin(ctx, chatId);
+      if (ack) await ack.toast("✓ Kept as " + fallbackName);
     }
     return renderNextUntaggedStep(ctx, chatId, messageId, null);
   }
@@ -779,10 +797,15 @@ export async function handleTagQueueCallback(ctx, { chatId, messageId, action, p
         await updateTransaction(ctx.db, chatId, txn.id, { category, kind }, ctx.now());
         Object.assign(txn, { category, kind });
         await teachCategoryRules(ctx.db, chatId, txn, category, ctx.now());
-        await applyLearnedCategoryToUntagged(ctx, chatId);
+        const autoFilled = await applyLearnedCategoryToUntagged(ctx, chatId);
         await refreshCardMessage(ctx, chatId, txn.id);
         await refreshPersonalPin(ctx, chatId);
         stillUntagged = isUntaggedTransaction(txn);
+        if (ack) {
+          const emoji = CATEGORY_EMOJIS[category] ? CATEGORY_EMOJIS[category] + " " : "";
+          const extra = autoFilled > 0 ? " · +" + autoFilled + " auto-tagged" : "";
+          await ack.toast(emoji + category + extra);
+        }
       }
     }
     return renderNextUntaggedStep(ctx, chatId, messageId, stillUntagged ? txnId : null);

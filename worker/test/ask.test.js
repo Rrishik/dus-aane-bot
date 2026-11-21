@@ -120,7 +120,7 @@ describe("/ask", () => {
     expect(lastSent(ctx).args[2].reply_markup.inline_keyboard[0][0].callback_data).toBe("askfu_2");
 
     await handleUpdate(ctx, tap("askfu_1", answerId));
-    expect(lastSent(ctx).args[1]).toContain("expired");
+    expect(ctx.tg.of("answerCallbackQuery").at(-1).args[1]).toContain("expired");
   });
 
   it("caps analytics at FREE_ASK_LIMIT/day, refunds failures, and keeps tagging/splits/exports quota-exempt", async () => {

@@ -49,65 +49,83 @@ export async function handleStatsCallback(ctx, chatId, messageId, view, tenant) 
   }
 }
 
+function callbackResponder(ctx, cbId) {
+  let answered = false;
+  return {
+    async toast(text = "", showAlert = false) {
+      if (answered) return;
+      answered = true;
+      await ctx.tg.answerCallbackQuery(cbId, text, showAlert).catch(() => {});
+    },
+    get answered() {
+      return answered;
+    }
+  };
+}
+
 export async function handleCallback(ctx, cb) {
   const chatId = String(cb.message.chat.id);
   const messageId = cb.message.message_id;
   const data = cb.data || "";
-  if (data.startsWith("gstats:")) {
-    await ctx.tg.answerCallbackQuery(cb.id, "");
-    return handleGroupCallback(ctx, cb);
-  }
-  const tenant = await getTenant(ctx.db, chatId);
+  const ack = callbackResponder(ctx, cb.id);
 
-  // Resend setup must work for pending tenants — they need it most.
-  if (data === "resend_setup") {
-    if (!tenant) {
-      await ctx.tg.answerCallbackQuery(cb.id, "Please /start to set up your account.", true);
+  try {
+    if (data.startsWith("gstats:")) {
+      return await handleGroupCallback(ctx, cb, ack);
+    }
+    const tenant = await getTenant(ctx.db, chatId);
+
+    // Resend setup must work for pending tenants — they need it most.
+    if (data === "resend_setup") {
+      if (!tenant) {
+        await ack.toast("Please /start to set up your account.", true);
+        return;
+      }
+      await ack.toast("📬 Sending setup email…");
+      await sendSetupEmail(ctx, chatId, await getTenantEmails(ctx.db, chatId));
       return;
     }
-    await ctx.tg.answerCallbackQuery(cb.id, "📬 Sending...");
-    await sendSetupEmail(ctx, chatId, await getTenantEmails(ctx.db, chatId));
-    return;
-  }
-  // /deletemydata works for pending tenants too.
-  if (data === "wipe_yes" || data === "wipe_no") {
-    await ctx.tg.answerCallbackQuery(cb.id, "");
-    if (tenant) await handleWipeCallback(ctx, chatId, messageId, data.slice(5));
-    return;
-  }
-  if (!isUsable(tenant)) {
-    await ctx.tg.answerCallbackQuery(
-      cb.id,
-      tenant ? gateText(tenant).replace(/`/g, "") : "Please /start to set up your account.",
-      true
-    );
-    return;
-  }
+    // Data wipe confirmation works for pending tenants too.
+    if (data === "wipe_yes" || data === "wipe_no") {
+      const yes = data === "wipe_yes";
+      await ack.toast(yes ? "🗑 Deleting your data…" : "👍 Kept your data");
+      if (tenant) await handleWipeCallback(ctx, chatId, messageId, data.slice(5));
+      return;
+    }
+    if (!isUsable(tenant)) {
+      await ack.toast(tenant ? gateText(tenant).replace(/`/g, "") : "Please /start to set up your account.", true);
+      return;
+    }
 
-  // Ack first so the spinner clears; later errors go out as messages.
-  await ctx.tg.answerCallbackQuery(cb.id, "");
-  if (isGroupCallback(data)) return handleGroupCallback(ctx, cb);
-  const sep = data.indexOf("_");
-  const action = sep < 0 ? data : data.slice(0, sep);
-  const payload = sep < 0 ? "" : data.slice(sep + 1);
+    if (isGroupCallback(data)) return await handleGroupCallback(ctx, cb, ack);
+    const sep = data.indexOf("_");
+    const action = sep < 0 ? data : data.slice(0, sep);
+    const payload = sep < 0 ? "" : data.slice(sep + 1);
 
-  if (action === "stats") return handleStatsCallback(ctx, chatId, messageId, payload, tenant);
-  if (action === "tagq" || action === "tagqc" || action === "tagqm") {
-    return handleTagQueueCallback(ctx, { chatId, messageId, action, payload });
+    if (action === "stats") return await handleStatsCallback(ctx, chatId, messageId, payload, tenant);
+    if (action === "tagq" || action === "tagqc" || action === "tagqm") {
+      return await handleTagQueueCallback(ctx, { chatId, messageId, action, payload, ack });
+    }
+    if (action === "askfu") return await handleAskFollowUp(ctx, chatId, messageId, ack);
+    if (action === "export" && payload.startsWith("sheet_")) {
+      await ack.toast("📊 Building Google Sheet…");
+      return await handleExportSheet(ctx, chatId, payload.slice(6));
+    }
+    if (data === "premium_info") {
+      await ack.toast("💎 Premium coming soon — we'll let you know when it's ready!", true);
+      return;
+    }
+    const handled = await handleCardAction(ctx, {
+      chatId,
+      userId: String(cb.from && cb.from.id ? cb.from.id : chatId),
+      messageId,
+      action,
+      payload,
+      from: cb.from,
+      ack
+    });
+    if (!handled) await ack.toast("❌ Unknown action", true);
+  } finally {
+    if (!ack.answered) await ack.toast("");
   }
-  if (action === "askfu") return handleAskFollowUp(ctx, chatId, messageId);
-  if (action === "export" && payload.startsWith("sheet_")) return handleExportSheet(ctx, chatId, payload.slice(6));
-  if (data === "premium_info") {
-    await ctx.tg.sendMessage(chatId, "💎 *Premium coming soon* — we'll let you know when it's ready.");
-    return;
-  }
-  const handled = await handleCardAction(ctx, {
-    chatId,
-    userId: String(cb.from && cb.from.id ? cb.from.id : chatId),
-    messageId,
-    action,
-    payload,
-    from: cb.from
-  });
-  if (!handled) await ctx.tg.sendMessage(chatId, "❌ *Unknown action*");
 }

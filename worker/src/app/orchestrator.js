@@ -1132,11 +1132,12 @@ export async function handlePendingAsk(ctx, m, tenant) {
 }
 
 // 💬 Follow up: single-use; re-key the conversation to a force-reply prompt.
-export async function handleAskFollowUp(ctx, chatId, messageId) {
+export async function handleAskFollowUp(ctx, chatId, messageId, ack) {
   await ctx.tg.editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] }).catch(() => {});
   const convo = await takeEphemeral(ctx.db, convoKey(chatId, messageId), ctx.now());
   if (!convo) {
-    await ctx.tg.sendMessage(chatId, "_That follow-up window has expired. Just send your question directly._");
+    if (ack) await ack.toast("⌛ That follow-up window expired — just type your question below.", true);
+    else await ctx.tg.sendMessage(chatId, "_That follow-up window has expired. Just send your question directly._");
     return;
   }
   const sent = await ctx.tg.sendMessage(chatId, "_What's your follow-up?_", {

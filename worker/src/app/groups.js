@@ -456,13 +456,13 @@ export function isGroupCallback(data) {
   return /^(gnav|gsp|gset|gst|gbk|gun|gstats):/.test(String(data || ""));
 }
 
-export async function handleGroupCallback(ctx, cb) {
+export async function handleGroupCallback(ctx, cb, ack) {
   const [action, ...parts] = String(cb.data).split(":");
   const chatId = String(cb.message.chat.id);
   const messageId = cb.message.message_id;
   const caller = String(cb.from.id);
 
-  if (action === "gstats") return groupStatsView(ctx, chatId, caller, parts[0] === "s" ? "s" : "d", messageId);
+  if (action === "gstats") return groupStatsView(ctx, chatId, caller, parts[0] === "s" ? "s" : "d", messageId, ack);
 
   const txnId = parts[0];
   const refreshCard = async () => {
@@ -470,7 +470,8 @@ export async function handleGroupCallback(ctx, cb) {
     if (state)
       await ctx.tg.editMessageText(chatId, messageId, renderCard(state), { reply_markup: defaultKeyboard(state) });
   };
-  const fail = (error) => ctx.tg.sendMessage(chatId, "❌ *" + escapeMarkdown(error) + "*");
+  const fail = (error) =>
+    ack ? ack.toast("❌ " + error, true) : ctx.tg.sendMessage(chatId, "❌ *" + escapeMarkdown(error) + "*");
 
   if (action === "gnav" || action === "gset" || (action === "gbk" && parts[2] === "1")) {
     const group = await activeGroup(ctx, parts[1]);
@@ -489,16 +490,34 @@ export async function handleGroupCallback(ctx, cb) {
   }
   if (action === "gsp") {
     const res = await splitTransaction(ctx, { payerId: caller, txnId, groupId: parts[1], mode: parts[2] });
-    return res.ok ? refreshCard() : fail(res.error);
+    if (!res.ok) return fail(res.error);
+    await refreshCard();
+    if (ack) {
+      const shareNote =
+        res.shares.length === 1
+          ? money(res.shares[0], res.txn.currency) + " owed"
+          : money(res.shares[0], res.txn.currency) + " each";
+      await ack.toast("👥 Split with " + (res.group.name || "group") + " · " + shareNote);
+    }
+    return;
   }
   if (action === "gst") {
     const res = await settleTransaction(ctx, { payerId: caller, txnId, groupId: parts[1], target: parts[2] });
-    return res.ok ? refreshCard() : fail(res.error);
+    if (!res.ok) return fail(res.error);
+    await refreshCard();
+    if (ack) await ack.toast("🤝 Settled " + money(res.txn.amount_minor, res.txn.currency) + " with " + res.targetName);
+    return;
   }
   if (action === "gun") {
     const res = await undoGroupLink(ctx, { payerId: caller, txnId });
-    if (!res.ok) return ctx.tg.sendMessage(chatId, "⚠️ *" + escapeMarkdown(res.error) + "*");
-    return refreshCard();
+    if (!res.ok) {
+      return ack
+        ? ack.toast("⚠️ " + res.error, true)
+        : ctx.tg.sendMessage(chatId, "⚠️ *" + escapeMarkdown(res.error) + "*");
+    }
+    await refreshCard();
+    if (ack) await ack.toast("↩️ Back to personal");
+    return;
   }
 }
 
@@ -510,12 +529,13 @@ async function requireGroup(ctx, chatId) {
   return group;
 }
 
-async function groupStatsView(ctx, groupId, caller, mode, messageId) {
+async function groupStatsView(ctx, groupId, caller, mode, messageId, ack) {
   const group = await requireGroup(ctx, groupId);
   if (!group) return;
   const members = await getGroupMembers(ctx.db, group.id);
   if (messageId && !members.includes(caller)) {
-    await ctx.tg.sendMessage(groupId, "❌ *You're not a member of this group.*");
+    if (ack) await ack.toast("❌ You're not a member of this group.", true);
+    else await ctx.tg.sendMessage(groupId, "❌ *You're not a member of this group.*");
     return;
   }
   const detailed = await groupBalances(ctx.db, group.id);
