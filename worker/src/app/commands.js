@@ -64,21 +64,29 @@ function kindForToken(token) {
   return /^(?:a\/c|acct|account|bank)$/i.test(String(token || "").trim()) ? "account" : "card";
 }
 
+function formatLabelledLine(r, icon) {
+  const metaParts = [];
+  if (r.txn_count > 0) metaParts.push(r.txn_count + (r.txn_count === 1 ? " txn" : " txns"));
+  if (r.last_seen) metaParts.push(formatDayMonth(r.last_seen));
+  const meta = metaParts.length > 0 ? " _(" + escapeMarkdown(metaParts.join(" · ")) + ")_" : "";
+  return "• " + icon + " `*" + r.last4 + "` — *" + escapeMarkdown(r.label) + "*" + meta;
+}
+
 export async function accountsMessage(ctx, tenantId) {
   const seen = await listSeenAccounts(ctx.db, tenantId);
-  const labelled = seen.filter((r) => r.label);
+  const labelledCards = seen.filter((r) => r.label && r.kind !== "account");
+  const labelledAccounts = seen.filter((r) => r.label && r.kind === "account");
   const unlabelled = seen.filter((r) => !r.label);
   const lines = ["💳 *Cards & Accounts*"];
 
-  if (labelled.length > 0) {
-    lines.push("", "*Labelled*");
-    for (const r of labelled) {
-      const icon = r.kind === "account" ? "🏦" : "💳";
-      const metaParts = [];
-      if (r.txn_count > 0) metaParts.push(r.txn_count + (r.txn_count === 1 ? " txn" : " txns"));
-      if (r.last_seen) metaParts.push(formatDayMonth(r.last_seen));
-      const meta = metaParts.length > 0 ? " _(" + escapeMarkdown(metaParts.join(" · ")) + ")_" : "";
-      lines.push("• " + icon + " `*" + r.last4 + "` — *" + escapeMarkdown(r.label) + "*" + meta);
+  if (labelledCards.length > 0 || labelledAccounts.length > 0) {
+    if (labelledCards.length > 0) {
+      lines.push("", "*Credit Cards*");
+      for (const r of labelledCards) lines.push(formatLabelledLine(r, "💳"));
+    }
+    if (labelledAccounts.length > 0) {
+      lines.push("", "*Bank Accounts*");
+      for (const r of labelledAccounts) lines.push(formatLabelledLine(r, "🏦"));
     }
   } else {
     lines.push("", "_No cards or accounts labelled yet._");
@@ -96,7 +104,7 @@ export async function accountsMessage(ctx, tenantId) {
     if (unlabelled.length > shown.length) {
       lines.push("_+" + (unlabelled.length - shown.length) + " more_");
     }
-  } else if (labelled.length === 0) {
+  } else if (labelledCards.length === 0 && labelledAccounts.length === 0) {
     lines.push("_No card or account digits seen in transactions yet._");
   }
 
@@ -186,7 +194,7 @@ export function parseCardsViewReply(text) {
     );
     if (!explicit) return null;
     const label = explicit[3].trim();
-    if (!label || label.split(/\s+/).length > 4) return null;
+    if (!label || label.split(/\s+/).length > 5) return null;
     ops.push({
       op: "upsert",
       kind: kindForToken(explicit[1]),

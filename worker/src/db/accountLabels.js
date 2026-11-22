@@ -44,16 +44,38 @@ export async function deleteAccountLabel(db, tenantId, last4, now = Date.now()) 
   await db.prepare("DELETE FROM account_labels WHERE tenant_id = ? AND last4 = ?").bind(tid, digits).run();
 
   if (existing.kind === "card" && existing.label) {
-    const oldMerchant = ("CC Bill · " + existing.label).slice(0, 28);
+    const oldMerchant = ("CC Bill · " + stripCardSuffix(existing.label)).slice(0, 28);
     await db
       .prepare(
         "UPDATE transactions SET merchant = ?, updated_at = ? " +
-          "WHERE tenant_id = ? AND status = 'confirmed' AND merchant = ? AND account_last4 = ?"
+          "WHERE tenant_id = ? AND status = 'confirmed' AND (merchant = ? OR merchant = ?) AND account_last4 = ?"
       )
-      .bind("CC Bill *" + digits, now, tid, oldMerchant, digits)
+      .bind("CC Bill *" + digits, now, tid, oldMerchant, ("CC Bill · " + existing.label).slice(0, 28), digits)
       .run();
   }
   return { ok: true, last4: digits, removed_label: existing.label, kind: existing.kind };
+}
+
+const MAX_ACCOUNT_LABEL_LEN = 30;
+
+function normalizeAccountLabel(raw) {
+  const words = String(raw || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return words
+    .map((w) => smartTitleCase(w.toLowerCase()))
+    .join(" ")
+    .slice(0, MAX_ACCOUNT_LABEL_LEN)
+    .trim();
+}
+
+function stripCardSuffix(label) {
+  return (
+    String(label || "")
+      .replace(/\s+(?:credit\s+card|card|cc)$/i, "")
+      .trim() || String(label || "").trim()
+  );
 }
 
 export async function upsertAccountLabel(db, tenantId, last4, rawLabel, kind = "card", now = Date.now()) {
@@ -62,11 +84,10 @@ export async function upsertAccountLabel(db, tenantId, last4, rawLabel, kind = "
   if (digits.length < 3 || digits.length > 4) {
     return { ok: false, error: "last4 must be 3 or 4 digits (e.g. '5678')." };
   }
-  const cleanLabel = smartTitleCase(String(rawLabel || "").trim())
-    .slice(0, 18)
-    .trim();
+  const cleanLabel = normalizeAccountLabel(rawLabel);
   if (!cleanLabel) return { ok: false, error: "Card label cannot be empty." };
-  const normKind = kind === "account" ? "account" : "card";
+  const normKind =
+    kind === "account" || /\b(?:savings?|salary|current|account|a\/c)\b/i.test(cleanLabel) ? "account" : "card";
 
   await db
     .prepare(
@@ -79,11 +100,11 @@ export async function upsertAccountLabel(db, tenantId, last4, rawLabel, kind = "
   // Retroactively upgrade any past "CC Bill *5678" rows for this user to "CC Bill · <Label>"!
   let upgraded = 0;
   if (normKind === "card") {
-    const newMerchant = ("CC Bill · " + cleanLabel).slice(0, 28);
+    const newMerchant = ("CC Bill · " + stripCardSuffix(cleanLabel)).slice(0, 28);
     const res = await db
       .prepare(
         "UPDATE transactions SET merchant = ?, updated_at = ? " +
-          "WHERE tenant_id = ? AND status = 'confirmed' AND (merchant = ? OR (merchant = 'CC Bill' AND account_last4 = ?))"
+          "WHERE tenant_id = ? AND status = 'confirmed' AND (merchant = ? OR (merchant LIKE 'CC Bill%' AND account_last4 = ?))"
       )
       .bind(newMerchant, now, tid, "CC Bill *" + digits, digits)
       .run();

@@ -307,6 +307,8 @@ const UPPER_ACRONYMS = new Set([
   "AXIS",
   "IDFC",
   "PNB",
+  "BOB",
+  "AU",
   "HSBC",
   "AMEX",
   "BESCOM",
@@ -483,13 +485,17 @@ export function detectCcBillCardLast4(sourceText) {
 
 export function formatCcBillMerchant(cardLast4, cardLabelsMap = {}) {
   const digits = cardLast4 ? String(cardLast4).trim() : "";
+  const stripCardSuffix = (lbl) =>
+    String(lbl || "")
+      .replace(/\s+(?:credit\s+card|card|cc)$/i, "")
+      .trim() || String(lbl || "").trim();
   if (digits && cardLabelsMap[digits]) {
-    return ("CC Bill · " + cardLabelsMap[digits]).slice(0, TAG_MAX_LEN);
+    return ("CC Bill · " + stripCardSuffix(cardLabelsMap[digits])).slice(0, TAG_MAX_LEN);
   }
   if (digits) return "CC Bill *" + digits;
   const allCards = Object.values(cardLabelsMap).filter(Boolean);
   if (allCards.length === 1) {
-    return ("CC Bill · " + allCards[0]).slice(0, TAG_MAX_LEN);
+    return ("CC Bill · " + stripCardSuffix(allCards[0])).slice(0, TAG_MAX_LEN);
   }
   return "CC Bill";
 }
