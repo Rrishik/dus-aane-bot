@@ -4,10 +4,11 @@
 import { listTenants, recordNag, setTenantStatus } from "../db/tenants.js";
 import { purgeExpired } from "../db/ephemeral.js";
 import { getParserMode, getDisabledTemplates, parserEventSummary } from "../db/settings.js";
-import { promoteConsensusMerchantRules, recentLearnedRules } from "../db/merchantRules.js";
+import { getMerchantRules, promoteConsensusMerchantRules, recentLearnedRules } from "../db/merchantRules.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { countUntaggedTransactions, listUntaggedWithSignals } from "../db/transactions.js";
 import { weekRangeFor, weeklyDigestData, formatWeeklyMessage } from "./analytics.js";
+import { normalizeTenantMerchants } from "./merchants.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { suggestTagsForBatch } from "./tagSuggester.js";
 import { BATCH_SIZE, formatBatchSuggestionsSection, batchStepperKeyboard, saveStepperState } from "./tagStepper.js";
@@ -222,6 +223,7 @@ export async function sendDailyRecaps(ctx) {
   const stats = { sent: 0, skipped: 0, dormant: 0, failed: 0 };
   for (const t of await listTenants(ctx.db, { kind: "personal", statuses: ["active"] })) {
     try {
+      await normalizeTenantMerchants(ctx.db, t.id, await getMerchantRules(ctx.db, t.id), ctx.now());
       await refreshPersonalPin(ctx, t.id);
       const [todayRows, totalUntagged] = await Promise.all([
         listEffectiveTransactions(ctx.db, t.id, { from: today, to: today }),

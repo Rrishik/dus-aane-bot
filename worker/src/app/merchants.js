@@ -11,6 +11,7 @@ const RAW_BRAND_RULES = [
   ["swiggy instamart", "Instamart", "Groceries"],
   ["instamart", "Instamart", "Groceries"],
   ["bundl tech", "Swiggy", "Food"],
+  ["scootsy", "Swiggy", "Food"],
   ["swiggy", "Swiggy", "Food"],
   ["eternal ltd", "Zomato", "Food"],
   ["zomato", "Zomato", "Food"],
@@ -36,16 +37,23 @@ const RAW_BRAND_RULES = [
   ["subway", "Subway", "Food"],
 
   // Groceries
+  ["blink commerce", "Blinkit", "Groceries"],
   ["grofers", "Blinkit", "Groceries"],
   ["blinkit", "Blinkit", "Groceries"],
   ["kirana kart", "Zepto", "Groceries"],
+  ["kiranakart", "Zepto", "Groceries"],
   ["zepto", "Zepto", "Groceries"],
   ["innovative retail", "BigBasket", "Groceries"],
   ["supermarket grocery", "BigBasket", "Groceries"],
   ["bigbasket", "BigBasket", "Groceries"],
-  ["avenue supermarts", "DMart", "Groceries"],
+  ["avenue supermart", "DMart", "Groceries"],
+  ["avenue e-commerce", "DMart", "Groceries"],
+  ["avenue e commerce", "DMart", "Groceries"],
+  ["avenue ecommerce", "DMart", "Groceries"],
   ["d-mart", "DMart", "Groceries"],
   ["dmart", "DMart", "Groceries"],
+  ["trent hypermarket", "Star Bazaar", "Groceries"],
+  ["star bazaar", "Star Bazaar", "Groceries"],
   ["jiomart", "JioMart", "Groceries"],
   ["country delight", "Country Delight", "Groceries"],
   ["nature's basket", "Nature's Basket", "Groceries"],
@@ -61,14 +69,18 @@ const RAW_BRAND_RULES = [
   ["myntra", "Myntra", "Shopping"],
   ["ajio", "Ajio", "Shopping"],
   ["meesho", "Meesho", "Shopping"],
+  ["fsn e-commerce", "Nykaa", "Shopping"],
+  ["fsn ecommerce", "Nykaa", "Shopping"],
   ["nykaa", "Nykaa", "Shopping"],
   ["tata cliq", "Tata Cliq", "Shopping"],
   ["reliance digital", "Reliance Digital", "Shopping"],
+  ["infiniti retail", "Croma", "Shopping"],
   ["croma", "Croma", "Shopping"],
   ["decathlon", "Decathlon", "Shopping"],
   ["ikea", "IKEA", "Shopping"],
   ["uniqlo", "Uniqlo", "Shopping"],
   ["westside", "Westside", "Shopping"],
+  ["trent", "Westside", "Shopping"],
   ["zudio", "Zudio", "Shopping"],
   ["firstcry", "FirstCry", "Shopping"],
   ["lenskart", "Lenskart", "Shopping"],
@@ -79,12 +91,15 @@ const RAW_BRAND_RULES = [
   ["uber", "Uber", "Travel"],
   ["ola cabs", "Ola", "Travel"],
   ["ani technologies", "Ola", "Travel"],
+  ["roppen", "Rapido", "Travel"],
   ["rapido", "Rapido", "Travel"],
   ["blusmart", "BluSmart", "Travel"],
   ["namma yatri", "Namma Yatri", "Travel"],
   ["irctc", "IRCTC", "Travel"],
   ["interglobe", "IndiGo", "Travel"],
   ["indigo", "IndiGo", "Travel"],
+  ["tata sia", "Air India", "Travel"],
+  ["vistara", "Air India", "Travel"],
   ["air india", "Air India", "Travel"],
   ["akasa", "Akasa Air", "Travel"],
   ["spicejet", "SpiceJet", "Travel"],
@@ -112,6 +127,7 @@ const RAW_BRAND_RULES = [
   ["nobroker", "NoBroker", "Bills"],
   ["act fibernet", "ACT Fibernet", "Bills"],
   ["airtel", "Airtel", "Bills"],
+  ["jio", "Jio", "Bills"],
   ["vodafone", "Vi", "Bills"],
   ["bescom", "BESCOM", "Bills"],
   ["tsspdcl", "TSSPDCL", "Bills"],
@@ -145,6 +161,7 @@ const RAW_BRAND_RULES = [
   ["thyrocare", "Thyrocare", "Health"],
 
   // Fun
+  ["bigtree", "BookMyShow", "Fun"],
   ["bookmyshow", "BookMyShow", "Fun"],
   ["pvr inox", "PVR INOX", "Fun"],
   ["playstation", "PlayStation", "Fun"],
@@ -237,6 +254,8 @@ export const CANONICAL_GENERIC_LABELS = {
   gym: { name: "Fitness", category: "Health" },
   movies: { name: "Movies", category: "Fun" },
   kirana: { name: "Kirana", category: "Groceries" },
+  avenue: { name: "DMart", category: "Groceries" },
+  "d mart": { name: "DMart", category: "Groceries" },
   veggies: { name: "Fruits & Veggies", category: "Groceries" },
   "fruits & veggies": { name: "Fruits & Veggies", category: "Groceries" },
   supermarket: { name: "Supermarket", category: "Groceries" },
@@ -504,6 +523,33 @@ export function quickMerchantChoices({ direction = "debit", category, cardLabels
 // or uncanonicalized historical `transactions.merchant` and `merchant_rules.name` rows.
 export async function normalizeTenantMerchants(db, tenantId, rules = [], now = Date.now()) {
   const tid = String(tenantId);
+  const stmts = [];
+
+  // 1. Normalize saved `merchant_rules.name` first so stale personal rule names
+  //    ("AVENUE" / "Avenue" / "sip") don't shadow canonical brand names below.
+  const ruleRows = (
+    await db
+      .prepare("SELECT pattern, name FROM merchant_rules WHERE tenant_id = ? AND name IS NOT NULL AND TRIM(name) <> ''")
+      .bind(tid)
+      .all()
+  ).results;
+  for (const rr of ruleRows) {
+    const nextName = normalizeMerchantName(rr.name, []);
+    if (nextName && nextName !== rr.name) {
+      stmts.push(
+        db
+          .prepare("UPDATE merchant_rules SET name = ?, updated_at = ? WHERE tenant_id = ? AND pattern = ?")
+          .bind(nextName, now, tid, rr.pattern)
+      );
+    }
+  }
+  const normalizedRules = (rules || []).map((r) => ({
+    ...r,
+    name: r.name ? normalizeMerchantName(r.name, []) || r.name : r.name
+  }));
+
+  // 2. Normalize historical transaction merchants (recovering truncated raw
+  //    corporate names when `merchant_raw` contains a canonical brand).
   const rows = (
     await db
       .prepare(
@@ -513,10 +559,18 @@ export async function normalizeTenantMerchants(db, tenantId, rules = [], now = D
       .all()
   ).results;
 
-  const stmts = [];
   for (const r of rows) {
-    const next = normalizeMerchantName(r.merchant, rules);
-    let nextCat = r.category;
+    let canon = canonicalizeMerchant(r.merchant, normalizedRules);
+    if (
+      !canon.category &&
+      r.merchant_raw &&
+      r.merchant_raw.toLowerCase().includes(String(r.merchant || "").toLowerCase())
+    ) {
+      const rawCanon = canonicalizeMerchant(r.merchant_raw, normalizedRules);
+      if (rawCanon.merchant && rawCanon.category) canon = rawCanon;
+    }
+    const next = canon.merchant;
+    let nextCat = r.category || (r.direction === "debit" ? canon.category : null) || null;
     let nextKind = r.kind;
     if (r.direction === "debit" && next && /^CC Bill(?:\b|\s)/i.test(next) && r.kind === "spend") {
       nextCat = "Transfer";
@@ -532,22 +586,6 @@ export async function normalizeTenantMerchants(db, tenantId, rules = [], now = D
             "UPDATE transactions SET merchant = ?, category = ?, kind = ?, updated_at = ? WHERE id = ? AND tenant_id = ?"
           )
           .bind(next, nextCat, nextKind, now, r.id, tid)
-      );
-    }
-  }
-  const ruleRows = (
-    await db
-      .prepare("SELECT pattern, name FROM merchant_rules WHERE tenant_id = ? AND name IS NOT NULL AND TRIM(name) <> ''")
-      .bind(tid)
-      .all()
-  ).results;
-  for (const rr of ruleRows) {
-    const nextName = normalizeMerchantName(rr.name, []);
-    if (nextName && nextName !== rr.name) {
-      stmts.push(
-        db
-          .prepare("UPDATE merchant_rules SET name = ?, updated_at = ? WHERE tenant_id = ? AND pattern = ?")
-          .bind(nextName, now, tid, rr.pattern)
       );
     }
   }

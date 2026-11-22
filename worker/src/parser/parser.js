@@ -94,9 +94,15 @@ var _P_MONTHS = {
 var _P_MON = "(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*";
 
 var _P_CATEGORY_KEYWORDS = [
-  ["Food", /swiggy|zomato|restaurant|cafe|coffee|domino|pizza|eatsure|starbucks|kfc|mcdonald|burger/i],
-  ["Groceries", /blinkit|zepto|bigbasket|instamart|grocer|supermarket|dmart|jiomart/i],
-  ["Shopping", /amazon|flipkart|myntra|ajio|meesho|nykaa|croma|decathlon|udemy|coursera/i],
+  ["Food", /swiggy|scootsy|zomato|restaurant|cafe|coffee|domino|pizza|eatsure|starbucks|kfc|mcdonald|burger/i],
+  [
+    "Groceries",
+    /blinkit|blink commerce|zepto|kiranakart|bigbasket|instamart|grocer|supermarket|dmart|d-mart|avenue supermart|jiomart/i
+  ],
+  [
+    "Shopping",
+    /amazon|flipkart|myntra|ajio|meesho|nykaa|fsn e-?commerce|croma|infiniti retail|decathlon|udemy|coursera/i
+  ],
   [
     "Travel",
     /uber|\bola\b|rapido|irctc|makemytrip|goibibo|indigo|air india|vistara|redbus|cleartrip|\bmetro\b|petrol|fuel|hpcl|bpcl|indian oil|iocl|\bshell\b/i

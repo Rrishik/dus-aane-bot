@@ -11,6 +11,7 @@ import { askToolExecutor } from "../src/app/orchestratorTools.js";
 import {
   canonicalizeMerchant,
   normalizeUserMerchantInput,
+  normalizeTenantMerchants,
   detectCcBillCardLast4,
   formatCcBillMerchant
 } from "../src/app/merchants.js";
@@ -23,9 +24,30 @@ const MIGRATIONS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../migr
 describe("canonicalizeMerchant & normalizeUserMerchantInput", () => {
   it("normalizes brands, legal names, clearing houses (SIP/ICCL -> Mutual Funds), gateways, currencies, and VPAs", () => {
     expect(canonicalizeMerchant("BLINKIT")).toMatchObject({ merchant: "Blinkit", category: "Groceries" });
+    expect(canonicalizeMerchant("BLINK COMMERCE PVT LTD")).toMatchObject({
+      merchant: "Blinkit",
+      category: "Groceries"
+    });
+    expect(canonicalizeMerchant("KIRANAKART TECHNOLOGIES")).toMatchObject({
+      merchant: "Zepto",
+      category: "Groceries"
+    });
     expect(canonicalizeMerchant("DMART")).toMatchObject({ merchant: "DMart", category: "Groceries" });
+    expect(canonicalizeMerchant("AVENUE")).toMatchObject({ merchant: "DMart", category: "Groceries" });
+    expect(canonicalizeMerchant("Avenue")).toMatchObject({ merchant: "DMart", category: "Groceries" });
+    expect(canonicalizeMerchant("AVENUE SUPERMART")).toMatchObject({ merchant: "DMart", category: "Groceries" });
+    expect(canonicalizeMerchant("AVENUE E-COMMERCE LTD")).toMatchObject({ merchant: "DMart", category: "Groceries" });
+    expect(canonicalizeMerchant("Park Avenue")).toMatchObject({ merchant: "Park Avenue", category: null });
     expect(canonicalizeMerchant("SWIGGY INSTAMART")).toMatchObject({ merchant: "Instamart", category: "Groceries" });
     expect(canonicalizeMerchant("BUNDL TECHNOLOGIES PVT LTD")).toMatchObject({ merchant: "Swiggy", category: "Food" });
+    expect(canonicalizeMerchant("SCOOTSY LOGISTICS")).toMatchObject({ merchant: "Swiggy", category: "Food" });
+    expect(canonicalizeMerchant("FSN E-COMMERCE VENTURES")).toMatchObject({
+      merchant: "Nykaa",
+      category: "Shopping"
+    });
+    expect(canonicalizeMerchant("INFINITI RETAIL LTD")).toMatchObject({ merchant: "Croma", category: "Shopping" });
+    expect(canonicalizeMerchant("BIGTREE ENTERTAINMENT")).toMatchObject({ merchant: "BookMyShow", category: "Fun" });
+    expect(canonicalizeMerchant("ROPPEN TRANSPORTATION")).toMatchObject({ merchant: "Rapido", category: "Travel" });
     expect(canonicalizeMerchant("URBANCLAP TECHNOLOGIES INDIA PVT LTD")).toMatchObject({
       merchant: "Urban Company",
       category: "Bills"
@@ -54,7 +76,79 @@ describe("canonicalizeMerchant & normalizeUserMerchantInput", () => {
     expect(normalizeUserMerchantInput("sip")).toBe("Mutual Funds");
     expect(normalizeUserMerchantInput("mf")).toBe("Mutual Funds");
     expect(normalizeUserMerchantInput("dmart")).toBe("DMart");
+    expect(normalizeUserMerchantInput("avenue")).toBe("DMart");
+    expect(normalizeUserMerchantInput("d mart")).toBe("DMart");
     expect(normalizeUserMerchantInput("chai")).toBe("Chai");
+  });
+
+  it("normalizeTenantMerchants normalizes rules before transactions and recovers truncated raw corporate names", async () => {
+    const db = createTestD1();
+    await db
+      .prepare("INSERT INTO tenants (id, kind, status, created_at) VALUES ('111', 'personal', 'active', ?)")
+      .bind(NOW)
+      .run();
+    // Stale learned rule with uncanonicalized `Avenue` name + historical `Avenue` row.
+    await upsertMerchantRule(db, "111", "avenue", { name: "Avenue", category: "Groceries" }, NOW);
+    await insertTransaction(
+      db,
+      "111",
+      {
+        occurredOn: "2026-11-10",
+        amountMinor: 309600,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: "Avenue",
+        merchantRaw: "AVENUE",
+        category: "Groceries"
+      },
+      { source: "email", sourceRef: "e-avenue" },
+      NOW
+    );
+    // Truncated `merchant` whose `merchant_raw` contains a full corporate brand, vs user-renamed "Team Lunch".
+    const rTrunc = await insertTransaction(
+      db,
+      "111",
+      {
+        occurredOn: "2026-11-11",
+        amountMinor: 50000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: "Infiniti",
+        merchantRaw: "INFINITI RETAIL LIMITED",
+        category: null
+      },
+      { source: "email", sourceRef: "e-infiniti" },
+      NOW
+    );
+    const rCustom = await insertTransaction(
+      db,
+      "111",
+      {
+        occurredOn: "2026-11-12",
+        amountMinor: 90000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: "Team Lunch",
+        merchantRaw: "BUNDL TECHNOLOGIES",
+        category: "Food"
+      },
+      { source: "email", sourceRef: "e-custom" },
+      NOW
+    );
+
+    const rules = await getMerchantRules(db, "111");
+    await normalizeTenantMerchants(db, "111", rules, NOW);
+
+    const avenueRows = (
+      await db.prepare("SELECT merchant FROM transactions WHERE tenant_id = '111' AND amount_minor = 309600").all()
+    ).results;
+    expect(avenueRows[0].merchant).toBe("DMart");
+    expect((await getMerchantRules(db, "111")).find((r) => r.pattern === "avenue").name).toBe("DMart");
+    expect(await getTransaction(db, "111", rTrunc)).toMatchObject({ merchant: "Croma", category: "Shopping" });
+    expect(await getTransaction(db, "111", rCustom)).toMatchObject({ merchant: "Team Lunch", category: "Food" });
   });
 
   it("0004 migration cleans historical transactions and rules", async () => {
