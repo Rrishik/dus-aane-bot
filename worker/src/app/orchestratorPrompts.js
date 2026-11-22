@@ -26,7 +26,7 @@ export function askSystemPrompt(today) {
     CURRENCY_RULE +
     "- 'Spending' means spend_by_currency (excludes " +
     NON_SPEND.join(", ") +
-    "). Mention non-spend debits only when asked or when explaining totals.\n" +
+    "). When `total_spend_inr` / `amount_inr` is present from FX conversion, report unified INR totals with `~₹` (and include native + `(~₹...)` on foreign merchants/spends). Mention non-spend debits only when asked or when explaining totals.\n" +
     "- Split transactions count only your_share.\n" +
     "- Available debit categories: " +
     CATEGORIES.join(", ") +

@@ -2,6 +2,7 @@ import { createContext } from "./app/context.js";
 import { handleIngestEmail } from "./app/ingestRoute.js";
 import { handleBackfillProgress } from "./app/backfill.js";
 import { handleUpdate } from "./app/webhook.js";
+import { enrichTransactionFx } from "./app/fx.js";
 import { runScheduled } from "./app/cron.js";
 
 // GET /healthz reports whether the D1 binding answers.
@@ -79,7 +80,17 @@ export async function handleTelegramWebhook(request, env, ctx) {
 // is never retried (retries could double-post).
 export async function handleQueue(batch, env) {
   for (const msg of batch.messages) {
-    await handleUpdate(createContext(env), msg.body);
+    const body = msg.body;
+    if (body && body.kind === "fx_enrich") {
+      try {
+        await enrichTransactionFx(createContext(env), body.tenantId, body.txnId);
+      } catch (e) {
+        console.error("[fx] queue enrich failed:", e && e.message);
+      }
+      msg.ack();
+      continue;
+    }
+    await handleUpdate(createContext(env), body);
     msg.ack();
   }
 }

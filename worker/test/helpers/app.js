@@ -50,14 +50,23 @@ export function fakeLlm(replies = []) {
   };
 }
 
-export function testContext({ now = NOW, llmReplies, env = {}, appsScript } = {}) {
+export function testContext({ now = NOW, llmReplies, env = {}, appsScript, fxReply } = {}) {
   const db = createTestD1();
   const tg = fakeTelegram();
   const llm = fakeLlm(llmReplies);
   let clock = now;
   // Records Worker → Apps Script calls; `appsScript(action, payload)` decides the reply.
   const asCalls = [];
+  const fxCalls = [];
   const fetchImpl = async (url, init) => {
+    const urlStr = String(url || "");
+    if (urlStr.includes("frankfurter.dev") || urlStr.includes("open.er-api.com")) {
+      fxCalls.push(urlStr);
+      if (!fxReply) return new Response("offline", { status: 503 });
+      const data = typeof fxReply === "function" ? await fxReply(urlStr) : fxReply;
+      if (!data) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify(data), { status: data.status || 200 });
+    }
     const body = JSON.parse(init.body);
     const payload = JSON.parse(body.payload);
     asCalls.push({ url, action: body.action, payload, body });
@@ -69,6 +78,7 @@ export function testContext({ now = NOW, llmReplies, env = {}, appsScript } = {}
     { db, tg, llm, now: () => clock, fetch: fetchImpl }
   );
   ctx.asCalls = asCalls;
+  ctx.fxCalls = fxCalls;
   ctx.advance = (ms) => {
     clock += ms;
   };

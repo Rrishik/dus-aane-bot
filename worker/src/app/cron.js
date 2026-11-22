@@ -8,6 +8,7 @@ import { getMerchantRules, promoteConsensusMerchantRules, recentLearnedRules } f
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { countUntaggedTransactions, listUntaggedWithSignals } from "../db/transactions.js";
 import { weekRangeFor, weeklyDigestData, formatWeeklyMessage } from "./analytics.js";
+import { warmLatestFxRates, sweepPendingFxConversions } from "./fx.js";
 import { normalizeTenantMerchants } from "./merchants.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { suggestTagsForBatch } from "./tagSuggester.js";
@@ -285,7 +286,18 @@ export async function runScheduled(ctx, scheduledTime) {
   const istHour = ist.getUTCHours();
   const weekday = ist.getUTCDay();
   const jobs =
-    istHour >= 18 ? [["daily_recap", () => sendDailyRecaps(ctx)]] : [["purge", () => purgeExpired(ctx.db, ctx.now())]];
+    istHour >= 18
+      ? [["daily_recap", () => sendDailyRecaps(ctx)]]
+      : [
+          [
+            "purge",
+            async () => {
+              await purgeExpired(ctx.db, ctx.now());
+              await warmLatestFxRates(ctx, istDate(scheduledTime));
+              await sweepPendingFxConversions(ctx);
+            }
+          ]
+        ];
   if (istHour < 18) {
     if (weekday === 5) jobs.push(["digest", () => sendWeeklyDigests(ctx)]);
     if (weekday === 2) jobs.push(["nudge", () => nudgeDormantTenants(ctx)]);

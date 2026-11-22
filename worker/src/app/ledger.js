@@ -18,6 +18,7 @@ import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { refreshCardMessage } from "./cardState.js";
 import { refreshSplitGroupMessage } from "./groups.js";
 import { refreshPersonalPin } from "./personalPin.js";
+import { convertMinorToInr, enqueueFxEnrich } from "./fx.js";
 import { normalizeUserMerchantInput, canonicalizeMerchant } from "./merchants.js";
 import { categoriesFor, TAG_MAX_LEN } from "./constants.js";
 import { defaultKind } from "../util/kind.js";
@@ -119,6 +120,14 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
     }
     if (minor !== txn.amount_minor) {
       patch.amountMinor = minor;
+      if (txn.currency === "INR") {
+        patch.inrMinor = minor;
+        patch.fxRate = 1.0;
+      } else if (txn.fx_rate > 0) {
+        patch.inrMinor = convertMinorToInr(minor, txn.fx_rate);
+      } else {
+        patch.inrMinor = null;
+      }
       changes.push({ field: "amount", from: fromMinor(txn.amount_minor), to: fromMinor(minor) });
       fixedFields.push("amount");
     }
@@ -208,6 +217,9 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
   const now = ctx.now();
   await updateTransaction(ctx.db, tid, txn.id, patch, now);
   const updated = { ...txn, ...patch };
+  if (patch.amountMinor !== undefined && txn.currency !== "INR" && patch.inrMinor === null) {
+    await enqueueFxEnrich(ctx, { tenantId: tid, txnId: txn.id });
+  }
 
   if (fixedFields.length) {
     const src = (await getSources(ctx.db, tid, txn.id))[0] || {};

@@ -7,6 +7,8 @@ const UPDATABLE = {
   occurredOn: "occurred_on",
   amountMinor: "amount_minor",
   currency: "currency",
+  inrMinor: "inr_minor",
+  fxRate: "fx_rate",
   direction: "direction",
   kind: "kind",
   merchant: "merchant",
@@ -46,12 +48,14 @@ function sourceInsert(db, tenantId, transactionId, s, now) {
 export async function insertTransaction(db, tenantId, txn, source, now = Date.now()) {
   const tid = String(tenantId);
   const id = txn.id || ulid(now);
+  const inrMinor = txn.inrMinor !== undefined ? txn.inrMinor : txn.currency === "INR" ? txn.amountMinor : null;
+  const fxRate = txn.fxRate !== undefined ? txn.fxRate : txn.currency === "INR" ? 1.0 : null;
   await db.batch([
     db
       .prepare(
-        "INSERT INTO transactions (id, tenant_id, occurred_on, amount_minor, currency, direction, kind, merchant_raw, merchant, " +
+        "INSERT INTO transactions (id, tenant_id, occurred_on, amount_minor, currency, inr_minor, fx_rate, direction, kind, merchant_raw, merchant, " +
           "category, account_last4, reference, forwarder, status, review_note, card_message_id, created_at, updated_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       )
       .bind(
         id,
@@ -59,6 +63,8 @@ export async function insertTransaction(db, tenantId, txn, source, now = Date.no
         txn.occurredOn,
         txn.amountMinor,
         txn.currency,
+        inrMinor == null ? null : inrMinor,
+        fxRate == null ? null : fxRate,
         txn.direction,
         txn.kind,
         nullable(txn.merchantRaw),

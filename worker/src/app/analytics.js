@@ -18,15 +18,28 @@ export function buildTrendBucket(rows, label) {
   const spend = rows.filter((r) => r.kind === "spend");
   const credits = rows.filter((r) => r.direction === "credit");
   const categorySpend = {};
+  let totalInrSpend = 0;
+  let hasConvertedFx = false;
   spend.forEach((r) => {
     const c = r.category || "Uncategorized";
-    categorySpend[c] = (categorySpend[c] || 0) + fromMinor(r.effective_minor);
+    if (r.effective_inr_minor != null) {
+      const inr = fromMinor(r.effective_inr_minor);
+      totalInrSpend += inr;
+      if (r.currency !== "INR" && r.effective_minor > 0) hasConvertedFx = true;
+      categorySpend[c] = (categorySpend[c] || 0) + inr;
+    } else if (r.currency === "INR") {
+      const inr = fromMinor(r.effective_minor);
+      totalInrSpend += inr;
+      categorySpend[c] = (categorySpend[c] || 0) + inr;
+    }
   });
   return {
     label,
     txnCount: rows.length,
     debitByCurrency: sumByCurrency(spend),
     creditByCurrency: sumByCurrency(credits),
+    totalInrSpend,
+    hasConvertedFx,
     categorySpend
   };
 }
@@ -75,9 +88,13 @@ export async function weeklyTrends(db, tenantId, nowMs, numWeeks = 5) {
   });
 }
 
+function bucketInr(b) {
+  return b.totalInrSpend !== undefined ? b.totalInrSpend : b.debitByCurrency.INR || 0;
+}
+
 // 8-cell bar; positive values always get ≥1 filled cell.
 function makeBar(value, buckets) {
-  const max = Math.max(0, ...buckets.map((b) => b.debitByCurrency.INR || 0));
+  const max = Math.max(0, ...buckets.map(bucketInr));
   if (max === 0) return "░".repeat(8);
   let len = Math.round((value / max) * 8);
   if (value > 0 && len === 0) len = 1;
@@ -87,13 +104,13 @@ function makeBar(value, buckets) {
 export function formatTrendsMessage(buckets, { title = "📉 *Spending Trends*", comparisonLabel = "vs Previous" } = {}) {
   let msg = title + "\n\n";
   const labelWidth = Math.max(...buckets.map((b) => b.label.length));
-  const inrAmounts = buckets.map((b) => formatAmountCompact(b.debitByCurrency.INR || 0));
-  const amtWidth = Math.max(...inrAmounts.map((a) => a.length));
+  const formattedAmounts = buckets.map((b) => (b.hasConvertedFx ? "~₹" : "₹") + formatAmountCompact(bucketInr(b)));
+  const amtWidth = Math.max(...formattedAmounts.map((a) => a.length));
 
   msg += "🔴 *Spend (INR):*\n";
   buckets.forEach((b, i) => {
-    const bar = makeBar(b.debitByCurrency.INR || 0, buckets);
-    msg += "`" + b.label.padEnd(labelWidth) + "  " + bar + "  ₹" + inrAmounts[i].padEnd(amtWidth) + "`\n";
+    const bar = makeBar(bucketInr(b), buckets);
+    msg += "`" + b.label.padEnd(labelWidth) + "  " + bar + "  " + formattedAmounts[i].padEnd(amtWidth) + "`\n";
   });
 
   const otherLine = (byCcy) =>
@@ -123,8 +140,8 @@ export function formatTrendsMessage(buckets, { title = "📉 *Spending Trends*",
   if (buckets.length >= 2) {
     const curr = buckets.at(-1);
     const prev = buckets.at(-2);
-    const currTotal = curr.debitByCurrency.INR || 0;
-    const prevTotal = prev.debitByCurrency.INR || 0;
+    const currTotal = bucketInr(curr);
+    const prevTotal = bucketInr(prev);
     if (prevTotal > 0) {
       const delta = currTotal - prevTotal;
       const pct = ((delta / prevTotal) * 100).toFixed(1);

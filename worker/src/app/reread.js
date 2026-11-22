@@ -6,6 +6,8 @@ import { logParserEvent, countParserEvents, disableTemplate } from "../db/settin
 import { putEphemeral, takeEphemeral } from "../db/ephemeral.js";
 import { validateExtraction, diffExtractions, guessCategory } from "../parser/index.js";
 import { loadCardState, defaultKeyboard, editCard } from "./cardState.js";
+import { getCachedFxRate } from "../db/fxRates.js";
+import { convertMinorToInr, enqueueFxEnrich } from "./fx.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { extractWithLlm } from "./extraction.js";
 import { callAppsScript } from "./appsScript.js";
@@ -137,6 +139,26 @@ export async function rereadAccept(ctx, { chatId, messageId, state, ack }) {
   if (f.amount !== undefined) patch.amountMinor = toMinor(f.amount);
   if (f.currency) patch.currency = f.currency;
   if (f.transaction_date) patch.occurredOn = f.transaction_date;
+  const nextAmount = patch.amountMinor !== undefined ? patch.amountMinor : state.txn.amount_minor;
+  const nextCurrency = patch.currency || state.txn.currency;
+  const nextDate = patch.occurredOn || state.txn.occurred_on;
+  let needsFxQueue = false;
+  if (patch.amountMinor !== undefined || patch.currency || patch.occurredOn) {
+    if (nextCurrency === "INR") {
+      patch.inrMinor = nextAmount;
+      patch.fxRate = 1.0;
+    } else {
+      const cached = await getCachedFxRate(ctx.db, nextCurrency, nextDate);
+      if (cached) {
+        patch.inrMinor = convertMinorToInr(nextAmount, cached.inrRate);
+        patch.fxRate = cached.inrRate;
+      } else {
+        patch.inrMinor = null;
+        patch.fxRate = null;
+        needsFxQueue = true;
+      }
+    }
+  }
   if (f.transaction_type) {
     patch.direction = f.transaction_type === "Credit" ? "credit" : "debit";
     if (!categoriesFor(patch.direction).includes(state.txn.category)) {
@@ -151,6 +173,7 @@ export async function rereadAccept(ctx, { chatId, messageId, state, ack }) {
 
   const fresh = await loadCardState(ctx, chatId, state.txn.id);
   await editCard(ctx, chatId, messageId, fresh);
+  if (needsFxQueue) await enqueueFxEnrich(ctx, { tenantId: chatId, txnId: state.txn.id });
   await refreshPersonalPin(ctx, chatId);
   if (ack) await ack.toast("✅ Updated from re-read");
   await logParserEvent(

@@ -40,7 +40,8 @@ describe("migrations", () => {
       "0001_init.sql",
       "0002_card_message_idx.sql",
       "0003_simplify_categories.sql",
-      "0004_canonical_merchants_and_cards.sql"
+      "0004_canonical_merchants_and_cards.sql",
+      "0005_fx_rates_and_inr_minor.sql"
     ]);
     var db = createTestD1();
     var indexes = (
@@ -63,6 +64,7 @@ describe("migrations", () => {
         "settlements",
         "merchant_rules",
         "account_labels",
+        "fx_rates",
         "ask_usage",
         "backfill_jobs",
         "parser_events",

@@ -6,7 +6,9 @@ import { escapeMarkdown, money, pillLabel, formatDayMonth } from "./format.js";
 
 // txn: transactions row. opts: { user, extraLine }.
 export function cardText(txn, opts = {}) {
-  const amount = money(txn.amount_minor, txn.currency);
+  const nativeAmt = money(txn.amount_minor, txn.currency);
+  const inrHint = txn.currency !== "INR" && txn.inr_minor != null ? " (~" + money(txn.inr_minor, "INR") + ")" : "";
+  const amount = nativeAmt + inrHint;
   const emoji = txn.direction === "debit" ? "🔴" : "🟢";
   const base = txn.merchant
     ? emoji + " *" + escapeMarkdown(txn.merchant) + "* — " + amount

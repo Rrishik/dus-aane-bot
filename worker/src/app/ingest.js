@@ -15,6 +15,7 @@ import {
 } from "../parser/index.js";
 import { getMerchantRules, resolveMerchant, upsertMerchantRule } from "../db/merchantRules.js";
 import { getCardLabelsMap } from "../db/accountLabels.js";
+import { getCachedFxRate } from "../db/fxRates.js";
 import {
   insertTransaction,
   attachSource,
@@ -25,6 +26,7 @@ import {
 import { touchActivity } from "../db/tenants.js";
 import { getParserMode, getDisabledTemplates, logParserEvent } from "../db/settings.js";
 import { extractWithLlm } from "./extraction.js";
+import { convertMinorToInr, enqueueFxEnrich } from "./fx.js";
 import { canonicalizeMerchant, detectCcBillCardLast4, formatCcBillMerchant } from "./merchants.js";
 import { shortenMerchantPattern } from "./ledger.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
@@ -122,10 +124,23 @@ export async function ingest(ctx, input) {
   const rawLast4 = String(
     extracted.accountLast4 || extracted.account_last4 || parserFallback.accountLast4 || ccCardLast4 || ""
   ).trim();
+  const amountMinor = toMinor(d.amount);
+  let inrMinor = d.currency === "INR" ? amountMinor : null;
+  let fxRate = d.currency === "INR" ? 1.0 : null;
+  if (d.currency !== "INR") {
+    const cachedFx = await getCachedFxRate(db, d.currency, d.transaction_date);
+    if (cachedFx) {
+      inrMinor = convertMinorToInr(amountMinor, cachedFx.inrRate);
+      fxRate = cachedFx.inrRate;
+    }
+  }
+
   const txn = {
     occurredOn: d.transaction_date,
-    amountMinor: toMinor(d.amount),
+    amountMinor,
     currency: d.currency,
+    inrMinor,
+    fxRate,
     direction,
     kind: resolved.kind || canon.kind || defaultKind(direction, category),
     merchantRaw: d.merchant || null,
@@ -203,6 +218,9 @@ export async function ingest(ctx, input) {
     ctx.now()
   );
   if (!input.silent) await sendCard(ctx, input.tenant, id);
+  if (d.currency !== "INR" && txn.inrMinor == null) {
+    await enqueueFxEnrich(ctx, { tenantId, txnId: id });
+  }
   if (txn.status === "confirmed" && !input.silent) {
     await touchActivity(db, tenantId, ctx.now());
     await refreshPersonalPin(ctx, tenantId);

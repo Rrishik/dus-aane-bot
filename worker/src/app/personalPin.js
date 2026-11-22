@@ -6,6 +6,7 @@
 import { getTenant, setPinMessageId, groupsForMember } from "../db/tenants.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { countUntaggedTransactions } from "../db/transactions.js";
+import { getLatestCachedFxRate } from "../db/fxRates.js";
 import { groupBalances } from "../db/splits.js";
 import { simplifyDebts } from "./groups.js";
 import { CATEGORY_EMOJIS } from "./constants.js";
@@ -27,12 +28,18 @@ export async function personalPinData(ctx, tenantId) {
 
   const spendByCurrency = {};
   const byCategory = {};
+  let hasConvertedFx = false;
   for (const r of rows) {
     if (r.kind !== "spend") continue;
-    spendByCurrency[r.currency] = (spendByCurrency[r.currency] || 0) + r.effective_minor;
     const cat = r.category || "Uncategorized";
-    if (r.currency === "INR" && cat !== "Uncategorized") {
-      byCategory[cat] = (byCategory[cat] || 0) + r.effective_minor;
+    if (r.effective_inr_minor != null) {
+      spendByCurrency.INR = (spendByCurrency.INR || 0) + r.effective_inr_minor;
+      if (r.currency !== "INR" && r.effective_minor > 0) hasConvertedFx = true;
+      if (cat !== "Uncategorized") {
+        byCategory[cat] = (byCategory[cat] || 0) + r.effective_inr_minor;
+      }
+    } else {
+      spendByCurrency[r.currency] = (spendByCurrency[r.currency] || 0) + r.effective_minor;
     }
   }
 
@@ -43,19 +50,44 @@ export async function personalPinData(ctx, tenantId) {
 
   const groupNets = [];
   for (const g of groups) {
-    const ccy = g.primary_currency || "INR";
-    const edges = (simplifyDebts(await groupBalances(ctx.db, g.id)) || {})[ccy] || [];
-    let netMinor = 0;
-    for (const e of edges) {
-      if (e.creditor === tid) netMinor += e.amountMinor;
-      else if (e.debtor === tid) netMinor -= e.amountMinor;
+    const simplified = simplifyDebts(await groupBalances(ctx.db, g.id)) || {};
+    let netInrMinor = 0;
+    let approxFx = false;
+    const unconverted = [];
+
+    for (const [ccy, edges] of Object.entries(simplified)) {
+      let net = 0;
+      for (const e of edges || []) {
+        if (e.creditor === tid) net += e.amountMinor;
+        else if (e.debtor === tid) net -= e.amountMinor;
+      }
+      if (net === 0) continue;
+      if (ccy === "INR") {
+        netInrMinor += net;
+      } else {
+        const rate = await getLatestCachedFxRate(ctx.db, ccy);
+        if (rate > 0) {
+          netInrMinor += Math.round(net * rate);
+          approxFx = true;
+        } else {
+          unconverted.push({ currency: ccy, netMinor: net });
+        }
+      }
     }
-    groupNets.push({ name: g.name || "Group", currency: ccy, netMinor });
+
+    groupNets.push({
+      name: g.name || "Group",
+      currency: "INR",
+      netMinor: netInrMinor,
+      approxFx,
+      unconverted
+    });
   }
 
   return {
     month: formatMonthYear(today),
     spendByCurrency,
+    hasConvertedFx,
     txnCount: rows.filter((r) => r.kind === "spend").length,
     topCategories,
     untaggedCount,
@@ -63,17 +95,25 @@ export async function personalPinData(ctx, tenantId) {
   };
 }
 
-function headlineSpend(spendByCurrency) {
-  const keys = Object.keys(spendByCurrency);
+function headlineSpend(spendByCurrency, hasConvertedFx = false) {
+  const keys = Object.keys(spendByCurrency).filter((k) => spendByCurrency[k] > 0);
   if (keys.length === 0) return "₹0 spent";
   const ordered = keys.includes("INR") ? ["INR", ...keys.filter((k) => k !== "INR")] : keys;
   return (
-    ordered.map((c) => currencySymbol(c) + formatAmountCompact(fromMinor(spendByCurrency[c]))).join(" + ") + " spent"
+    ordered
+      .map((c) => {
+        const sym = c === "INR" && hasConvertedFx ? "~₹" : currencySymbol(c);
+        return sym + formatAmountCompact(fromMinor(spendByCurrency[c]));
+      })
+      .join(" + ") + " spent"
   );
 }
 
 export function formatPersonalPin(data) {
-  const headParts = ["📌 *" + escapeMarkdown(data.month) + "*", headlineSpend(data.spendByCurrency)];
+  const headParts = [
+    "📌 *" + escapeMarkdown(data.month) + "*",
+    headlineSpend(data.spendByCurrency, data.hasConvertedFx)
+  ];
   if (data.untaggedCount > 0) headParts.push("🏷 " + data.untaggedCount + " untagged");
   const lines = [headParts.join(" · ")];
 
@@ -97,12 +137,15 @@ export function formatPersonalPin(data) {
   }
 
   for (const g of data.groupNets) {
-    const status =
-      g.netMinor > 0
-        ? "owed " + money(g.netMinor, g.currency)
-        : g.netMinor < 0
-          ? "owe " + money(-g.netMinor, g.currency)
-          : "_settled up_";
+    const parts = [];
+    const prefix = g.approxFx ? "~" : "";
+    if (g.netMinor > 0) parts.push("owed " + prefix + money(g.netMinor, g.currency));
+    else if (g.netMinor < 0) parts.push("owe " + prefix + money(-g.netMinor, g.currency));
+    for (const u of g.unconverted || []) {
+      if (u.netMinor > 0) parts.push("owed " + money(u.netMinor, u.currency));
+      else if (u.netMinor < 0) parts.push("owe " + money(-u.netMinor, u.currency));
+    }
+    const status = parts.length > 0 ? parts.join(" · ") : "_settled up_";
     bullets.push("• 👥 *" + escapeMarkdown(g.name) + "*: " + status);
   }
 

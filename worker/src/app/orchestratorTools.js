@@ -325,19 +325,49 @@ function sumByCurrency(rows) {
   return out;
 }
 
-function aggregate(rows, keyOf) {
+function aggregate(rows, keyOf, { unifyConvertedInr = false } = {}) {
   const groups = {};
   for (const r of rows) {
     const name = keyOf(r);
-    const k = name + "|" + r.currency;
-    groups[k] = groups[k] || { name, currency: r.currency, amount: 0, count: 0, rows: [] };
-    groups[k].amount += r.effective_minor;
+    const useInr = unifyConvertedInr && r.effective_inr_minor != null;
+    const ccy = useInr ? "INR" : r.currency;
+    const k = name + "|" + ccy;
+    groups[k] = groups[k] || {
+      name,
+      currency: ccy,
+      amount: 0,
+      inrMinor: 0,
+      allHaveInr: true,
+      hasFx: false,
+      count: 0,
+      rows: []
+    };
+    groups[k].amount += useInr ? r.effective_inr_minor : r.effective_minor;
+    if (r.effective_inr_minor != null) {
+      groups[k].inrMinor += r.effective_inr_minor;
+      if (r.currency !== "INR" && r.effective_minor > 0) groups[k].hasFx = true;
+    } else {
+      groups[k].allHaveInr = false;
+    }
     groups[k].count++;
     groups[k].rows.push(r);
   }
   return Object.values(groups)
-    .sort((a, b) => b.amount - a.amount)
-    .map((g) => ({ ...g, amount: fromMinor(g.amount) }));
+    .sort((a, b) => {
+      const aSort = a.allHaveInr ? a.inrMinor : a.amount;
+      const bSort = b.allHaveInr ? b.inrMinor : b.amount;
+      return bSort - aSort;
+    })
+    .map((g) => {
+      const out = { name: g.name, currency: g.currency, amount: fromMinor(g.amount), count: g.count, rows: g.rows };
+      if (!unifyConvertedInr && g.currency !== "INR" && g.allHaveInr && g.inrMinor > 0) {
+        out.amount_inr = fromMinor(g.inrMinor);
+      }
+      if (unifyConvertedInr && g.hasFx) {
+        out.includes_converted_fx = true;
+      }
+      return out;
+    });
 }
 
 export function askToolExecutor(ctx, tenantId, runMeta = {}) {
@@ -370,7 +400,11 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       const spend = rows.filter((r) => r.kind === "spend");
       const credits = rows.filter((r) => r.direction === "credit");
       const untagged = rows.filter(isUntaggedTransaction);
-      return {
+      const hasConvertedFx = spend.some(
+        (r) => r.currency !== "INR" && r.effective_inr_minor != null && r.effective_minor > 0
+      );
+      const allConvertible = spend.length > 0 && spend.every((r) => r.effective_inr_minor != null);
+      const out = {
         total_transactions: rows.length,
         spend_count: spend.length,
         credit_count: credits.length,
@@ -379,6 +413,11 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
         non_spend_debits_by_currency: sumByCurrency(rows.filter((r) => r.direction === "debit" && r.kind !== "spend")),
         credits_by_currency: sumByCurrency(credits)
       };
+      if (hasConvertedFx && allConvertible) {
+        out.total_spend_inr = fromMinor(spend.reduce((acc, r) => acc + r.effective_inr_minor, 0));
+        out.includes_converted_fx = true;
+      }
+      return out;
     },
 
     async get_category_breakdown(args) {
@@ -386,10 +425,12 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       const debits = allRows.filter((r) => r.direction === "debit");
       return {
         untagged_count: allRows.filter(isUntaggedTransaction).length,
-        categories: aggregate(debits, (r) => r.category || "Uncategorized").map(({ rows, ...c }) => ({
-          ...c,
-          counts_as_spend: rows.every((r) => r.kind === "spend")
-        }))
+        categories: aggregate(debits, (r) => r.category || "Uncategorized", { unifyConvertedInr: true }).map(
+          ({ rows, ...c }) => ({
+            ...c,
+            counts_as_spend: rows.every((r) => r.kind === "spend")
+          })
+        )
       };
     },
 
@@ -480,6 +521,9 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
             type: r.direction === "debit" ? "Debit" : "Credit",
             user: r.forwarder || ""
           };
+          if (r.currency !== "INR" && r.inr_minor != null) {
+            out.amount_inr = fromMinor(r.inr_minor);
+          }
           if (r.account_last4) {
             out.account_last4 = r.account_last4;
             if (cardLabelsMap[r.account_last4]) out.card_label = cardLabelsMap[r.account_last4];
