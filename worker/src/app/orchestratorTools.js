@@ -2,6 +2,7 @@
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { listUntaggedTransactions, isUntaggedTransaction } from "../db/transactions.js";
 import { getTenant, getTenantEmails, groupsForMember, getGroupMembers } from "../db/tenants.js";
+import { getAccountLabels, upsertAccountLabel, listSeenAccounts } from "../db/accountLabels.js";
 import { groupBalances } from "../db/splits.js";
 import { refreshCardMessage } from "./cardState.js";
 import { mutateTransaction, batchMutateTransactions, removeTransaction } from "./ledger.js";
@@ -31,17 +32,29 @@ const ASK_USER_TOOL = fn(
   ["question"]
 );
 
+const CARD_PARAM = {
+  card: {
+    type: "string",
+    description: "Optional card/account filter: last 3-4 digits (e.g. '5678') or saved card label (e.g. 'Infinia')."
+  }
+};
+
+const LIST_CARDS_TOOL = fn(
+  "list_cards",
+  "List saved card/account labels and all card/account last-4 digits seen in the user's transactions."
+);
+
 const SEARCH_TOOL = fn(
   "search_transactions",
-  "Search transactions by date, merchant, category, untagged status, forwarder, or amount range.",
+  "Search transactions by date, merchant, category, card/account, untagged status, forwarder, or amount range.",
   {
     ...DATE_PARAMS,
+    ...CARD_PARAM,
     merchant: { type: "string", description: "Merchant name (case-insensitive partial match)" },
     category: { type: "string", description: "Exact category filter" },
     untagged_only: {
       type: "boolean",
-      description:
-        "When true, return only untagged rows (missing merchant/'Unknown' OR missing category/'Uncategorized')."
+      description: "When true, return only uncategorized rows."
     },
     user: { type: "string", description: "Forwarder filter (partial match)" },
     min_amount: { type: "number", description: "Minimum transaction amount" },
@@ -53,7 +66,7 @@ const SEARCH_TOOL = fn(
 
 const LIST_UNTAGGED_TOOL = fn(
   "list_untagged_transactions",
-  "List confirmed transactions that are untagged — i.e. missing a merchant tag ('Unknown' / 'Untagged') OR missing a category ('Uncategorized'). Supports optional start_date and end_date filters.",
+  "List confirmed transactions that are missing a category. Supports optional start_date and end_date filters.",
   {
     ...DATE_PARAMS,
     limit: { type: "number", description: "Max rows to return. Default 15." }
@@ -63,20 +76,24 @@ const LIST_UNTAGGED_TOOL = fn(
 export const ANALYTICS_TOOLS = [
   fn(
     "get_spending_summary",
-    "Get total spending and income summary for a date range. spend_by_currency excludes Transfer and Invest debits (reported separately as non_spend_debits_by_currency).",
-    DATE_PARAMS,
+    "Get total spending and income summary for a date range (optionally filtered to a specific card). spend_by_currency excludes Transfer and Invest debits (reported separately as non_spend_debits_by_currency).",
+    { ...DATE_PARAMS, ...CARD_PARAM },
     ["start_date", "end_date"]
   ),
   fn(
     "get_category_breakdown",
-    "Get spending breakdown by category for a date range, including untagged count.",
-    DATE_PARAMS,
+    "Get spending breakdown by category for a date range (optionally filtered to a specific card), including untagged count.",
+    { ...DATE_PARAMS, ...CARD_PARAM },
     ["start_date", "end_date"]
   ),
   fn(
     "get_top_merchants",
-    "Get top merchants by spending amount for a date range.",
-    { ...DATE_PARAMS, limit: { type: "number", description: "Number of merchants to return. Default 5." } },
+    "Get top merchants by spending amount for a date range (optionally filtered to a specific card).",
+    {
+      ...DATE_PARAMS,
+      ...CARD_PARAM,
+      limit: { type: "number", description: "Number of merchants to return. Default 5." }
+    },
     ["start_date", "end_date"]
   ),
   fn(
@@ -95,6 +112,7 @@ export const ANALYTICS_TOOLS = [
   ),
   SEARCH_TOOL,
   LIST_UNTAGGED_TOOL,
+  LIST_CARDS_TOOL,
   ASK_USER_TOOL
 ];
 
@@ -226,6 +244,17 @@ export const ACCOUNT_TOOLS = [
     "Send the confirmation card with Delete / Keep buttons so the user can permanently delete all stored data."
   ),
   fn("show_dashboard", "Post and pin the live monthly spending summary card in this chat."),
+  LIST_CARDS_TOOL,
+  fn(
+    "set_card_label",
+    "Save a friendly name for a card or bank account's last 3-4 digits (e.g. last4='5678', label='Infinia') and upgrade past CC Bill rows for that card.",
+    {
+      last4: { type: "string", description: "Last 3 or 4 digits of the card/account, e.g. '5678'." },
+      label: { type: "string", description: "Friendly name, e.g. 'Infinia' or 'Amazon ICICI'." },
+      kind: { type: "string", description: "'card' (default) or 'account'." }
+    },
+    ["last4", "label"]
+  ),
   ASK_USER_TOOL
 ];
 
@@ -258,10 +287,22 @@ function aggregate(rows, keyOf) {
 export function askToolExecutor(ctx, tenantId, runMeta = {}) {
   const tid = String(tenantId);
   const cache = {};
-  const rowsFor = (args = {}) => {
+  const rowsFor = async (args = {}) => {
     const key = (args.start_date || "") + "|" + (args.end_date || "");
     cache[key] = cache[key] || listEffectiveTransactions(ctx.db, tid, { from: args.start_date, to: args.end_date });
-    return cache[key];
+    const allRows = await cache[key];
+    if (!args.card) return allRows;
+    const query = String(args.card)
+      .trim()
+      .toLowerCase()
+      .replace(/^[*x#]+/, "");
+    if (!query) return allRows;
+    const saved = await getAccountLabels(ctx.db, tid);
+    const matchingDigits = new Set(
+      saved.filter((s) => s.label.toLowerCase().includes(query) || s.last4 === query).map((s) => s.last4)
+    );
+    if (/^\d{3,4}$/.test(query)) matchingDigits.add(query);
+    return allRows.filter((r) => r.account_last4 && matchingDigits.has(String(r.account_last4)));
   };
   const invalidateCache = () => {
     for (const k of Object.keys(cache)) delete cache[k];
@@ -600,6 +641,15 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       await ensurePersonalPin(ctx, tid);
       runMeta.suppressFinalText = true;
       return { ok: true, already_sent_to_chat: true };
+    },
+
+    async list_cards() {
+      const accounts = await listSeenAccounts(ctx.db, tid);
+      return { ok: true, cards_and_accounts: accounts };
+    },
+
+    async set_card_label(args) {
+      return upsertAccountLabel(ctx.db, tid, args.last4, args.label, args.kind || "card", ctx.now());
     }
   };
 

@@ -3,6 +3,7 @@
 // deterministic 0-LLM swipe-reply actions on cards.
 import { findTransactionByCardMessage, updateTransaction } from "../db/transactions.js";
 import { getMerchantRules, resolveMerchant } from "../db/merchantRules.js";
+import { getCardLabelsMap } from "../db/accountLabels.js";
 import { touchActivity, groupsForMember, getGroupMembers } from "../db/tenants.js";
 import { logParserEvent } from "../db/settings.js";
 import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
@@ -12,6 +13,12 @@ import { splitTransaction, undoGroupLink } from "./groups.js";
 import { reread, rereadAccept, rereadKeep } from "./reread.js";
 import { cancelOpenConversation } from "./orchestrator.js";
 import { refreshPersonalPin } from "./personalPin.js";
+import {
+  CANONICAL_GENERIC_LABELS,
+  canonicalizeMerchant,
+  normalizeUserMerchantInput,
+  quickMerchantChoices
+} from "./merchants.js";
 import { categoryKeyboard, helpMenuKeyboard, deleteConfirmKeyboard } from "./cards.js";
 import { CATEGORY_EMOJIS, categoriesFor, TAG_MAX_LEN } from "./constants.js";
 import { escapeMarkdown } from "./format.js";
@@ -46,7 +53,7 @@ export async function handleCardAction(ctx, { chatId, userId, messageId, action,
   if (!handler) return false;
   let txnId = payload;
   let arg = null;
-  if (action === "cat") {
+  if (action === "cat" || action === "mchip") {
     const i = payload.lastIndexOf("_");
     txnId = payload.slice(0, i);
     arg = payload.slice(i + 1);
@@ -106,10 +113,48 @@ const ACTIONS = {
     const res = await mutateTransaction(ctx, chatId, state.txn.id, { category }, { refreshCard: false });
     if (!res.ok) return;
     Object.assign(state.txn, res.txn);
-    await ctx.tg.editMessageReplyMarkup(chatId, messageId, defaultKeyboard(state));
+
+    const baseKb = defaultKeyboard(state);
+    const missingMerchant = !state.txn.merchant || String(state.txn.merchant).trim().toLowerCase() === "unknown";
+    if (missingMerchant) {
+      const cardLabelsMap = await getCardLabelsMap(ctx.db, chatId);
+      const chips = quickMerchantChoices({
+        direction: state.txn.direction,
+        category,
+        cardLabelsMap
+      });
+      if (chips.length > 0) {
+        const chipRow = chips.map((label, cIdx) => ({
+          text: label.length > 15 ? label.replace(/^CC Bill · /, "CC · ") : label,
+          callback_data: "mchip_" + state.txn.id + "_" + cIdx
+        }));
+        baseKb.inline_keyboard = [chipRow, ...baseKb.inline_keyboard];
+      }
+    }
+
+    await ctx.tg.editMessageReplyMarkup(chatId, messageId, baseKb);
     const emoji = CATEGORY_EMOJIS[category] ? CATEGORY_EMOJIS[category] + " " : "";
     const extra = res.autoFilled > 0 ? " · +" + res.autoFilled + " auto-tagged" : "";
     await ack.toast(emoji + category + extra);
+  },
+
+  async mchip(ctx, { chatId, messageId, state, arg, ack }) {
+    const cIdx = parseInt(arg, 10);
+    const cardLabelsMap = await getCardLabelsMap(ctx.db, chatId);
+    const chips = quickMerchantChoices({
+      direction: state.txn.direction,
+      category: state.txn.category,
+      cardLabelsMap
+    });
+    if (isNaN(cIdx) || cIdx < 0 || cIdx >= chips.length) {
+      await editCard(ctx, chatId, messageId, state);
+      return;
+    }
+    const picked = chips[cIdx];
+    const res = await mutateTransaction(ctx, chatId, state.txn.id, { merchant: picked }, { refreshCard: false });
+    if (res.ok) Object.assign(state.txn, res.txn);
+    await editCard(ctx, chatId, messageId, state);
+    if (ack) await ack.toast("🏷 " + picked);
   },
 
   async help(ctx, { chatId, messageId, state, ack }) {
@@ -266,13 +311,45 @@ const CATEGORY_ALIASES = {
   movies: "Fun",
   invest: "Invest",
   investment: "Invest",
+  sip: "Invest",
+  sips: "Invest",
+  mf: "Invest",
+  "mutual fund": "Invest",
+  "mutual funds": "Invest",
+  stocks: "Invest",
+  gold: "Invest",
+  fd: "Invest",
+  nps: "Invest",
+  ppf: "Invest",
   transfer: "Transfer",
   trf: "Transfer",
   "transfer out": "Transfer",
   "transfer in": "Transfer",
+  "self transfer": "Transfer",
   "cc bill": "Transfer",
   "card bill": "Transfer",
   "cc bill payment": "Transfer",
+  "credit card bill": "Transfer",
+  cred: "Transfer",
+  emi: "Transfer",
+  maid: "Bills",
+  cook: "Bills",
+  househelp: "Bills",
+  wifi: "Bills",
+  broadband: "Bills",
+  electricity: "Bills",
+  auto: "Travel",
+  metro: "Travel",
+  diesel: "Travel",
+  kirana: "Groceries",
+  veggies: "Groceries",
+  "fruits & veggies": "Groceries",
+  supermarket: "Groceries",
+  cafe: "Food",
+  doctor: "Health",
+  "lab test": "Health",
+  fitness: "Health",
+  gym: "Health",
   income: "Income",
   salary: "Income",
   interest: "Income",
@@ -352,25 +429,31 @@ export function parseCardQuickReply(text, direction, rules = [], { hasMerchant =
 
   const catOnly = matchCategoryToken(s, direction);
   if (catOnly) {
-    const descLabel = !hasMerchant ? DESCRIPTIVE_ALIAS_LABELS[s.toLowerCase()] || null : null;
+    const genericEntry = CANONICAL_GENERIC_LABELS[s.toLowerCase()];
+    const descLabel = !hasMerchant
+      ? (genericEntry && genericEntry.name) || DESCRIPTIVE_ALIAS_LABELS[s.toLowerCase()] || null
+      : null;
     return { merchant: descLabel, category: catOnly };
   }
 
   const parts = s.split(/\s*(?:,|·|\||\/|\s-\s)\s*/);
   if (parts.length === 2) {
-    const m = parts[0].trim();
+    const m = normalizeUserMerchantInput(parts[0]);
     const c = matchCategoryToken(parts[1], direction);
     if (m && m.length <= TAG_MAX_LEN && c) return { merchant: m, category: c };
   }
 
   if (s.length <= TAG_MAX_LEN && !/^(?:₹|\$|rs\.?|inr)?\s*[\d,.]+$/i.test(s)) {
     const valid = categoriesFor(direction);
-    const resolved = resolveMerchant(s, rules);
+    const norm = normalizeUserMerchantInput(s);
+    const resolved = resolveMerchant(norm, rules);
+    const canon = canonicalizeMerchant(norm, rules);
     const guessed =
       (resolved.category && valid.includes(resolved.category) && resolved.category) ||
-      guessCategory(s, direction === "credit" ? "Credit" : "Debit") ||
+      (canon.category && valid.includes(canon.category) && canon.category) ||
+      guessCategory(norm, direction === "credit" ? "Credit" : "Debit") ||
       null;
-    return { merchant: s, category: guessed && valid.includes(guessed) ? guessed : null };
+    return { merchant: norm, category: guessed && valid.includes(guessed) ? guessed : null };
   }
   return null;
 }

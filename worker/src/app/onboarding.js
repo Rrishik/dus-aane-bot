@@ -33,6 +33,7 @@ export async function activateWithWelcome(ctx, tenant) {
       tenant.id,
       "🎉 *Your first transaction is in!*\n\n" +
         "• *Tap an emoji* to categorize, or *swipe-reply* on any card with a merchant name, `₹amount`, `50-50`, or `del`\n" +
+        "• *Optional:* tell me `card 5678 is Infinia` anytime to label your cards for CC bills & per-card spend\n" +
         "• *Type in plain English* anytime to ask questions, split bills, or export CSVs — and swipe-reply to any answer to follow up"
     );
   } catch (e) {

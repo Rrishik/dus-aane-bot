@@ -18,6 +18,7 @@ import { guessCategory, PARSER_MAX_AMOUNT } from "../parser/index.js";
 import { refreshCardMessage } from "./cardState.js";
 import { refreshSplitGroupMessage } from "./groups.js";
 import { refreshPersonalPin } from "./personalPin.js";
+import { normalizeUserMerchantInput, canonicalizeMerchant } from "./merchants.js";
 import { categoriesFor, TAG_MAX_LEN } from "./constants.js";
 import { defaultKind } from "../util/kind.js";
 import { toMinor, fromMinor } from "../util/money.js";
@@ -143,10 +144,11 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
 
   let merchant = txn.merchant;
   if (input.merchant !== undefined && input.merchant !== null) {
-    const tag = String(input.merchant).trim();
-    if (!tag || tag.length > TAG_MAX_LEN) {
+    const rawTag = String(input.merchant).trim();
+    if (!rawTag || rawTag.length > TAG_MAX_LEN) {
       return { ok: false, error: "merchant must be 1–" + TAG_MAX_LEN + " characters" };
     }
+    const tag = normalizeUserMerchantInput(rawTag);
     merchant = tag;
     if (tag !== (txn.merchant || "")) {
       patch.merchant = tag;
@@ -174,9 +176,11 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
   } else if (input.inferCategory && patch.merchant && !category) {
     const rules = await getMerchantRules(ctx.db, tid);
     const resolved = resolveMerchant(patch.merchant, rules);
+    const canon = canonicalizeMerchant(patch.merchant, rules);
     const valid = categoriesFor(direction);
     const guessed =
       (resolved.category && valid.includes(resolved.category) && resolved.category) ||
+      (canon.category && valid.includes(canon.category) && canon.category) ||
       guessCategory(patch.merchant, direction === "credit" ? "Credit" : "Debit") ||
       null;
     if (guessed && valid.includes(guessed)) {

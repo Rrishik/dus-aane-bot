@@ -1,5 +1,5 @@
 // Text formatting shared by cards, commands and digests (legacy Markdown).
-import { CURRENCY_SYMBOLS, TAG_MAX_LEN } from "./constants.js";
+import { CURRENCY_SYMBOLS, PILL_MAX_LEN } from "./constants.js";
 import { fromMinor } from "../util/money.js";
 
 // Legacy Markdown only treats _ * [ ` as special.
@@ -36,7 +36,7 @@ export function money(amountMinor, currency) {
 export function pillLabel(value, fallback) {
   const v = String(value || "").trim();
   if (!v) return fallback;
-  return v.length > TAG_MAX_LEN ? v.substring(0, TAG_MAX_LEN - 1) + "…" : v;
+  return v.length > PILL_MAX_LEN ? v.substring(0, PILL_MAX_LEN - 1) + "…" : v;
 }
 
 export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

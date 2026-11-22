@@ -48,13 +48,14 @@ describe("timing & anti-hallucination helpers", () => {
   });
 
   it("strips hallucinated brand names on merchantless rows while allowing generic or user-history labels", () => {
-    const history = new Set(["maid", "society maintenance"]);
+    const history = new Set(["society club"]);
     const unnamed = { merchant: null, merchant_raw: null };
     expect(validateMerchantProposal(unnamed, "Swiggy", history)).toBeNull();
     expect(validateMerchantProposal(unnamed, "Starbucks", history)).toBeNull();
     expect(validateMerchantProposal(unnamed, "Dividend", history)).toBe("Dividend");
     expect(validateMerchantProposal(unnamed, "CC Bill", history)).toBe("CC Bill");
-    expect(validateMerchantProposal(unnamed, "Maid", history)).toBe("Maid");
+    expect(validateMerchantProposal(unnamed, "Maid", history)).toBe("Househelp");
+    expect(validateMerchantProposal(unnamed, "Society Club", history)).toBe("Society Club");
 
     const noisy = { merchant: "TWO VILLAS HOLIDAY CO ,LT", merchant_raw: "TWO VILLAS HOLIDAY CO ,LT" };
     expect(validateMerchantProposal(noisy, "Two Villas Holiday", history)).toBe("Two Villas Holiday");

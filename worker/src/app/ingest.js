@@ -13,7 +13,8 @@ import {
   PARSER_AUTO_SAVE_CONFIDENCE,
   PARSER_REVIEW_CONFIDENCE
 } from "../parser/index.js";
-import { getMerchantRules, resolveMerchant } from "../db/merchantRules.js";
+import { getMerchantRules, resolveMerchant, upsertMerchantRule } from "../db/merchantRules.js";
+import { getCardLabelsMap } from "../db/accountLabels.js";
 import {
   insertTransaction,
   attachSource,
@@ -24,6 +25,8 @@ import {
 import { touchActivity } from "../db/tenants.js";
 import { getParserMode, getDisabledTemplates, logParserEvent } from "../db/settings.js";
 import { extractWithLlm } from "./extraction.js";
+import { canonicalizeMerchant, detectCcBillCardLast4, formatCcBillMerchant } from "./merchants.js";
+import { shortenMerchantPattern } from "./ledger.js";
 import { loadCardState, renderCard, defaultKeyboard } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
 import { categoriesFor } from "./constants.js";
@@ -49,7 +52,7 @@ export async function ingest(ctx, input) {
 
   if (channel === "sms" && parsed && parsed.kind === "ignored" && parsed.reason === "otp") return { status: "ignored" };
 
-  const rules = await getMerchantRules(db, tenantId);
+  const [rules, cardLabelsMap] = await Promise.all([getMerchantRules(db, tenantId), getCardLabelsMap(db, tenantId)]);
   let extracted = null;
   let parsedBy = PARSED_BY_LLM;
   let confidence = null;
@@ -87,14 +90,28 @@ export async function ingest(ctx, input) {
   const direction = d.transaction_type === "Credit" ? "credit" : "debit";
   const allowed = categoriesFor(direction);
   const resolved = resolveMerchant(d.merchant, rules);
+  const canon = canonicalizeMerchant(resolved.merchant || d.merchant, rules);
+  let cleanMerchant =
+    resolved.merchant && d.merchant && resolved.merchant !== d.merchant ? resolved.merchant : canon.merchant;
+
   let category = String(extracted.category || "").trim();
   if (resolved.category && allowed.includes(resolved.category)) {
     if (resolved.personalCategory || !category || category === "Uncategorized") category = resolved.category;
+  } else if ((!category || !allowed.includes(category)) && canon.category && allowed.includes(canon.category)) {
+    category = canon.category;
   }
-  if (!allowed.includes(category)) category = guessCategory(resolved.merchant, d.transaction_type) || null;
+  if (!allowed.includes(category)) category = guessCategory(cleanMerchant || d.merchant, d.transaction_type) || null;
+
+  // Detect credit-card bill alerts mentioning the target card's last 4 digits.
+  const ccCardLast4 = detectCcBillCardLast4(input.text);
+  if (ccCardLast4 || cleanMerchant === "CC Bill") {
+    cleanMerchant = formatCcBillMerchant(ccCardLast4, cardLabelsMap);
+    if (!category && allowed.includes("Transfer")) category = "Transfer";
+  }
+
   // Generic alerts with no merchant cannot have a confident spend/transfer
-  // category unless explicitly an investment, income, or refund.
-  if (!resolved.merchant && !resolved.category && category) {
+  // category unless explicitly an investment, income, or refund, or CC bill.
+  if (!cleanMerchant && !resolved.category && category) {
     const keepWithoutMerchant = ["Invest", "Income", "Refund"];
     if (!keepWithoutMerchant.includes(category)) category = null;
   }
@@ -102,17 +119,19 @@ export async function ingest(ctx, input) {
   // The LLM may omit account/reference; the parser's read of the same text
   // has them when it saw the same amount.
   const parserFallback = parserTxn && Math.abs(parserTxn.amount - d.amount) < 0.005 ? parserTxn : {};
+  const rawLast4 = String(
+    extracted.accountLast4 || extracted.account_last4 || parserFallback.accountLast4 || ccCardLast4 || ""
+  ).trim();
   const txn = {
     occurredOn: d.transaction_date,
     amountMinor: toMinor(d.amount),
     currency: d.currency,
     direction,
-    kind: resolved.kind || defaultKind(direction, category),
+    kind: resolved.kind || canon.kind || defaultKind(direction, category),
     merchantRaw: d.merchant || null,
-    merchant: resolved.merchant || null,
+    merchant: cleanMerchant || null,
     category,
-    accountLast4:
-      String(extracted.accountLast4 || extracted.account_last4 || parserFallback.accountLast4 || "").trim() || null,
+    accountLast4: rawLast4 || null,
     reference: String(extracted.reference || parserFallback.reference || "").trim() || null,
     forwarder: input.forwarder || null
   };
@@ -131,6 +150,9 @@ export async function ingest(ctx, input) {
     const fill = {};
     if (!link.transaction.account_last4 && txn.accountLast4) fill.accountLast4 = txn.accountLast4;
     if (!link.transaction.reference && txn.reference) fill.reference = txn.reference;
+    if (ccCardLast4 && link.transaction.merchant === "CC Bill") {
+      fill.merchant = formatCcBillMerchant(ccCardLast4, cardLabelsMap);
+    }
     if (Object.keys(fill).length) await updateTransaction(db, tenantId, link.transaction.id, fill, ctx.now());
     return { status: "linked", transactionId: link.transaction.id };
   }
@@ -154,6 +176,24 @@ export async function ingest(ctx, input) {
   txn.reviewNote = txn.status === "review" ? reviewNote : null;
 
   const id = await insertTransaction(db, tenantId, txn, source, ctx.now());
+
+  // Flywheel: cache confident LLM brand/category extractions into personal
+  // `merchant_rules` so subsequent SMS & emails resolve deterministically (0 LLM).
+  if (
+    parsedBy === PARSED_BY_LLM &&
+    txn.status === "confirmed" &&
+    d.merchant &&
+    txn.merchant &&
+    txn.category &&
+    !resolved.category
+  ) {
+    const pattern = shortenMerchantPattern(d.merchant).toLowerCase();
+    if (pattern.length >= 4 && !pattern.includes("@")) {
+      await upsertMerchantRule(db, tenantId, pattern, { name: txn.merchant, category: txn.category }, ctx.now()).catch(
+        () => {}
+      );
+    }
+  }
 
   // Logged for every reader (template id or "llm") so user fixes can be
   // turned into a correction rate for each.

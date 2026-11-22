@@ -1,0 +1,89 @@
+// Optional user-friendly labels for card / bank account last-4 digits
+// (e.g. "5678" -> "Infinia"), plus historical transaction discovery & upgrade.
+import { smartTitleCase } from "../app/merchants.js";
+
+export async function getAccountLabels(db, tenantId) {
+  const rows = await db
+    .prepare("SELECT last4, label, kind FROM account_labels WHERE tenant_id = ? ORDER BY kind, last4")
+    .bind(String(tenantId))
+    .all();
+  return rows.results;
+}
+
+export async function getCardLabelsMap(db, tenantId) {
+  const rows = await getAccountLabels(db, tenantId);
+  const map = {};
+  for (const r of rows) {
+    if (r.kind === "card") map[r.last4] = r.label;
+  }
+  return map;
+}
+
+export async function upsertAccountLabel(db, tenantId, last4, rawLabel, kind = "card", now = Date.now()) {
+  const tid = String(tenantId);
+  const digits = String(last4 || "").replace(/\D/g, "");
+  if (digits.length < 3 || digits.length > 4) {
+    return { ok: false, error: "last4 must be 3 or 4 digits (e.g. '5678')." };
+  }
+  const cleanLabel = smartTitleCase(String(rawLabel || "").trim())
+    .slice(0, 18)
+    .trim();
+  if (!cleanLabel) return { ok: false, error: "Card label cannot be empty." };
+  const normKind = kind === "account" ? "account" : "card";
+
+  await db
+    .prepare(
+      "INSERT INTO account_labels (tenant_id, last4, label, kind, updated_at) VALUES (?, ?, ?, ?, ?) " +
+        "ON CONFLICT (tenant_id, last4) DO UPDATE SET label = excluded.label, kind = excluded.kind, updated_at = excluded.updated_at"
+    )
+    .bind(tid, digits, cleanLabel, normKind, now)
+    .run();
+
+  // Retroactively upgrade any past "CC Bill *5678" rows for this user to "CC Bill · <Label>"!
+  let upgraded = 0;
+  if (normKind === "card") {
+    const newMerchant = ("CC Bill · " + cleanLabel).slice(0, 28);
+    const res = await db
+      .prepare(
+        "UPDATE transactions SET merchant = ?, updated_at = ? " +
+          "WHERE tenant_id = ? AND status = 'confirmed' AND (merchant = ? OR (merchant = 'CC Bill' AND account_last4 = ?))"
+      )
+      .bind(newMerchant, now, tid, "CC Bill *" + digits, digits)
+      .run();
+    upgraded = res.meta.changes || 0;
+  }
+
+  return { ok: true, last4: digits, label: cleanLabel, kind: normKind, upgraded_transactions: upgraded };
+}
+
+export async function listSeenAccounts(db, tenantId) {
+  const tid = String(tenantId);
+  const [saved, seenRes] = await Promise.all([
+    getAccountLabels(db, tid),
+    db
+      .prepare(
+        "SELECT account_last4 AS last4, COUNT(*) AS txn_count, MAX(occurred_on) AS last_seen " +
+          "FROM transactions WHERE tenant_id = ? AND status = 'confirmed' AND account_last4 IS NOT NULL AND TRIM(account_last4) <> '' " +
+          "GROUP BY account_last4 ORDER BY txn_count DESC LIMIT 20"
+      )
+      .bind(tid)
+      .all()
+  ]);
+  const byLast4 = new Map(saved.map((s) => [s.last4, s]));
+  const merged = [];
+  for (const r of seenRes.results) {
+    const existing = byLast4.get(r.last4);
+    byLast4.delete(r.last4);
+    merged.push({
+      last4: r.last4,
+      label: existing ? existing.label : null,
+      kind: existing ? existing.kind : null,
+      txn_count: r.txn_count,
+      last_seen: r.last_seen
+    });
+  }
+  for (const s of byLast4.values()) {
+    merged.push({ last4: s.last4, label: s.label, kind: s.kind, txn_count: 0, last_seen: null });
+  }
+  return merged;
+}

@@ -4,6 +4,7 @@
 import { listTenants, recordNag, setTenantStatus } from "../db/tenants.js";
 import { purgeExpired } from "../db/ephemeral.js";
 import { getParserMode, getDisabledTemplates, parserEventSummary } from "../db/settings.js";
+import { promoteConsensusMerchantRules, recentLearnedRules } from "../db/merchantRules.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { countUntaggedTransactions, listUntaggedWithSignals } from "../db/transactions.js";
 import { weekRangeFor, weeklyDigestData, formatWeeklyMessage } from "./analytics.js";
@@ -122,10 +123,35 @@ export async function nudgeDormantTenants(ctx) {
 }
 
 export async function sendParserDigest(ctx) {
+  const now = ctx.now();
+  const promoted = await promoteConsensusMerchantRules(ctx.db, now).catch(() => []);
   if (!ctx.adminChatId) return;
-  const summary = await parserEventSummary(ctx.db, ctx.now() - 7 * DAY_MS);
-  const text = formatParserDigest(summary, await getParserMode(ctx.db), await getDisabledTemplates(ctx.db));
-  await ctx.tg.sendMessage(ctx.adminChatId, text);
+  const since = now - 7 * DAY_MS;
+  const [summary, mode, disabled, learned] = await Promise.all([
+    parserEventSummary(ctx.db, since),
+    getParserMode(ctx.db),
+    getDisabledTemplates(ctx.db),
+    recentLearnedRules(ctx.db, since, 6).catch(() => [])
+  ]);
+  const parts = [formatParserDigest(summary, mode, disabled)];
+  if (promoted.length > 0 || learned.length > 0) {
+    parts.push("", "🏷 *Merchant flywheel — last 7d*");
+    if (promoted.length > 0) {
+      parts.push(
+        "• Auto-promoted to shared: " +
+          promoted
+            .map((p) => "`" + escapeMarkdown(p.pattern) + "` → *" + escapeMarkdown(p.name || p.category) + "*")
+            .join(", ")
+      );
+    }
+    for (const r of learned.slice(0, 5)) {
+      const target = (r.name ? "*" + escapeMarkdown(r.name) + "* · " : "") + escapeMarkdown(r.category);
+      parts.push(
+        "• `" + escapeMarkdown(r.pattern) + "` → " + target + (r.tenants > 1 ? " _(" + r.tenants + " users)_" : "")
+      );
+    }
+  }
+  await ctx.tg.sendMessage(ctx.adminChatId, parts.join("\n"));
 }
 
 // ─── 21:00 IST daily recap + untagged reminder ───────────────────────

@@ -85,3 +85,48 @@ export function resolveMerchant(rawName, rules) {
   }
   return out;
 }
+
+// Privacy-safe k-anonymity promotion: when >= 2 independent tenants map the
+// same merchant pattern (>= 4 chars) to the same (name, category), promote it
+// into shared `merchant_rules (tenant_id = '')`.
+export async function promoteConsensusMerchantRules(db, now = Date.now()) {
+  const candidates = (
+    await db
+      .prepare(
+        "SELECT pattern, COALESCE(name, '') AS norm_name, category, MAX(kind) AS kind, COUNT(DISTINCT tenant_id) AS tenants " +
+          "FROM merchant_rules " +
+          "WHERE tenant_id <> '' AND category IS NOT NULL AND TRIM(category) <> '' AND length(pattern) >= 4 " +
+          "GROUP BY pattern, COALESCE(name, ''), category " +
+          "HAVING COUNT(DISTINCT tenant_id) >= 2"
+      )
+      .all()
+  ).results;
+
+  const promoted = [];
+  for (const c of candidates) {
+    const existing = await db
+      .prepare("SELECT name, category FROM merchant_rules WHERE tenant_id = '' AND pattern = ?")
+      .bind(c.pattern)
+      .first();
+    if (existing && (existing.name || "") === c.norm_name && existing.category === c.category) continue;
+    const fields = { category: c.category };
+    if (c.norm_name) fields.name = c.norm_name;
+    if (c.kind) fields.kind = c.kind;
+    await upsertMerchantRule(db, SHARED, c.pattern, fields, now);
+    promoted.push({ pattern: c.pattern, name: c.norm_name || null, category: c.category, tenants: c.tenants });
+  }
+  return promoted;
+}
+
+export async function recentLearnedRules(db, sinceMs, limit = 8) {
+  return (
+    await db
+      .prepare(
+        "SELECT pattern, MAX(name) AS name, category, COUNT(DISTINCT tenant_id) AS tenants " +
+          "FROM merchant_rules WHERE tenant_id <> '' AND updated_at >= ? AND category IS NOT NULL " +
+          "GROUP BY pattern, category ORDER BY tenants DESC, MAX(updated_at) DESC LIMIT ?"
+      )
+      .bind(sinceMs, limit)
+      .all()
+  ).results;
+}

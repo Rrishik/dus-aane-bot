@@ -1,11 +1,14 @@
 // Personal-chat onboarding, live summary helpers, and Gmail setup mail.
 import { getTenant, getTenantEmails, registerEmail } from "../db/tenants.js";
+import { getMerchantRules } from "../db/merchantRules.js";
+import { upsertAccountLabel } from "../db/accountLabels.js";
 import { listTransactions } from "../db/transactions.js";
 import { BOT_INBOX_EMAIL } from "./constants.js";
 import { escapeMarkdown, money, formatLongDate } from "./format.js";
 import { isUsable } from "./onboarding.js";
 import { ensurePersonalPin } from "./personalPin.js";
 import { syncMemberGroupTitles } from "./groups.js";
+import { normalizeTenantMerchants } from "./merchants.js";
 import { callAppsScript } from "./appsScript.js";
 
 const README_URL = "https://github.com/Rrishik/dus-aane-bot#readme";
@@ -13,6 +16,8 @@ const README_URL = "https://github.com/Rrishik/dus-aane-bot#readme";
 export async function handleStart(ctx, chatId, username) {
   const tenant = await getTenant(ctx.db, chatId);
   if (isUsable(tenant)) {
+    const rules = await getMerchantRules(ctx.db, chatId);
+    await normalizeTenantMerchants(ctx.db, chatId, rules, ctx.now()).catch(() => {});
     await syncMemberGroupTitles(ctx, chatId);
     await ensurePersonalPin(ctx, chatId);
     return sendWelcomeGuide(ctx, chatId);
@@ -38,9 +43,33 @@ async function sendWelcomeGuide(ctx, chatId) {
       "• _Tag Rahul as Food_\n" +
       "• _Split dinner 50/50_\n" +
       "• _Export September CSV_\n\n" +
-      "💡 *Swipe-reply* on any card with a merchant name, `₹amount`, `50-50`, or `del` — or swipe-reply on any answer to follow up.",
+      "💡 *Swipe-reply* on any card with a merchant name, `₹amount`, `50-50`, or `del` — or swipe-reply on any answer to follow up.\n" +
+      "💳 *Optional:* say `card 5678 is Infinia` anytime to label your cards for CC bills & card spend.",
     { reply_markup: { inline_keyboard: [[{ text: "📖 README", url: README_URL }]] } }
   );
+}
+
+const DIRECT_CARD_LABEL_RE = /^(?:label\s+|name\s+)?card\s+[*xX#]*(\d{3,4})\s+(?:is|as|=|:)\s+(.+)$/i;
+
+export async function handleDirectCardLabel(ctx, chatId, text) {
+  const m = String(text || "")
+    .trim()
+    .match(DIRECT_CARD_LABEL_RE);
+  if (!m) return false;
+  const res = await upsertAccountLabel(ctx.db, chatId, m[1], m[2], "card", ctx.now());
+  if (!res.ok) {
+    await ctx.tg.sendMessage(chatId, "❌ " + res.error, { parse_mode: null });
+    return true;
+  }
+  const extra =
+    res.upgraded_transactions > 0
+      ? " (updated " + res.upgraded_transactions + " past CC bill" + (res.upgraded_transactions === 1 ? "" : "s") + ")"
+      : "";
+  await ctx.tg.sendMessage(
+    chatId,
+    "💳 Saved card `*" + res.last4 + "` as *" + escapeMarkdown(res.label) + "*" + extra + "."
+  );
+  return true;
 }
 
 // ─── Email registration ──────────────────────────────────────────────

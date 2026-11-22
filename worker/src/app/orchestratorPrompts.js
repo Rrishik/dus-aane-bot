@@ -33,7 +33,8 @@ export function askSystemPrompt(today) {
     "\n- Available credit categories: " +
     CREDIT_CATEGORIES.join(", ") +
     "\n- Fix obvious merchant typos before searching (flipart → flipkart, swiggi → swiggy, amzn → amazon).\n" +
-    "- An 'untagged' transaction is any row missing its merchant tag (Unknown/Untagged) OR missing its category (Uncategorized). Use list_untagged_transactions (passing start_date and end_date when a timeframe is given; e.g. 'past 2 days' means " +
+    "- When the user asks about spend on a specific credit card or account (by name like 'Infinia' or last-4 digits like '5678'), pass `card` to get_spending_summary, get_category_breakdown, get_top_merchants, or search_transactions (or call list_cards if unsure which cards exist).\n" +
+    "- An 'untagged' transaction is any confirmed row missing its category. Use list_untagged_transactions (passing start_date and end_date when a timeframe is given; e.g. 'past 2 days' means " +
     shiftIsoDate(today, -2) +
     " to " +
     today +
@@ -55,7 +56,7 @@ export function ledgerSystemPrompt(today) {
     CATEGORIES.join(", ") +
     "\n- Credit categories: " +
     CREDIT_CATEGORIES.join(", ") +
-    "\n- An 'untagged' transaction is any confirmed row missing its merchant tag (Unknown/Untagged) OR missing its category (Uncategorized). Call list_untagged_transactions (passing start_date and end_date when a timeframe is asked, e.g. 'past 2 days' = " +
+    "\n- An 'untagged' transaction is any confirmed row missing its category. Call list_untagged_transactions (passing start_date and end_date when a timeframe is asked, e.g. 'past 2 days' = " +
     shiftIsoDate(today, -2) +
     " to " +
     today +
@@ -103,6 +104,7 @@ export function accountSystemPrompt(today, status) {
     "- Use export_transactions for CSV / Google Sheet exports.\n" +
     "- Use prompt_delete_all_data when they ask to delete/wipe their data (it posts confirmation buttons; never claim data is already deleted).\n" +
     "- Use show_dashboard when they ask for a quick overview card or pinned dashboard.\n" +
+    "- Use list_cards and set_card_label when the user asks what cards/accounts have been seen or wants to label a card's last-4 digits (e.g. '5678 is Infinia').\n" +
     "- When a tool returns already_sent_to_chat=true, return an empty reply unless extra clarification is needed."
   );
 }
@@ -117,7 +119,7 @@ export function triageSystemPrompt(today) {
     "- route_to_analytics: spending totals, category breakdowns, top merchants, trends, searching transactions.\n" +
     "- route_to_ledger: tagging/categorizing untagged spends, editing merchant/category/amount/type, deleting a transaction, or saving a pasted bank alert.\n" +
     "- route_to_groups: splitting expenses, checking who owes whom, settling balances, undoing splits.\n" +
-    "- route_to_account: registering Gmail, resending setup instructions, backfilling emails, exporting CSV/Sheets, pinning dashboard, or deleting account data.\n\n" +
+    "- route_to_account: registering Gmail, resending setup instructions, backfilling emails, exporting CSV/Sheets, pinning dashboard, naming/listing card last-4 labels, or deleting account data.\n\n" +
     "Only answer directly (plain text, 1–2 sentences, no markdown, no questions) if the user sends a greeting/help question (summarize what they can ask in plain English) or an off-topic non-finance request (politely decline)."
   );
 }
@@ -125,7 +127,7 @@ export function triageSystemPrompt(today) {
 // ─── Deterministic fast pre-router (saves 1 LLM hop when unambiguous) ─
 
 const ACCOUNT_RE =
-  /^(?:\/?(?:register|account|export|backfill|deletemydata|sheet)\b)|(?:\b(?:export|csv|google\s+sheet|backfill|resend\s+setup|setup\s+(?:email|instructions|steps)|account\s+status|my\s+account|delete\s+(?:all\s+)?my\s+data|wipe\s+my\s+data|(?:pin|show)\s+(?:my\s+)?dashboard|add\s+(?:an?\s+|another\s+|my\s+)?email)\b)/i;
+  /^(?:\/?(?:register|account|export|backfill|deletemydata|sheet)\b)|(?:\b(?:export|csv|google\s+sheet|backfill|resend\s+setup|setup\s+(?:email|instructions|steps)|account\s+status|my\s+account|delete\s+(?:all\s+)?my\s+data|wipe\s+my\s+data|(?:pin|show)\s+(?:my\s+)?dashboard|add\s+(?:an?\s+|another\s+|my\s+)?email|(?:label|name)\s+card|my\s+cards|what\s+cards)\b)/i;
 const GROUP_RE =
   /^(?:\/?settle\b)|(?:\b(?:split|50[-\/]50|who\s+owes|owe(?:s|d)?\s+(?:me|whom|bob|alice)?|group\s+balance|settle(?:\s+up|\s+with)?|settled\s+with|simplify\s+debts?|make\s+.+\s+personal|undo\s+split)\b)/i;
 const LEDGER_RE =

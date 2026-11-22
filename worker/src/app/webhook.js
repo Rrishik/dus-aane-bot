@@ -5,7 +5,7 @@
 // replies, strict bank SMS pastes, and bare onboarding emails; everything else
 // flows through the central LLM orchestrator.
 import { getTenant } from "../db/tenants.js";
-import { handleStart, registerEmailForChat } from "./commands.js";
+import { handleStart, registerEmailForChat, handleDirectCardLabel } from "./commands.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
 import { handleCardReply, handleCancel } from "./cardActions.js";
@@ -114,6 +114,9 @@ export async function handleMessage(ctx, message) {
     await ctx.tg.sendMessage(chatId, gateText(null));
     return;
   }
+
+  // Deterministic card labelling ("card 5678 is Infinia") — 0 LLM tokens.
+  if (isUsable(tenant) && (await handleDirectCardLabel(ctx, chatId, text))) return;
 
   // Swipe-reply to card/stepper (0 LLM) -> open conversation resume -> central orchestrator.
   if (m.replyTo && m.replyTo.message_id) {

@@ -13,6 +13,7 @@ import { listTaggingContext } from "../db/transactions.js";
 import { getMerchantRules, resolveMerchant } from "../db/merchantRules.js";
 import { guessCategory } from "../parser/index.js";
 import { parseJsonContent } from "../llm/azure.js";
+import { CANONICAL_GENERIC_LABELS, canonicalizeMerchant, normalizeUserMerchantInput } from "./merchants.js";
 import { CATEGORIES, CREDIT_CATEGORIES, TAG_MAX_LEN, categoriesFor } from "./constants.js";
 import { IST_OFFSET_MS } from "../util/dates.js";
 import { fromMinor } from "../util/money.js";
@@ -38,7 +39,19 @@ const GENERIC_BANK_LABELS = new Set([
   "atm withdrawal",
   "emi",
   "rent",
-  "maintenance"
+  "maintenance",
+  "mutual funds",
+  "stocks",
+  "gold",
+  "househelp",
+  "broadband",
+  "electricity",
+  "fuel",
+  "cab",
+  "auto",
+  "kirana",
+  "pharmacy",
+  "doctor"
 ]);
 
 function slotForHour(h) {
@@ -145,7 +158,7 @@ function alnumTokens(s) {
 // Guard against hallucinated retail brand names on merchantless bank alerts
 // and prevent overwriting an existing merchant with an unrelated name.
 export function validateMerchantProposal(row, proposed, allowedHistoryLabels) {
-  const clean = String(proposed || "").trim();
+  const clean = normalizeUserMerchantInput(proposed);
   if (!clean || clean.length > TAG_MAX_LEN) return null;
   const lower = clean.toLowerCase();
   if (lower === "unknown" || lower === "untagged" || lower === "null") return null;
@@ -238,12 +251,14 @@ export async function suggestTagsForBatch(ctx, tenantId, rows) {
     const rawName = r.merchant || r.merchant_raw;
     if (rawName) {
       const resolved = resolveMerchant(rawName, rules);
+      const canon = canonicalizeMerchant(resolved.merchant || rawName, rules);
       const guessed =
         (resolved.category && valid.includes(resolved.category) && resolved.category) ||
-        guessCategory(resolved.merchant || rawName, r.direction === "credit" ? "Credit" : "Debit");
+        (canon.category && valid.includes(canon.category) && canon.category) ||
+        guessCategory(canon.merchant || resolved.merchant || rawName, r.direction === "credit" ? "Credit" : "Debit");
       if (guessed && valid.includes(guessed)) {
-        const cleanedName =
-          !r.merchant && resolved.merchant && resolved.merchant !== rawName ? resolved.merchant : null;
+        const bestName = canon.merchant || resolved.merchant;
+        const cleanedName = bestName && bestName !== r.merchant ? bestName : null;
         return {
           id: r.id,
           merchant: cleanedName,
