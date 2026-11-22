@@ -2,7 +2,13 @@
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { listUntaggedTransactions, isUntaggedTransaction } from "../db/transactions.js";
 import { getTenant, getTenantEmails, groupsForMember, getGroupMembers } from "../db/tenants.js";
-import { getAccountLabels, getCardLabelsMap, upsertAccountLabel, listSeenAccounts } from "../db/accountLabels.js";
+import {
+  getAccountLabels,
+  getAllAccountLabelsMap,
+  upsertAccountLabel,
+  deleteAccountLabel,
+  listSeenAccounts
+} from "../db/accountLabels.js";
 import { groupBalances } from "../db/splits.js";
 import { refreshCardMessage } from "./cardState.js";
 import { mutateTransaction, batchMutateTransactions, removeTransaction } from "./ledger.js";
@@ -295,6 +301,14 @@ export const ACCOUNT_TOOLS = [
     },
     ["last4", "label"]
   ),
+  fn(
+    "delete_card_label",
+    "Remove a saved label from a card or bank account's last 3-4 digits.",
+    {
+      last4: { type: "string", description: "Last 3 or 4 digits of the card/account, e.g. '5678'." }
+    },
+    ["last4"]
+  ),
   ASK_USER_TOOL
 ];
 
@@ -452,7 +466,7 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       if (args.min_amount !== undefined) rows = rows.filter((r) => r.amount_minor >= toMinor(args.min_amount));
       if (args.max_amount !== undefined) rows = rows.filter((r) => r.amount_minor <= toMinor(args.max_amount));
       rows = rows.slice(-(args.limit || 10));
-      const cardLabelsMap = await getCardLabelsMap(ctx.db, tid);
+      const cardLabelsMap = await getAllAccountLabelsMap(ctx.db, tid);
       return {
         count: rows.length,
         transactions: rows.map((r) => {
@@ -490,7 +504,7 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
           spendOnly: Boolean(args.spend_only),
           limit: Math.min(25, Math.max(1, args.limit || 15))
         }),
-        getCardLabelsMap(ctx.db, tid)
+        getAllAccountLabelsMap(ctx.db, tid)
       ]);
       return {
         count: rows.length,
@@ -753,6 +767,10 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
 
     async set_card_label(args) {
       return upsertAccountLabel(ctx.db, tid, args.last4, args.label, args.kind || "card", ctx.now());
+    },
+
+    async delete_card_label(args) {
+      return deleteAccountLabel(ctx.db, tid, args.last4, ctx.now());
     }
   };
 

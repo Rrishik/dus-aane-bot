@@ -1,12 +1,13 @@
 // Personal-chat onboarding, live summary helpers, and Gmail setup mail.
 import { getTenant, getTenantEmails, registerEmail } from "../db/tenants.js";
 import { getMerchantRules } from "../db/merchantRules.js";
-import { upsertAccountLabel } from "../db/accountLabels.js";
+import { upsertAccountLabel, deleteAccountLabel, listSeenAccounts } from "../db/accountLabels.js";
+import { putEphemeral, getEphemeral } from "../db/ephemeral.js";
 import { listTransactions } from "../db/transactions.js";
 import { BOT_INBOX_EMAIL } from "./constants.js";
-import { escapeMarkdown, money, formatLongDate } from "./format.js";
-import { isUsable } from "./onboarding.js";
-import { ensurePersonalPin } from "./personalPin.js";
+import { escapeMarkdown, money, formatDayMonth, formatLongDate } from "./format.js";
+import { isUsable, gateText } from "./onboarding.js";
+import { ensurePersonalPin, refreshPersonalPin } from "./personalPin.js";
 import { syncMemberGroupTitles } from "./groups.js";
 import { normalizeTenantMerchants } from "./merchants.js";
 import { callAppsScript } from "./appsScript.js";
@@ -44,31 +45,189 @@ async function sendWelcomeGuide(ctx, chatId) {
       "• _Split dinner 50/50_\n" +
       "• _Export September CSV_\n\n" +
       "💡 *Swipe-reply* on any card with a merchant name, `₹amount`, `50-50`, or `del` — or swipe-reply on any answer to follow up.\n" +
-      "💳 *Optional:* say `card 5678 is Infinia` anytime to label your cards for CC bills & card spend.",
+      "💳 *Cards & accounts:* tap *💳 Cards* on your pinned summary (or type `/cards`) to view & label `*last4` digits.",
     { reply_markup: { inline_keyboard: [[{ text: "📖 README", url: README_URL }]] } }
   );
 }
 
-const DIRECT_CARD_LABEL_RE = /^(?:label\s+|name\s+)?card\s+[*xX#]*(\d{3,4})\s+(?:is|as|=|:)\s+(.+)$/i;
+const CARDS_VIEW_TTL_SEC = 86400;
+export const cardsViewKey = (chatId, messageId) => "cards_view:" + chatId + ":" + messageId;
+
+const CARDS_VIEW_CMD_RE =
+  /^(?:\/?(?:cards|accounts)(?:@\w+)?|(?:show\s+|list\s+|view\s+)?(?:my\s+|saved\s+|labell?ed\s+)?(?:cards|accounts|cards\s*(?:&|and|\/)\s*accounts))\s*\??$/i;
+const DIRECT_LABEL_UPSERT_RE =
+  /^(?:label\s+|name\s+)?(card|a\/c|acct|account|bank)\s+[*xX#]*(\d{3,4})\s+(?:is|as|=|:)\s+(.+)$/i;
+const DIRECT_LABEL_DELETE_RE =
+  /^(?:del(?:ete)?|remove|unlabel|clear)\s+(?:(?:card|a\/c|acct|account|bank|label)\s+)?[*xX#]*(\d{3,4})$/i;
+
+function kindForToken(token) {
+  return /^(?:a\/c|acct|account|bank)$/i.test(String(token || "").trim()) ? "account" : "card";
+}
+
+export async function accountsMessage(ctx, tenantId) {
+  const seen = await listSeenAccounts(ctx.db, tenantId);
+  const labelled = seen.filter((r) => r.label);
+  const unlabelled = seen.filter((r) => !r.label);
+  const lines = ["💳 *Cards & Accounts*"];
+
+  if (labelled.length > 0) {
+    lines.push("", "*Labelled*");
+    for (const r of labelled) {
+      const icon = r.kind === "account" ? "🏦" : "💳";
+      const metaParts = [];
+      if (r.txn_count > 0) metaParts.push(r.txn_count + (r.txn_count === 1 ? " txn" : " txns"));
+      if (r.last_seen) metaParts.push(formatDayMonth(r.last_seen));
+      const meta = metaParts.length > 0 ? " _(" + escapeMarkdown(metaParts.join(" · ")) + ")_" : "";
+      lines.push("• " + icon + " `*" + r.last4 + "` — *" + escapeMarkdown(r.label) + "*" + meta);
+    }
+  } else {
+    lines.push("", "_No cards or accounts labelled yet._");
+  }
+
+  if (unlabelled.length > 0) {
+    lines.push("", "*Unlabelled* _(seen in alerts)_");
+    const shown = unlabelled.slice(0, 10);
+    const chips = shown.map(
+      (r) => "`*" + r.last4 + "` _(" + r.txn_count + (r.txn_count === 1 ? " txn" : " txns") + ")_"
+    );
+    for (let i = 0; i < chips.length; i += 3) {
+      lines.push("• " + chips.slice(i, i + 3).join(" · "));
+    }
+    if (unlabelled.length > shown.length) {
+      lines.push("_+" + (unlabelled.length - shown.length) + " more_");
+    }
+  } else if (labelled.length === 0) {
+    lines.push("_No card or account digits seen in transactions yet._");
+  }
+
+  lines.push(
+    "",
+    "💡 _Swipe-reply here_ (e.g. `5678 Infinia, a/c 1264 HDFC` or `del 5678`), _or say_ `card 5678 is Infinia` _anytime._"
+  );
+  return lines.join("\n");
+}
+
+export async function handleCardsViewCommand(ctx, chatId, text, tenant = null) {
+  if (!CARDS_VIEW_CMD_RE.test(String(text || "").trim())) return false;
+  if (tenant && !isUsable(tenant)) {
+    await ctx.tg.sendMessage(chatId, gateText(tenant));
+    return true;
+  }
+  const posted = await ctx.tg.sendMessage(chatId, await accountsMessage(ctx, chatId));
+  if (posted && posted.message_id) {
+    await putEphemeral(
+      ctx.db,
+      cardsViewKey(chatId, posted.message_id),
+      { pinView: false },
+      CARDS_VIEW_TTL_SEC,
+      ctx.now()
+    );
+  }
+  return true;
+}
 
 export async function handleDirectCardLabel(ctx, chatId, text) {
-  const m = String(text || "")
-    .trim()
-    .match(DIRECT_CARD_LABEL_RE);
+  const s = String(text || "").trim();
+  const delMatch = s.match(DIRECT_LABEL_DELETE_RE);
+  if (delMatch) {
+    const res = await deleteAccountLabel(ctx.db, chatId, delMatch[1], ctx.now());
+    if (!res.ok) {
+      await ctx.tg.sendMessage(chatId, "ℹ️ " + res.error, { parse_mode: null });
+      return true;
+    }
+    await ctx.tg.sendMessage(
+      chatId,
+      "🗑 Removed label *" + escapeMarkdown(res.removed_label) + "* from `*" + res.last4 + "`."
+    );
+    return true;
+  }
+
+  const m = s.match(DIRECT_LABEL_UPSERT_RE);
   if (!m) return false;
-  const res = await upsertAccountLabel(ctx.db, chatId, m[1], m[2], "card", ctx.now());
+  const kind = kindForToken(m[1]);
+  const res = await upsertAccountLabel(ctx.db, chatId, m[2], m[3], kind, ctx.now());
   if (!res.ok) {
     await ctx.tg.sendMessage(chatId, "❌ " + res.error, { parse_mode: null });
     return true;
   }
+  const icon = res.kind === "account" ? "🏦" : "💳";
+  const noun = res.kind === "account" ? "account" : "card";
   const extra =
     res.upgraded_transactions > 0
       ? " (updated " + res.upgraded_transactions + " past CC bill" + (res.upgraded_transactions === 1 ? "" : "s") + ")"
       : "";
   await ctx.tg.sendMessage(
     chatId,
-    "💳 Saved card `*" + res.last4 + "` as *" + escapeMarkdown(res.label) + "*" + extra + "."
+    icon + " Saved " + noun + " `*" + res.last4 + "` as *" + escapeMarkdown(res.label) + "*" + extra + "."
   );
+  return true;
+}
+
+// Parse comma/newline-separated swipe-replies on the Cards & Accounts card:
+//   "5678 Infinia, a/c 1264 HDFC" / "card 4178 is Atlas" / "del 5678"
+export function parseCardsViewReply(text) {
+  const raw = String(text || "").trim();
+  if (!raw || raw.length > 240 || /[?]/.test(raw)) return null;
+  const segments = raw
+    .split(/\s*(?:,|;|\n)\s*/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  if (!segments.length) return null;
+
+  const ops = [];
+  for (const seg of segments) {
+    const del = seg.match(DIRECT_LABEL_DELETE_RE);
+    if (del) {
+      ops.push({ op: "delete", last4: del[1] });
+      continue;
+    }
+    const explicit = seg.match(
+      /^(?:label\s+|name\s+)?(?:(card|a\/c|acct|account|bank)\s+)?[*xX#]*(\d{3,4})\s*(?:is|as|=|:|\s)\s*(.+)$/i
+    );
+    if (!explicit) return null;
+    const label = explicit[3].trim();
+    if (!label || label.split(/\s+/).length > 4) return null;
+    ops.push({
+      op: "upsert",
+      kind: kindForToken(explicit[1]),
+      last4: explicit[2],
+      label
+    });
+  }
+  return ops.length > 0 ? ops : null;
+}
+
+export async function handleCardsReply(ctx, m) {
+  if (!m.replyTo || !m.replyTo.message_id) return false;
+  const messageId = m.replyTo.message_id;
+  const active = await getEphemeral(ctx.db, cardsViewKey(m.chatId, messageId), ctx.now());
+  if (!active) return false;
+
+  const ops = parseCardsViewReply(m.text);
+  if (!ops) return false;
+
+  let changed = 0;
+  for (const item of ops) {
+    if (item.op === "delete") {
+      const r = await deleteAccountLabel(ctx.db, m.chatId, item.last4, ctx.now());
+      if (r.ok) changed++;
+    } else {
+      const r = await upsertAccountLabel(ctx.db, m.chatId, item.last4, item.label, item.kind, ctx.now());
+      if (r.ok) changed++;
+    }
+  }
+  if (changed === 0) return false;
+
+  if (m.raw && m.raw.message_id && ctx.tg.setMessageReaction) {
+    await ctx.tg.setMessageReaction(m.chatId, m.raw.message_id, "👍").catch(() => {});
+  }
+
+  const opts = active.pinView
+    ? { reply_markup: { inline_keyboard: [[{ text: "🔙 Back", callback_data: "stats_back" }]] } }
+    : {};
+  await ctx.tg.editMessageText(m.chatId, messageId, await accountsMessage(ctx, m.chatId), opts);
+  await putEphemeral(ctx.db, cardsViewKey(m.chatId, messageId), active, CARDS_VIEW_TTL_SEC, ctx.now());
+  if (!active.pinView) await refreshPersonalPin(ctx, m.chatId).catch(() => {});
   return true;
 }
 

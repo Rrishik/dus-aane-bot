@@ -1,7 +1,8 @@
 // Inline-button callbacks: live summary views, "Resend setup", group
 // split/settle (":"-separated) and transaction card actions ("_"-separated).
 import { getTenant, getTenantEmails } from "../db/tenants.js";
-import { recentMessage, sendSetupEmail } from "./commands.js";
+import { putEphemeral, deleteEphemeral } from "../db/ephemeral.js";
+import { recentMessage, accountsMessage, cardsViewKey, sendSetupEmail } from "./commands.js";
 import { monthlyTrends, weeklyTrends, formatTrendsMessage } from "./analytics.js";
 import { isUsable, gateText } from "./onboarding.js";
 import { handleCardAction } from "./cardActions.js";
@@ -15,6 +16,7 @@ const statsBackRow = [{ text: "🔙 Back", callback_data: "stats_back" }];
 
 export async function handleStatsCallback(ctx, chatId, messageId, view) {
   if (view === "back") {
+    await deleteEphemeral(ctx.db, cardsViewKey(chatId, messageId));
     const data = await personalPinData(ctx, chatId);
     await ctx.tg.editMessageText(chatId, messageId, formatPersonalPin(data), {
       disable_web_page_preview: true,
@@ -23,12 +25,21 @@ export async function handleStatsCallback(ctx, chatId, messageId, view) {
     return;
   }
   if (view === "recent") {
+    await deleteEphemeral(ctx.db, cardsViewKey(chatId, messageId));
     await ctx.tg.editMessageText(chatId, messageId, await recentMessage(ctx, chatId), {
       reply_markup: { inline_keyboard: [statsBackRow] }
     });
     return;
   }
+  if (view === "cards") {
+    await ctx.tg.editMessageText(chatId, messageId, await accountsMessage(ctx, chatId), {
+      reply_markup: { inline_keyboard: [statsBackRow] }
+    });
+    await putEphemeral(ctx.db, cardsViewKey(chatId, messageId), { pinView: true }, 86400, ctx.now());
+    return;
+  }
   if (view === "trends" || view === "trendsweekly" || view === "trendsmonthly") {
+    await deleteEphemeral(ctx.db, cardsViewKey(chatId, messageId));
     const monthly = view === "trendsmonthly";
     const buckets = monthly
       ? await monthlyTrends(ctx.db, chatId, ctx.now())

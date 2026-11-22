@@ -179,6 +179,67 @@ describe("pinned dashboard callbacks (Recent & Trends)", () => {
     expect(ctx.tg.of("editMessageText")[2].args[2]).toMatch(/Monthly/);
     await handleUpdate(ctx, tap("111", "stats_back"));
     expect(ctx.tg.of("editMessageText")[3].args[2]).toContain("📌 *Oct 2026*");
+    expect(ctx.tg.of("editMessageText")[3].args[3].reply_markup.inline_keyboard[0].map((b) => b.callback_data)).toEqual(
+      ["stats_recent", "stats_trends", "stats_cards"]
+    );
+  });
+
+  it("Cards tab (stats_cards) + 0-LLM /cards & 'cards' shortcuts view, label, and remove cards & bank accounts", async () => {
+    const ctx = testContext();
+    await seedTenant(ctx, "111");
+    await addTxn(ctx, "111", { merchant: "Swiggy", accountLast4: "5678", occurredOn: "2026-10-06" });
+    await addTxn(ctx, "111", { merchant: "DMart", accountLast4: "1264", occurredOn: "2026-10-05" });
+    await addTxn(ctx, "111", { merchant: "Apollo", accountLast4: "1425", occurredOn: "2026-10-04" });
+
+    // 1. Tap [💳 Cards] on pinned summary (message_id 50) -> shows unlabelled digits in 0 LLM calls.
+    await handleUpdate(ctx, tap("111", "stats_cards"));
+    const pinCardsEdit = ctx.tg.of("editMessageText").at(-1);
+    expect(pinCardsEdit.args[2]).toContain("💳 *Cards & Accounts*");
+    expect(pinCardsEdit.args[2]).toContain("`*5678` _(1 txn)_");
+    expect(pinCardsEdit.args[3].reply_markup.inline_keyboard[0][0].callback_data).toBe("stats_back");
+
+    // 2. Swipe-reply directly on pinned Cards view to label both a card and a bank account in 0 LLM calls!
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 901,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "5678 Infinia, a/c 1264 HDFC",
+        reply_to_message: { message_id: 50 }
+      }
+    });
+    expect(ctx.llm.calls).toHaveLength(0);
+    const updatedPinView = ctx.tg.of("editMessageText").at(-1);
+    expect(updatedPinView.args[2]).toContain("💳 `*5678` — *Infinia*");
+    expect(updatedPinView.args[2]).toContain("🏦 `*1264` — *HDFC*");
+    expect(updatedPinView.args[2]).toContain("`*1425` _(1 txn)_");
+    expect(updatedPinView.args[3].reply_markup.inline_keyboard[0][0].callback_data).toBe("stats_back");
+
+    // 3. Direct "/cards" and "a/c 1425 is SBI" + swipe-reply "del 5678" in chat (0 LLM calls).
+    await handleUpdate(ctx, {
+      message: { chat: { id: 111, type: "private" }, from: { id: 111 }, text: "a/c 1425 is SBI" }
+    });
+    expect(ctx.tg.of("sendMessage").at(-1).args[1]).toContain("🏦 Saved account `*1425` as *SBI*");
+
+    await handleUpdate(ctx, {
+      message: { chat: { id: 111, type: "private" }, from: { id: 111 }, text: "/cards" }
+    });
+    const standalone = ctx.tg.of("sendMessage").at(-1);
+    expect(standalone.args[1]).toContain("🏦 `*1425` — *SBI*");
+
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 902,
+        chat: { id: 111, type: "private" },
+        from: { id: 111 },
+        text: "del 5678",
+        reply_to_message: { message_id: standalone.result.message_id }
+      }
+    });
+    const afterDel = ctx.tg.of("editMessageText").at(-1).args[2];
+    expect(afterDel).not.toContain("*Infinia*");
+    expect(afterDel).toContain("`*5678` _(1 txn)_");
+    expect(ctx.llm.calls).toHaveLength(0);
   });
 });
 

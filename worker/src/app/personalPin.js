@@ -114,7 +114,8 @@ export function personalPinKeyboard(untaggedCount = 0) {
   const rows = [
     [
       { text: "🕒 Recent", callback_data: "stats_recent" },
-      { text: "📉 Trends", callback_data: "stats_trends" }
+      { text: "📉 Trends", callback_data: "stats_trends" },
+      { text: "💳 Cards", callback_data: "stats_cards" }
     ]
   ];
   if (untaggedCount > 0) {

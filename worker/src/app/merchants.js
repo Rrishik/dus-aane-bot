@@ -305,6 +305,8 @@ const UPPER_ACRONYMS = new Set([
   "ICICI",
   "SBI",
   "AXIS",
+  "IDFC",
+  "PNB",
   "HSBC",
   "AMEX",
   "BESCOM",

@@ -209,6 +209,7 @@ Personal DMs are **commandless** — only `/start` (welcome + pin live summary) 
 | **Spending & trends**          | `"How much did I spend on food last month?"`, `"Monthly spending trends"`                            |
 | **Tagging & edits**            | `"Show untagged expenses"`, `"Rahul is Food, Kirana is Groceries"`                                   |
 | **Splits & settlements**       | `"Split the ₹900 Swiggy dinner 50/50"`, `"Who owes whom?"`, `"Settled ₹500 cash with Bob"`           |
+| **Cards & bank accounts**      | Tap **💳 Cards** on your pinned summary, or send `/cards`, `"card 5678 is Infinia"`, `"a/c 1264 is HDFC"` |
 | **Account, backfill & export** | `"Add alice@gmail.com"`, `"Backfill last 2 weeks"`, `"Export September CSV"`, `"Delete all my data"` |
 
 **In a group** (after adding the bot as admin): `/start` sets the group up (or re-syncs members), `/stats` shows who owes whom, `/settle @name 500` records a cash payment, `/account` shows the group's setup, `/help`.

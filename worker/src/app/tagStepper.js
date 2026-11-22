@@ -17,7 +17,7 @@ import {
   isUnnamedTransaction
 } from "../db/transactions.js";
 import { getMerchantRules } from "../db/merchantRules.js";
-import { getCardLabelsMap } from "../db/accountLabels.js";
+import { getCardLabelsMap, getAllAccountLabelsMap } from "../db/accountLabels.js";
 import { putEphemeral, getEphemeral, deleteEphemeral } from "../db/ephemeral.js";
 import { mutateTransaction, batchMutateTransactions } from "./ledger.js";
 import { parseCardQuickReply, applyCardQuickReply, matchCategoryToken } from "./cardActions.js";
@@ -420,9 +420,10 @@ async function renderUntaggedView(ctx, chatId, messageId, prevState = {}, { send
     return { empty: true };
   }
 
-  const [rules, cardLabelsMap] = await Promise.all([
+  const [rules, cardLabelsMap, allLabelsMap] = await Promise.all([
     getMerchantRules(ctx.db, chatId),
-    getCardLabelsMap(ctx.db, chatId)
+    getCardLabelsMap(ctx.db, chatId),
+    getAllAccountLabelsMap(ctx.db, chatId)
   ]);
 
   // Reuse cached suggestions if switching modes on the exact same row set;
@@ -471,7 +472,7 @@ async function renderUntaggedView(ctx, chatId, messageId, prevState = {}, { send
           : "single";
 
   if (effectiveMode === "batch") {
-    const text = formatBatchSuggestionsSection(rows, items, totalLeft, doneCount, { cardLabelsMap });
+    const text = formatBatchSuggestionsSection(rows, items, totalLeft, doneCount, { cardLabelsMap: allLabelsMap });
     const replyMarkup = batchStepperKeyboard(items);
     let targetMsgId = messageId;
     if (sendAsNew || !messageId) {
@@ -505,7 +506,10 @@ async function renderUntaggedView(ctx, chatId, messageId, prevState = {}, { send
   const suggestion = items[idx] || null;
   const quickChips = quickChipsForStepperRow(current, rules, cardLabelsMap);
   const pos = Math.min(wrappedSkips.length + idx + 1, totalLeft);
-  const text = singleStepBody(current, pos, totalLeft, doneCount, suggestion, { quickChips, cardLabelsMap });
+  const text = singleStepBody(current, pos, totalLeft, doneCount, suggestion, {
+    quickChips,
+    cardLabelsMap: allLabelsMap
+  });
   const replyMarkup = singleStepperKeyboard(current, suggestion, totalLeft, { quickChips });
 
   let targetMsgId = messageId;
@@ -872,7 +876,7 @@ export async function handleStepperReply(ctx, m) {
         includeUnnamed: Boolean(active.includeUnnamed),
         spendOnly: Boolean(active.spendOnly)
       }),
-      getCardLabelsMap(ctx.db, m.chatId)
+      getAllAccountLabelsMap(ctx.db, m.chatId)
     ]);
     const rowList = validPairs.map((p) => p.row);
     const text = formatBatchSuggestionsSection(rowList, itemsCopy, totalLeft || rowList.length, active.doneCount || 0, {

@@ -5,7 +5,13 @@
 // replies, strict bank SMS pastes, and bare onboarding emails; everything else
 // flows through the central LLM orchestrator.
 import { getTenant } from "../db/tenants.js";
-import { handleStart, registerEmailForChat, handleDirectCardLabel } from "./commands.js";
+import {
+  handleStart,
+  registerEmailForChat,
+  handleCardsViewCommand,
+  handleDirectCardLabel,
+  handleCardsReply
+} from "./commands.js";
 import { handleCallback } from "./callbacks.js";
 import { handleSmsPaste } from "./sms.js";
 import { handleCardReply, handleCancel } from "./cardActions.js";
@@ -115,14 +121,18 @@ export async function handleMessage(ctx, message) {
     return;
   }
 
-  // Deterministic card labelling ("card 5678 is Infinia") — 0 LLM tokens.
-  if (isUsable(tenant) && (await handleDirectCardLabel(ctx, chatId, text))) return;
+  // Deterministic "/cards" / "cards" view command — 0 LLM tokens.
+  if (await handleCardsViewCommand(ctx, chatId, text, tenant)) return;
 
-  // Swipe-reply to card/stepper (0 LLM) -> open conversation resume -> central orchestrator.
+  // Swipe-reply to card/stepper/cards-list (0 LLM) runs before top-level label shortcuts so cards edit in-place.
   if (m.replyTo && m.replyTo.message_id) {
     if (await handleCardReply(ctx, m)) return;
     if (await handleStepperReply(ctx, m)) return;
+    if (await handleCardsReply(ctx, m)) return;
   }
+
+  // Top-level card/account labelling ("card 5678 is Infinia", "a/c 1264 is HDFC", "del 5678") — 0 LLM tokens.
+  if (isUsable(tenant) && (await handleDirectCardLabel(ctx, chatId, text))) return;
   if (await handleAskResume(ctx, m, tenant)) return;
   await handleOrchestrator(ctx, m, tenant);
 }

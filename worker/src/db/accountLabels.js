@@ -19,6 +19,43 @@ export async function getCardLabelsMap(db, tenantId) {
   return map;
 }
 
+export async function getAllAccountLabelsMap(db, tenantId) {
+  const rows = await getAccountLabels(db, tenantId);
+  const map = {};
+  for (const r of rows) {
+    map[r.last4] = r.label;
+  }
+  return map;
+}
+
+export async function deleteAccountLabel(db, tenantId, last4, now = Date.now()) {
+  const tid = String(tenantId);
+  const digits = String(last4 || "").replace(/\D/g, "");
+  if (digits.length < 3 || digits.length > 4) {
+    return { ok: false, error: "last4 must be 3 or 4 digits (e.g. '5678')." };
+  }
+  const existing = await db
+    .prepare("SELECT label, kind FROM account_labels WHERE tenant_id = ? AND last4 = ?")
+    .bind(tid, digits)
+    .first();
+  if (!existing) {
+    return { ok: false, error: "No saved label found for *" + digits + "." };
+  }
+  await db.prepare("DELETE FROM account_labels WHERE tenant_id = ? AND last4 = ?").bind(tid, digits).run();
+
+  if (existing.kind === "card" && existing.label) {
+    const oldMerchant = ("CC Bill · " + existing.label).slice(0, 28);
+    await db
+      .prepare(
+        "UPDATE transactions SET merchant = ?, updated_at = ? " +
+          "WHERE tenant_id = ? AND status = 'confirmed' AND merchant = ? AND account_last4 = ?"
+      )
+      .bind("CC Bill *" + digits, now, tid, oldMerchant, digits)
+      .run();
+  }
+  return { ok: true, last4: digits, removed_label: existing.label, kind: existing.kind };
+}
+
 export async function upsertAccountLabel(db, tenantId, last4, rawLabel, kind = "card", now = Date.now()) {
   const tid = String(tenantId);
   const digits = String(last4 || "").replace(/\D/g, "");
