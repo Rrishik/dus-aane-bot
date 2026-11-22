@@ -148,8 +148,10 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
       return { ok: false, error: "merchant must be 1–" + TAG_MAX_LEN + " characters" };
     }
     merchant = tag;
-    patch.merchant = tag;
-    changes.push({ field: "merchant", from: txnLabel(txn), to: tag });
+    if (tag !== (txn.merchant || "")) {
+      patch.merchant = tag;
+      changes.push({ field: "merchant", from: txnLabel(txn), to: tag });
+    }
   }
 
   let category = txn.category;
@@ -162,8 +164,10 @@ export async function mutateTransaction(ctx, tenantId, txnId, input = {}, opts =
       };
     }
     category = input.category;
-    patch.category = category;
-    changes.push({ field: "category", from: txn.category, to: category });
+    if (category !== (txn.category || "")) {
+      patch.category = category;
+      changes.push({ field: "category", from: txn.category, to: category });
+    }
   } else if (patch.direction && category && !categoriesFor(direction).includes(category)) {
     category = guessCategory(merchant, direction === "credit" ? "Credit" : "Debit") || null;
     patch.category = category;

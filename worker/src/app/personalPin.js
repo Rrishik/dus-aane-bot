@@ -5,7 +5,7 @@
 // balances, and zero-LLM [Recent] / [Trends] / [Categorize] buttons.
 import { getTenant, setPinMessageId, groupsForMember } from "../db/tenants.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
-import { listUntaggedTransactions } from "../db/transactions.js";
+import { countUntaggedTransactions } from "../db/transactions.js";
 import { groupBalances } from "../db/splits.js";
 import { simplifyDebts } from "./groups.js";
 import { CATEGORY_EMOJIS } from "./constants.js";
@@ -19,9 +19,9 @@ export async function personalPinData(ctx, tenantId) {
   const tid = String(tenantId);
   const today = istDate(ctx.now());
   const monthStart = today.slice(0, 8) + "01";
-  const [rows, untagged, groups] = await Promise.all([
+  const [rows, untaggedCount, groups] = await Promise.all([
     listEffectiveTransactions(ctx.db, tid, { from: monthStart, to: today }),
-    listUntaggedTransactions(ctx.db, tid, { from: shiftIsoDate(today, -30), to: today, limit: 50 }),
+    countUntaggedTransactions(ctx.db, tid, { from: shiftIsoDate(today, -30), to: today }),
     groupsForMember(ctx.db, tid)
   ]);
 
@@ -58,7 +58,7 @@ export async function personalPinData(ctx, tenantId) {
     spendByCurrency,
     txnCount: rows.filter((r) => r.kind === "spend").length,
     topCategories,
-    untaggedCount: untagged.length,
+    untaggedCount,
     groupNets
   };
 }

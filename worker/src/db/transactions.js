@@ -199,33 +199,21 @@ export async function listTransactions(db, tenantId, opts = {}) {
 
 export function isUntaggedTransaction(r) {
   if (!r) return false;
-  const m = String(r.merchant || "")
-    .trim()
-    .toLowerCase();
   const c = String(r.category || "")
     .trim()
     .toLowerCase();
-  return !m || m === "unknown" || !c || c === "uncategorized";
+  return !c || c === "uncategorized";
 }
 
-const UNTAGGED_WHERE_CLAUSE =
-  "((category IS NULL OR TRIM(category) = '' OR LOWER(TRIM(category)) = 'uncategorized') " +
-  "OR (merchant IS NULL OR TRIM(merchant) = '' OR LOWER(TRIM(merchant)) = 'unknown'))";
+const UNTAGGED_WHERE_CLAUSE = "(category IS NULL OR TRIM(category) = '' OR LOWER(TRIM(category)) = 'uncategorized')";
+const SOURCE_SIGNALS_SELECT =
+  ", (SELECT MIN(s.received_at) FROM transaction_sources s WHERE s.tenant_id = transactions.tenant_id AND s.transaction_id = transactions.id AND s.source = 'email') AS email_received_at" +
+  ", (SELECT s.parsed_by FROM transaction_sources s WHERE s.tenant_id = transactions.tenant_id AND s.transaction_id = transactions.id ORDER BY CASE WHEN s.source = 'email' THEN 0 ELSE 1 END, s.received_at ASC LIMIT 1) AS parsed_by" +
+  ", (SELECT s.raw_text FROM transaction_sources s WHERE s.tenant_id = transactions.tenant_id AND s.transaction_id = transactions.id AND s.source = 'sms' LIMIT 1) AS sms_raw_text";
 
-// Confirmed transactions missing either a merchant tag ("🏷 Untagged" /
-// "Unknown") or a category ("📂 Uncategorized").
-export async function listUntaggedTransactions(
-  db,
-  tenantId,
-  { from, to, onlyMissingCategory = false, limit = 25 } = {}
-) {
-  const where = [
-    "tenant_id = ?",
-    "status = 'confirmed'",
-    onlyMissingCategory
-      ? "(category IS NULL OR TRIM(category) = '' OR LOWER(TRIM(category)) = 'uncategorized')"
-      : UNTAGGED_WHERE_CLAUSE
-  ];
+// Confirmed transactions missing a category.
+export async function listUntaggedTransactions(db, tenantId, { from, to, limit = 25 } = {}) {
+  const where = ["tenant_id = ?", "status = 'confirmed'", UNTAGGED_WHERE_CLAUSE];
   const params = [String(tenantId)];
   if (from) {
     where.push("occurred_on >= ?");
@@ -246,6 +234,106 @@ export async function listUntaggedTransactions(
       .bind(...params)
       .all()
   ).results;
+}
+
+export async function countUntaggedTransactions(db, tenantId, { from, to } = {}) {
+  const where = ["tenant_id = ?", "status = 'confirmed'", UNTAGGED_WHERE_CLAUSE];
+  const params = [String(tenantId)];
+  if (from) {
+    where.push("occurred_on >= ?");
+    params.push(from);
+  }
+  if (to) {
+    where.push("occurred_on <= ?");
+    params.push(to);
+  }
+  const n = await db
+    .prepare("SELECT COUNT(*) AS n FROM transactions WHERE " + where.join(" AND "))
+    .bind(...params)
+    .first("n");
+  return Number(n) || 0;
+}
+
+export async function listUntaggedWithSignals(db, tenantId, { from, to, excludeIds = [], limit = 8 } = {}) {
+  const where = ["tenant_id = ?", "status = 'confirmed'", UNTAGGED_WHERE_CLAUSE];
+  const params = [String(tenantId)];
+  if (from) {
+    where.push("occurred_on >= ?");
+    params.push(from);
+  }
+  if (to) {
+    where.push("occurred_on <= ?");
+    params.push(to);
+  }
+  if (excludeIds && excludeIds.length > 0) {
+    const capped = excludeIds.slice(0, 60).map(String);
+    where.push("id NOT IN (" + capped.map(() => "?").join(", ") + ")");
+    params.push(...capped);
+  }
+  params.push(limit);
+  return (
+    await db
+      .prepare(
+        "SELECT *" +
+          SOURCE_SIGNALS_SELECT +
+          " FROM transactions WHERE " +
+          where.join(" AND ") +
+          " ORDER BY occurred_on DESC, created_at DESC LIMIT ?"
+      )
+      .bind(...params)
+      .all()
+  ).results;
+}
+
+// Historical tagged rows + unnamed precedents + same-day neighbors for LLM tag suggestions.
+export async function listTaggingContext(db, tenantId, { targetDates = [], historyLimit = 50 } = {}) {
+  const tid = String(tenantId);
+  const taggedWhere = "category IS NOT NULL AND TRIM(category) <> '' AND LOWER(TRIM(category)) <> 'uncategorized'";
+  const [recentRes, unnamedRes] = await Promise.all([
+    db
+      .prepare(
+        "SELECT *" +
+          SOURCE_SIGNALS_SELECT +
+          " FROM transactions WHERE tenant_id = ? AND status = 'confirmed' AND " +
+          taggedWhere +
+          " ORDER BY occurred_on DESC, created_at DESC LIMIT ?"
+      )
+      .bind(tid, historyLimit)
+      .all(),
+    db
+      .prepare(
+        "SELECT *" +
+          SOURCE_SIGNALS_SELECT +
+          " FROM transactions WHERE tenant_id = ? AND status = 'confirmed' AND " +
+          "(merchant_raw IS NULL OR TRIM(merchant_raw) = '') AND merchant IS NOT NULL AND TRIM(merchant) <> '' AND " +
+          taggedWhere +
+          " ORDER BY occurred_on DESC, created_at DESC LIMIT 25"
+      )
+      .bind(tid)
+      .all()
+  ]);
+  const dates = Array.from(new Set((targetDates || []).filter(Boolean))).slice(0, 15);
+  let sameDayNeighbors = [];
+  if (dates.length > 0) {
+    const neighborRes = await db
+      .prepare(
+        "SELECT *" +
+          SOURCE_SIGNALS_SELECT +
+          " FROM transactions WHERE tenant_id = ? AND status = 'confirmed' AND " +
+          taggedWhere +
+          " AND occurred_on IN (" +
+          dates.map(() => "?").join(", ") +
+          ") ORDER BY occurred_on DESC, created_at DESC LIMIT 30"
+      )
+      .bind(tid, ...dates)
+      .all();
+    sameDayNeighbors = neighborRes.results;
+  }
+  return {
+    recentTagged: recentRes.results,
+    unnamedPrecedents: unnamedRes.results,
+    sameDayNeighbors
+  };
 }
 
 // Is this incoming read the same payment as an existing transaction?

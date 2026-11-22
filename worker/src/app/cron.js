@@ -5,9 +5,11 @@ import { listTenants, recordNag, setTenantStatus } from "../db/tenants.js";
 import { purgeExpired } from "../db/ephemeral.js";
 import { getParserMode, getDisabledTemplates, parserEventSummary } from "../db/settings.js";
 import { listEffectiveTransactions } from "../db/analytics.js";
-import { listUntaggedTransactions } from "../db/transactions.js";
+import { countUntaggedTransactions, listUntaggedWithSignals } from "../db/transactions.js";
 import { weekRangeFor, weeklyDigestData, formatWeeklyMessage } from "./analytics.js";
 import { refreshPersonalPin } from "./personalPin.js";
+import { suggestTagsForBatch } from "./tagSuggester.js";
+import { BATCH_SIZE, formatBatchSuggestionsSection, batchStepperKeyboard, saveStepperState } from "./tagStepper.js";
 import { escapeMarkdown, money, formatDayMonth } from "./format.js";
 import { istDate, shiftIsoDate, IST_OFFSET_MS } from "../util/dates.js";
 
@@ -128,13 +130,16 @@ export async function sendParserDigest(ctx) {
 
 // ─── 21:00 IST daily recap + untagged reminder ───────────────────────
 
-export function formatDailyRecap(todayIso, todayRows, untaggedRows) {
+export function formatDailyRecap(todayIso, todayRows, untaggedRows, { suggestions = null, totalUntagged = null } = {}) {
   const spendRows = todayRows.filter((r) => r.kind === "spend");
   const spendByCurrency = {};
   for (const r of spendRows) spendByCurrency[r.currency] = (spendByCurrency[r.currency] || 0) + r.effective_minor;
   const spendText = Object.keys(spendByCurrency)
     .map((c) => money(spendByCurrency[c], c))
     .join(" + ");
+
+  const hasConfidentSuggestions = Array.isArray(suggestions) && suggestions.some((s) => s && s.confident && s.category);
+  const count = totalUntagged != null ? totalUntagged : untaggedRows.length;
 
   const lines = [];
   if (todayRows.length > 0) {
@@ -151,32 +156,36 @@ export function formatDailyRecap(todayIso, todayRows, untaggedRows) {
       lines.push("• *" + label + "* — " + money(r.effective_minor, r.currency) + " · " + cat);
     }
     if (todayRows.length > 5) lines.push("_+" + (todayRows.length - 5) + " more today_");
-  } else {
+  } else if (!hasConfidentSuggestions) {
     lines.push("🏷 *Untagged Expenses*");
   }
 
-  if (untaggedRows.length > 0) {
-    if (todayRows.length > 0) lines.push("");
-    lines.push(
-      "🏷 *" +
-        untaggedRows.length +
-        " expense" +
-        (untaggedRows.length === 1 ? " needs" : "s need") +
-        " a category* — tagging sharpens your category insights."
-    );
-    const earlier = untaggedRows.filter((u) => u.occurred_on !== todayIso).slice(0, 4);
-    for (const u of earlier) {
-      const label = escapeMarkdown(u.merchant || u.merchant_raw || "Untagged");
+  if (count > 0) {
+    if (lines.length > 0) lines.push("");
+    if (hasConfidentSuggestions) {
+      lines.push(formatBatchSuggestionsSection(untaggedRows, suggestions, count, 0));
+    } else {
       lines.push(
-        "• " +
-          escapeMarkdown(formatDayMonth(u.occurred_on)) +
-          " · *" +
-          label +
-          "* — " +
-          money(u.amount_minor, u.currency)
+        "🏷 *" +
+          count +
+          " expense" +
+          (count === 1 ? " needs" : "s need") +
+          " a category* — tagging sharpens your category insights."
       );
+      const earlier = untaggedRows.filter((u) => u.occurred_on !== todayIso).slice(0, 4);
+      for (const u of earlier) {
+        const label = escapeMarkdown(u.merchant || u.merchant_raw || "Untagged");
+        lines.push(
+          "• " +
+            escapeMarkdown(formatDayMonth(u.occurred_on)) +
+            " · *" +
+            label +
+            "* — " +
+            money(u.amount_minor, u.currency)
+        );
+      }
+      lines.push("", '_Tap below for 1-tap pills, or reply in plain English (e.g. "Rahul is Food")._');
     }
-    lines.push("", '_Tap below for 1-tap pills, or reply in plain English (e.g. "Rahul is Food")._');
   }
   return lines.join("\n");
 }
@@ -188,21 +197,46 @@ export async function sendDailyRecaps(ctx) {
   for (const t of await listTenants(ctx.db, { kind: "personal", statuses: ["active"] })) {
     try {
       await refreshPersonalPin(ctx, t.id);
-      const [todayRows, untagged] = await Promise.all([
+      const [todayRows, totalUntagged] = await Promise.all([
         listEffectiveTransactions(ctx.db, t.id, { from: today, to: today }),
-        listUntaggedTransactions(ctx.db, t.id, { from: weekAgo, to: today, limit: 25 })
+        countUntaggedTransactions(ctx.db, t.id, { from: weekAgo, to: today })
       ]);
-      if (todayRows.length === 0 && untagged.length === 0) {
+      if (todayRows.length === 0 && totalUntagged === 0) {
         stats.skipped++;
         continue;
       }
+      let batchRows = [];
+      let suggestions = null;
       const opts = { disable_web_page_preview: true };
-      if (untagged.length > 0) {
-        opts.reply_markup = {
-          inline_keyboard: [[{ text: "🏷 Categorize " + untagged.length + " untagged", callback_data: "tagq_next" }]]
-        };
+      if (totalUntagged > 0) {
+        batchRows = await listUntaggedWithSignals(ctx.db, t.id, {
+          from: weekAgo,
+          to: today,
+          limit: BATCH_SIZE
+        });
+        suggestions = await suggestTagsForBatch(ctx, t.id, batchRows);
+        const hasConfident = suggestions.some((s) => s.confident && s.category);
+        opts.reply_markup = hasConfident
+          ? batchStepperKeyboard(suggestions)
+          : {
+              inline_keyboard: [[{ text: "🏷 Categorize " + totalUntagged + " untagged", callback_data: "tagq_next" }]]
+            };
       }
-      await ctx.tg.sendMessage(t.id, formatDailyRecap(today, todayRows, untagged), opts);
+      const posted = await ctx.tg.sendMessage(
+        t.id,
+        formatDailyRecap(today, todayRows, batchRows, { suggestions, totalUntagged }),
+        opts
+      );
+      if (posted && posted.message_id && suggestions && suggestions.some((s) => s.confident && s.category)) {
+        await saveStepperState(ctx, t.id, posted.message_id, {
+          mode: "batch",
+          windowFrom: weekAgo,
+          windowTo: today,
+          skippedIds: [],
+          doneCount: 0,
+          items: suggestions
+        });
+      }
       stats.sent++;
     } catch (e) {
       if (e && e.code === 403) {

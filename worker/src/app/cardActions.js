@@ -294,6 +294,30 @@ const FLIP_REPLY_RE = /^(?:flip|money\s+in|money\s+out|credit|debit)$/i;
 const CONVERSATIONAL_REPLY_RE =
   /[?]|^(?:split|settle|undo|unsplit|flip|amt|amount|make|change|set|fix|how|what|why|when|where|who|show|list|export|cancel)\b/i;
 
+// Descriptive aliases that also double as a clean merchant label when the
+// transaction has no merchant name yet (e.g. "cc bill" -> "CC Bill" + Transfer).
+const DESCRIPTIVE_ALIAS_LABELS = {
+  "cc bill": "CC Bill",
+  "card bill": "Card Bill",
+  "cc bill payment": "CC Bill",
+  salary: "Salary",
+  interest: "Interest",
+  dividend: "Dividend",
+  cashback: "Cashback",
+  rent: "Rent",
+  maintenance: "Maintenance",
+  subs: "Subscription",
+  subscription: "Subscription",
+  subscriptions: "Subscription",
+  cab: "Cab",
+  flight: "Flight",
+  fuel: "Fuel",
+  petrol: "Petrol",
+  movies: "Movies",
+  medicine: "Medicine",
+  pharmacy: "Pharmacy"
+};
+
 export function matchCategoryToken(raw, direction) {
   const token = String(raw || "").trim();
   if (!token) return null;
@@ -305,7 +329,7 @@ export function matchCategoryToken(raw, direction) {
   return alias && valid.includes(alias) ? alias : null;
 }
 
-export function parseCardQuickReply(text, direction, rules = []) {
+export function parseCardQuickReply(text, direction, rules = [], { hasMerchant = true } = {}) {
   const s = String(text || "").trim();
   if (!s || s.length > 50 || /\n/.test(s)) return null;
 
@@ -327,7 +351,10 @@ export function parseCardQuickReply(text, direction, rules = []) {
   if (CONVERSATIONAL_REPLY_RE.test(s)) return null;
 
   const catOnly = matchCategoryToken(s, direction);
-  if (catOnly) return { merchant: null, category: catOnly };
+  if (catOnly) {
+    const descLabel = !hasMerchant ? DESCRIPTIVE_ALIAS_LABELS[s.toLowerCase()] || null : null;
+    return { merchant: descLabel, category: catOnly };
+  }
 
   const parts = s.split(/\s*(?:,|·|\||\/|\s-\s)\s*/);
   if (parts.length === 2) {
@@ -454,6 +481,12 @@ export async function applyCardQuickReply(ctx, chatId, txn, parsed, { cardMessag
 
   if (!parsed.merchant && !parsed.category) return { handled: false };
 
+  const sameMerchant = !parsed.merchant || parsed.merchant === (txn.merchant || "");
+  const sameCategory = !parsed.category || parsed.category === (txn.category || "");
+  if (sameMerchant && sameCategory && txn.status === "confirmed") {
+    return { handled: true, updatedTxn: txn };
+  }
+
   const res = await mutateTransaction(
     ctx,
     chatId,
@@ -477,7 +510,8 @@ export async function handleCardReply(ctx, m) {
   const txn = await findTransactionByCardMessage(ctx.db, m.chatId, m.replyTo.message_id);
   if (!txn || txn.status === "deleted") return false;
   const rules = await getMerchantRules(ctx.db, m.chatId);
-  const parsed = parseCardQuickReply(m.text, txn.direction, rules);
+  const hasMerchant = Boolean(txn.merchant && String(txn.merchant).trim().toLowerCase() !== "unknown");
+  const parsed = parseCardQuickReply(m.text, txn.direction, rules, { hasMerchant });
   if (!parsed) return false;
 
   const outcome = await applyCardQuickReply(ctx, m.chatId, txn, parsed, { cardMessageId: m.replyTo.message_id });

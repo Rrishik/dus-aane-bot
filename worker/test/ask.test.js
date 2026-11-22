@@ -298,7 +298,7 @@ describe("/ask", () => {
     expect(await run("nope")).toEqual({ error: "Unknown tool: nope" });
   });
 
-  it("treats Unknown (missing merchant) rows as untagged even when category is set, and filters by date range", async () => {
+  it("treats only missing-category rows as untagged (already-categorized unnamed transfers count as tagged) and filters by date range", async () => {
     const { ctx } = await setup();
     await insertTransaction(
       ctx.db,
@@ -320,14 +320,29 @@ describe("/ask", () => {
       "111",
       {
         occurredOn: "2026-10-06",
-        amountMinor: 8000,
+        amountMinor: 40000,
         currency: "INR",
-        direction: "credit",
-        kind: "transfer",
-        merchant: null,
-        category: "Transfer"
+        direction: "debit",
+        kind: "spend",
+        merchant: "Rahul",
+        category: null
       },
       { source: "email", sourceRef: "g-unk-2" },
+      NOW
+    );
+    await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-05",
+        amountMinor: 25000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        category: null
+      },
+      { source: "email", sourceRef: "g-unk-3" },
       NOW
     );
     await insertTransaction(
@@ -354,20 +369,20 @@ describe("/ask", () => {
     expect(recentUntagged.count).toBe(2);
     expect(recentUntagged.transactions).toEqual([
       expect.objectContaining({
-        date: "2026-10-07",
-        amount: 899,
-        merchant: "Untagged",
-        category: "Transfer",
-        missing_merchant: true,
-        missing_category: false
+        date: "2026-10-06",
+        amount: 400,
+        merchant: "Rahul",
+        category: "Uncategorized",
+        missing_merchant: false,
+        missing_category: true
       }),
       expect.objectContaining({
-        date: "2026-10-06",
-        amount: 80,
+        date: "2026-10-05",
+        amount: 250,
         merchant: "Untagged",
-        category: "Transfer",
+        category: "Uncategorized",
         missing_merchant: true,
-        missing_category: false
+        missing_category: true
       })
     ]);
 
