@@ -507,7 +507,7 @@ export async function normalizeTenantMerchants(db, tenantId, rules = [], now = D
   const rows = (
     await db
       .prepare(
-        "SELECT id, merchant, merchant_raw FROM transactions WHERE tenant_id = ? AND status <> 'deleted' AND merchant IS NOT NULL AND TRIM(merchant) <> ''"
+        "SELECT id, direction, kind, category, merchant, merchant_raw FROM transactions WHERE tenant_id = ? AND status <> 'deleted' AND merchant IS NOT NULL AND TRIM(merchant) <> ''"
       )
       .bind(tid)
       .all()
@@ -516,11 +516,22 @@ export async function normalizeTenantMerchants(db, tenantId, rules = [], now = D
   const stmts = [];
   for (const r of rows) {
     const next = normalizeMerchantName(r.merchant, rules);
-    if (next !== r.merchant) {
+    let nextCat = r.category;
+    let nextKind = r.kind;
+    if (r.direction === "debit" && next && /^CC Bill(?:\b|\s)/i.test(next) && r.kind === "spend") {
+      nextCat = "Transfer";
+      nextKind = "transfer";
+    } else if (r.direction === "debit" && next === "Mutual Funds" && r.kind === "spend") {
+      nextCat = "Invest";
+      nextKind = "investment";
+    }
+    if (next !== r.merchant || nextCat !== r.category || nextKind !== r.kind) {
       stmts.push(
         db
-          .prepare("UPDATE transactions SET merchant = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
-          .bind(next, now, r.id, tid)
+          .prepare(
+            "UPDATE transactions SET merchant = ?, category = ?, kind = ?, updated_at = ? WHERE id = ? AND tenant_id = ?"
+          )
+          .bind(next, nextCat, nextKind, now, r.id, tid)
       );
     }
   }
