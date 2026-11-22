@@ -395,6 +395,99 @@ describe("/ask", () => {
     expect(searched.transactions.every((t) => t.untagged === true)).toBe(true);
   });
 
+  it("separates unnamed_spend in get_top_merchants and finds categorized Unknown/unnamed rows via include_unnamed and search_transactions", async () => {
+    const { ctx } = await setup();
+    // 1. Categorized unnamed spend with email POS timestamp + card *5678
+    await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-07",
+        amountMinor: 85000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        category: "Food",
+        accountLast4: "5678"
+      },
+      { source: "email", sourceRef: "e-unk-spend-1", receivedAt: Date.UTC(2026, 9, 7, 8, 12, 0) },
+      NOW
+    );
+    // 2. Categorized spend whose `merchant` was cleared from an opaque QR VPA (`ox...@pty`)
+    await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-06",
+        amountMinor: 42200,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        merchantRaw: "ox981234...@pty",
+        category: "Groceries"
+      },
+      { source: "email", sourceRef: "e-unk-spend-2" },
+      NOW
+    );
+    // 3. Categorized unnamed Transfer (should be excluded when spend_only: true)
+    await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-05",
+        amountMinor: 500000,
+        currency: "INR",
+        direction: "debit",
+        kind: "transfer",
+        merchant: null,
+        category: "Transfer"
+      },
+      { source: "email", sourceRef: "e-unk-trf" },
+      NOW
+    );
+
+    const run = askToolExecutor(ctx, "111");
+
+    // Top merchants keeps named brands separate from unnamed_spend.
+    const top = await run("get_top_merchants", { start_date: "2026-10-01", end_date: "2026-10-07" });
+    expect(top.merchants).toEqual([{ name: "Swiggy", currency: "INR", amount: 900, count: 1 }]);
+    expect(top.unnamed_spend).toEqual({ count: 2, by_currency: { INR: 1272 } });
+
+    // Default list_untagged_transactions is 0 (all rows have categories), but include_unnamed + spend_only finds the 2 unnamed spends!
+    expect((await run("list_untagged_transactions", { start_date: "2026-10-01", end_date: "2026-10-07" })).count).toBe(
+      0
+    );
+    const unnamedSpends = await run("list_untagged_transactions", {
+      start_date: "2026-10-01",
+      end_date: "2026-10-07",
+      include_unnamed: true,
+      spend_only: true
+    });
+    expect(unnamedSpends.count).toBe(2);
+    expect(unnamedSpends.transactions[0]).toMatchObject({
+      date: "2026-10-07",
+      time_ist: "1:42 PM",
+      amount: 850,
+      category: "Food",
+      account_last4: "5678",
+      missing_merchant: true,
+      missing_category: false
+    });
+
+    // search_transactions with merchant: "Unknown" or unnamed_only: true finds unnamed rows instead of failing NULL LIKE '%unknown%'.
+    const byUnknownWord = await run("search_transactions", {
+      start_date: "2026-10-01",
+      end_date: "2026-10-07",
+      merchant: "Unknown"
+    });
+    expect(byUnknownWord.count).toBe(3);
+    expect(byUnknownWord.transactions.every((t) => t.unnamed === true)).toBe(true);
+
+    expect(classifyFastAgent("name the 4 unknown transactions")).toBe("ledger");
+  });
+
   it("cap message counts down to IST midnight", () => {
     expect(capHitMessage(NOW)).toContain("(in 10h 30m)");
     expect(capHitMessage(NOW + 10.5 * 3600 * 1000 - 1000)).toContain("(in 1m)");

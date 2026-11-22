@@ -206,15 +206,26 @@ export function isUntaggedTransaction(r) {
 }
 
 const UNTAGGED_WHERE_CLAUSE = "(category IS NULL OR TRIM(category) = '' OR LOWER(TRIM(category)) = 'uncategorized')";
+const UNNAMED_WHERE_CLAUSE = "(merchant IS NULL OR TRIM(merchant) = '' OR LOWER(TRIM(merchant)) = 'unknown')";
 const SOURCE_SIGNALS_SELECT =
   ", (SELECT MIN(s.received_at) FROM transaction_sources s WHERE s.tenant_id = transactions.tenant_id AND s.transaction_id = transactions.id AND s.source = 'email') AS email_received_at" +
   ", (SELECT s.parsed_by FROM transaction_sources s WHERE s.tenant_id = transactions.tenant_id AND s.transaction_id = transactions.id ORDER BY CASE WHEN s.source = 'email' THEN 0 ELSE 1 END, s.received_at ASC LIMIT 1) AS parsed_by" +
   ", (SELECT s.raw_text FROM transaction_sources s WHERE s.tenant_id = transactions.tenant_id AND s.transaction_id = transactions.id AND s.source = 'sms' LIMIT 1) AS sms_raw_text";
 
-// Confirmed transactions missing a category.
-export async function listUntaggedTransactions(db, tenantId, { from, to, limit = 25 } = {}) {
-  const where = ["tenant_id = ?", "status = 'confirmed'", UNTAGGED_WHERE_CLAUSE];
+// Confirmed transactions missing a category (or also missing a merchant when `includeUnnamed` is true).
+export async function listUntaggedTransactions(
+  db,
+  tenantId,
+  { from, to, includeUnnamed = false, spendOnly = false, limit = 25 } = {}
+) {
+  const clause = includeUnnamed
+    ? "(" + UNTAGGED_WHERE_CLAUSE + " OR " + UNNAMED_WHERE_CLAUSE + ")"
+    : UNTAGGED_WHERE_CLAUSE;
+  const where = ["tenant_id = ?", "status = 'confirmed'", clause];
   const params = [String(tenantId)];
+  if (spendOnly) {
+    where.push("kind = 'spend'");
+  }
   if (from) {
     where.push("occurred_on >= ?");
     params.push(from);
@@ -227,7 +238,9 @@ export async function listUntaggedTransactions(db, tenantId, { from, to, limit =
   return (
     await db
       .prepare(
-        "SELECT * FROM transactions WHERE " +
+        "SELECT transactions.*" +
+          SOURCE_SIGNALS_SELECT +
+          " FROM transactions WHERE " +
           where.join(" AND ") +
           " ORDER BY occurred_on DESC, created_at DESC LIMIT ?"
       )

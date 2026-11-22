@@ -2,10 +2,11 @@
 import { listEffectiveTransactions } from "../db/analytics.js";
 import { listUntaggedTransactions, isUntaggedTransaction } from "../db/transactions.js";
 import { getTenant, getTenantEmails, groupsForMember, getGroupMembers } from "../db/tenants.js";
-import { getAccountLabels, upsertAccountLabel, listSeenAccounts } from "../db/accountLabels.js";
+import { getAccountLabels, getCardLabelsMap, upsertAccountLabel, listSeenAccounts } from "../db/accountLabels.js";
 import { groupBalances } from "../db/splits.js";
 import { refreshCardMessage } from "./cardState.js";
 import { mutateTransaction, batchMutateTransactions, removeTransaction } from "./ledger.js";
+import { normalizeMerchantName } from "./merchants.js";
 import { ensurePersonalPin } from "./personalPin.js";
 import { splitTransaction, undoGroupLink, simplifyDebts, recordCashSettlement, memberName } from "./groups.js";
 import { monthlyTrends, weeklyTrends } from "./analytics.js";
@@ -13,6 +14,7 @@ import { registerEmailForChat, sendSetupEmail } from "./commands.js";
 import { handleBackfill } from "./backfill.js";
 import { handleExport, handleDeleteMyData } from "./data.js";
 import { handleSmsPaste } from "./sms.js";
+import { extractIstTimeInfo } from "./tagSuggester.js";
 import { fromMinor, toMinor } from "../util/money.js";
 
 const DATE_PARAMS = {
@@ -27,8 +29,13 @@ const fn = (name, description, properties = {}, required = []) => ({
 
 const ASK_USER_TOOL = fn(
   "ask_user",
-  "Ask the user a short clarifying question and wait for a free-text reply. Use when a required parameter is genuinely missing and cannot be inferred from context, OR when multiple transactions match before mutating/splitting. Never use for confirmations on read-only queries.",
-  { question: { type: "string", description: "The question to ask. Max 200 chars. Plain text, no markdown." } },
+  "Ask the user a short clarifying question and wait for a free-text reply. Use when a required parameter is genuinely missing and cannot be inferred from context, when multiple transactions match before mutating/splitting, OR when listing untagged/unknown transactions for the user to name/tag. Never use for confirmations on read-only queries.",
+  {
+    question: {
+      type: "string",
+      description: "Concise plain text (up to ~600 chars when listing numbered items). No markdown."
+    }
+  },
   ["question"]
 );
 
@@ -46,7 +53,7 @@ const LIST_CARDS_TOOL = fn(
 
 const SEARCH_TOOL = fn(
   "search_transactions",
-  "Search transactions by date, merchant, category, card/account, untagged status, forwarder, or amount range.",
+  "Search transactions by date, merchant, category, card/account, untagged/unnamed status, forwarder, or amount range.",
   {
     ...DATE_PARAMS,
     ...CARD_PARAM,
@@ -55,6 +62,10 @@ const SEARCH_TOOL = fn(
     untagged_only: {
       type: "boolean",
       description: "When true, return only uncategorized rows."
+    },
+    unnamed_only: {
+      type: "boolean",
+      description: "When true, return only rows missing a merchant name (Unknown / unnamed)."
     },
     user: { type: "string", description: "Forwarder filter (partial match)" },
     min_amount: { type: "number", description: "Minimum transaction amount" },
@@ -66,9 +77,19 @@ const SEARCH_TOOL = fn(
 
 const LIST_UNTAGGED_TOOL = fn(
   "list_untagged_transactions",
-  "List confirmed transactions that are missing a category. Supports optional start_date and end_date filters.",
+  "List confirmed transactions missing a category, and optionally also categorized transactions missing a merchant name (Unknown / unnamed).",
   {
     ...DATE_PARAMS,
+    include_unnamed: {
+      type: "boolean",
+      description:
+        "When true, also include categorized transactions whose merchant name is missing/Unknown. Set true when the user asks to tag, name, or review unknown/unnamed transactions."
+    },
+    spend_only: {
+      type: "boolean",
+      description:
+        "When true, restrict results to spend transactions (excludes Transfer and Invest). Useful when naming unknown spend transactions."
+    },
     limit: { type: "number", description: "Max rows to return. Default 15." }
   }
 );
@@ -260,7 +281,9 @@ export const ACCOUNT_TOOLS = [
 
 // ─── Tool implementations (strictly tenant-scoped) ───────────────────
 
-const label = (r) => r.merchant || r.merchant_raw || "Unknown";
+const label = (r) => r.merchant || normalizeMerchantName(r.merchant_raw) || "Unknown";
+const isUnnamedMerchant = (r) => label(r) === "Unknown";
+const UNKNOWN_QUERY_WORDS = new Set(["unknown", "unnamed", "no merchant", "unidentified"]);
 
 function sumByCurrency(rows) {
   const out = {};
@@ -339,11 +362,20 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
 
     async get_top_merchants(args) {
       const spend = (await rowsFor(args)).filter((r) => r.kind === "spend");
-      return {
-        merchants: aggregate(spend, label)
+      const named = spend.filter((r) => !isUnnamedMerchant(r));
+      const unnamed = spend.filter(isUnnamedMerchant);
+      const out = {
+        merchants: aggregate(named, label)
           .slice(0, args.limit || 5)
           .map(({ rows, ...m }) => m)
       };
+      if (unnamed.length > 0) {
+        out.unnamed_spend = {
+          count: unnamed.length,
+          by_currency: sumByCurrency(unnamed)
+        };
+      }
+      return out;
     },
 
     async get_user_spend(args) {
@@ -380,10 +412,14 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
     async search_transactions(args) {
       let rows = await rowsFor(args);
       if (args.untagged_only) rows = rows.filter(isUntaggedTransaction);
-      if (args.merchant) {
-        const m = String(args.merchant).toLowerCase();
+      const merchantQuery = args.merchant ? String(args.merchant).trim().toLowerCase() : "";
+      if (args.unnamed_only || UNKNOWN_QUERY_WORDS.has(merchantQuery)) {
+        rows = rows.filter(isUnnamedMerchant);
+      } else if (merchantQuery) {
         rows = rows.filter(
-          (r) => (r.merchant || "").toLowerCase().includes(m) || (r.merchant_raw || "").toLowerCase().includes(m)
+          (r) =>
+            (r.merchant || "").toLowerCase().includes(merchantQuery) ||
+            (r.merchant_raw || "").toLowerCase().includes(merchantQuery)
         );
       }
       if (args.category) rows = rows.filter((r) => r.category === args.category);
@@ -397,6 +433,7 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       if (args.min_amount !== undefined) rows = rows.filter((r) => r.amount_minor >= toMinor(args.min_amount));
       if (args.max_amount !== undefined) rows = rows.filter((r) => r.amount_minor <= toMinor(args.max_amount));
       rows = rows.slice(-(args.limit || 10));
+      const cardLabelsMap = await getCardLabelsMap(ctx.db, tid);
       return {
         count: rows.length,
         transactions: rows.map((r) => {
@@ -410,6 +447,11 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
             type: r.direction === "debit" ? "Debit" : "Credit",
             user: r.forwarder || ""
           };
+          if (r.account_last4) {
+            out.account_last4 = r.account_last4;
+            if (cardLabelsMap[r.account_last4]) out.card_label = cardLabelsMap[r.account_last4];
+          }
+          if (isUnnamedMerchant(r)) out.unnamed = true;
           if (isUntaggedTransaction(r)) out.untagged = true;
           if (r.split_id || r.settlement_id) {
             out.split = true;
@@ -421,11 +463,16 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
     },
 
     async list_untagged_transactions(args) {
-      const rows = await listUntaggedTransactions(ctx.db, tid, {
-        from: args.start_date,
-        to: args.end_date,
-        limit: Math.min(25, Math.max(1, args.limit || 15))
-      });
+      const [rows, cardLabelsMap] = await Promise.all([
+        listUntaggedTransactions(ctx.db, tid, {
+          from: args.start_date,
+          to: args.end_date,
+          includeUnnamed: Boolean(args.include_unnamed),
+          spendOnly: Boolean(args.spend_only),
+          limit: Math.min(25, Math.max(1, args.limit || 15))
+        }),
+        getCardLabelsMap(ctx.db, tid)
+      ]);
       return {
         count: rows.length,
         transactions: rows.map((r) => {
@@ -433,7 +480,8 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
           const c = String(r.category || "").trim();
           const missingMerchant = !m || m.toLowerCase() === "unknown";
           const missingCategory = !c || c.toLowerCase() === "uncategorized";
-          return {
+          const timeInfo = extractIstTimeInfo(r);
+          const item = {
             transaction_id: r.id,
             date: r.occurred_on,
             merchant: missingMerchant ? "Untagged" : m,
@@ -444,6 +492,12 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
             currency: r.currency,
             type: r.direction === "debit" ? "Debit" : "Credit"
           };
+          if (timeInfo.display12h) item.time_ist = timeInfo.display12h;
+          if (r.account_last4) {
+            item.account_last4 = r.account_last4;
+            if (cardLabelsMap[r.account_last4]) item.card_label = cardLabelsMap[r.account_last4];
+          }
+          return item;
         })
       };
     },

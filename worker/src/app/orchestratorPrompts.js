@@ -34,6 +34,8 @@ export function askSystemPrompt(today) {
     CREDIT_CATEGORIES.join(", ") +
     "\n- Fix obvious merchant typos before searching (flipart → flipkart, swiggi → swiggy, amzn → amazon).\n" +
     "- When the user asks about spend on a specific credit card or account (by name like 'Infinia' or last-4 digits like '5678'), pass `card` to get_spending_summary, get_category_breakdown, get_top_merchants, or search_transactions (or call list_cards if unsure which cards exist).\n" +
+    "- In get_top_merchants, list the ranked named `merchants`; if `unnamed_spend` is present, mention it on one short line at the end (e.g. 'Plus ₹2772 across 4 unnamed spends').\n" +
+    "- For 'unknown' or 'unnamed' transactions, pass `unnamed_only: true` to search_transactions (or `include_unnamed: true` to list_untagged_transactions).\n" +
     "- An 'untagged' transaction is any confirmed row missing its category. Use list_untagged_transactions (passing start_date and end_date when a timeframe is given; e.g. 'past 2 days' means " +
     shiftIsoDate(today, -2) +
     " to " +
@@ -56,11 +58,18 @@ export function ledgerSystemPrompt(today) {
     CATEGORIES.join(", ") +
     "\n- Credit categories: " +
     CREDIT_CATEGORIES.join(", ") +
-    "\n- An 'untagged' transaction is any confirmed row missing its category. Call list_untagged_transactions (passing start_date and end_date when a timeframe is asked, e.g. 'past 2 days' = " +
+    "\n- 'Untagged' means missing category; 'unknown' / 'unnamed' means missing merchant name (even if already categorized).\n" +
+    "- Call list_untagged_transactions (passing start_date and end_date when a timeframe is asked, e.g. 'past 2 days' = " +
     shiftIsoDate(today, -2) +
     " to " +
     today +
-    ") to count or list them.\n" +
+    ", 'this month' = " +
+    today.slice(0, 8) +
+    "01 to " +
+    today +
+    ").\n" +
+    "- IMPORTANT: Whenever the user asks to tag, name, or see 'unknown' or 'unnamed' transactions, pass `include_unnamed: true` (and `spend_only: true` when referring to unknown spends/merchants). Also, if the user asks to tag transactions for a period and `list_untagged_transactions` returns 0 missing-category rows, re-call `list_untagged_transactions` with `include_unnamed: true, spend_only: true` before saying nothing needs tagging!\n" +
+    "- When listing untagged or unknown transactions for the user to tag/name, call ask_user with a numbered list showing date, time_ist (if present), amount, current category, and card/account (*account_last4 or card_label if present), asking what merchant/category names to set (e.g. '1 Swiggy, 2 Chai').\n" +
     "- Never guess transaction_id: find it via list_untagged_transactions or search_transactions first.\n" +
     "- When multiple plausible rows match, call ask_user to disambiguate before mutating or deleting.\n" +
     "- Use delete_transaction when the user asks to delete/remove/discard a specific transaction (if >1 match, disambiguate with ask_user first).\n" +
@@ -131,7 +140,7 @@ const ACCOUNT_RE =
 const GROUP_RE =
   /^(?:\/?settle\b)|(?:\b(?:split|50[-\/]50|who\s+owes|owe(?:s|d)?\s+(?:me|whom|bob|alice)?|group\s+balance|settle(?:\s+up|\s+with)?|settled\s+with|simplify\s+debts?|make\s+.+\s+personal|undo\s+split)\b)/i;
 const LEDGER_RE =
-  /\b(?:untagged|uncategorized|categorize|recategorize|re-?tag|tag\s+(?:this|that|it|the|my)?|mark\s+.+\s+as\b|change\s+.*(?:category|amount)|update\s+transaction|(?:delete|remove|discard)\s+\S+)\b|\bmake\s+\S+\s+(?:food|groceries|shopping|travel|bills|health|fun|invest|transfer|income|refund)\b/i;
+  /\b(?:untagged|uncategorized|categorize|recategorize|re-?tag|tag\s+(?:this|that|it|the|my)?|(?:name|label)\s+(?:the\s+|my\s+)?(?:\d+\s+)?(?:unknown|unnamed)|mark\s+.+\s+as\b|change\s+.*(?:category|amount)|update\s+transaction|(?:delete|remove|discard)\s+\S+)\b|\bmake\s+\S+\s+(?:food|groceries|shopping|travel|bills|health|fun|invest|transfer|income|refund)\b/i;
 const ALERT_WORDS_RE = /\b(?:debited|credited|charged|withdrawn|utr|rrn|avl\s*bal|card\s+ending)\b/i;
 const ANALYTICS_RE =
   /^(?:\/?(?:stats|recent)\b)|(?:\b(?:how\s+much|total\s+spend|top\s+merchants?|category\s+breakdown|spending|trends?|compare|recent|latest\s+transactions?|what\s+did\s+i\s+spend|spent\s+on|food\s+spend)\b)/i;
