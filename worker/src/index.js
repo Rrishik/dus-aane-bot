@@ -2,7 +2,7 @@ import { createContext } from "./app/context.js";
 import { handleIngestEmail } from "./app/ingestRoute.js";
 import { handleBackfillProgress } from "./app/backfill.js";
 import { handleUpdate } from "./app/webhook.js";
-import { enrichTransactionFx } from "./app/fx.js";
+import { enrichTransactionFx, sweepPendingFxConversions } from "./app/fx.js";
 import { runScheduled } from "./app/cron.js";
 
 // GET /healthz reports whether the D1 binding answers.
@@ -86,6 +86,15 @@ export async function handleQueue(batch, env) {
         await enrichTransactionFx(createContext(env), body.tenantId, body.txnId);
       } catch (e) {
         console.error("[fx] queue enrich failed:", e && e.message);
+      }
+      msg.ack();
+      continue;
+    }
+    if (body && body.kind === "fx_sweep") {
+      try {
+        await sweepPendingFxConversions(createContext(env), { tenantId: body.tenantId || null });
+      } catch (e) {
+        console.error("[fx] queue sweep failed:", e && e.message);
       }
       msg.ack();
       continue;

@@ -6,6 +6,7 @@ import { getCachedFxRate, upsertFxRates, listPendingFxTransactions } from "../db
 import { getTransaction, updateTransaction } from "../db/transactions.js";
 import { refreshCardMessage } from "./cardState.js";
 import { refreshPersonalPin } from "./personalPin.js";
+import { istDate, shiftIsoDate } from "../util/dates.js";
 
 const FRANKFURTER_BASE = "https://api.frankfurter.dev/v1";
 const OPEN_ER_LATEST_INR = "https://open.er-api.com/v6/latest/INR";
@@ -169,30 +170,76 @@ export async function enrichTransactionFx(ctx, tenantId, txnId, { refreshUi = tr
   return { ok: true, inrMinor, fxRate: rate };
 }
 
-// Batch sweep for any foreign rows still missing `inr_minor` (used by daily cron & `/start`).
-export async function sweepPendingFxConversions(ctx, { tenantId = null, limit = 50 } = {}) {
+export async function enqueueFxSweep(ctx, { tenantId = null } = {}) {
+  if (!ctx || !ctx.env || !ctx.env.UPDATES) return false;
+  try {
+    await ctx.env.UPDATES.send({
+      kind: "fx_sweep",
+      tenantId: tenantId ? String(tenantId) : null
+    });
+    return true;
+  } catch (e) {
+    console.error("[fx] sweep queue send failed:", e && e.message);
+    return false;
+  }
+}
+
+// Low-subrequest batch sweep for foreign rows missing `inr_minor`:
+//   1. Resolves each distinct `(currency, occurred_on)` pair once
+//   2. Commits all `inr_minor` updates in a single `db.batch(...)`
+//   3. Only edits very recent DM cards (last 2 days) and refreshes affected pins once
+//   4. Chains via `fx_sweep` queue message if more than `limit` rows remain
+export async function sweepPendingFxConversions(ctx, { tenantId = null, limit = 25 } = {}) {
   const pending = await listPendingFxTransactions(ctx.db, { tenantId, limit });
   if (!pending.length) return { converted: 0, failed: 0 };
 
+  const rateByPair = new Map();
+  for (const row of pending) {
+    const key = row.currency + "|" + row.occurred_on;
+    if (rateByPair.has(key)) continue;
+    const rate = await resolveOrFetchFxRate(ctx, row.currency, row.occurred_on);
+    rateByPair.set(key, rate > 0 ? rate : null);
+  }
+
+  const now = ctx.now();
+  const recentCutoff = shiftIsoDate(istDate(now), -2);
+  const stmts = [];
+  const recentCardsToRefresh = [];
+  const touchedTenants = new Set();
   let converted = 0;
   let failed = 0;
-  const touchedTenants = new Set();
 
   for (const row of pending) {
-    const res = await enrichTransactionFx(ctx, row.tenant_id, row.id, { refreshUi: false });
-    if (res.ok) {
-      converted++;
-      touchedTenants.add(String(row.tenant_id));
-      if (row.card_message_id) {
-        await refreshCardMessage(ctx, row.tenant_id, row.id).catch(() => {});
-      }
-    } else {
+    const rate = rateByPair.get(row.currency + "|" + row.occurred_on);
+    if (!(rate > 0)) {
       failed++;
+      continue;
+    }
+    const inrMinor = convertMinorToInr(row.amount_minor, rate);
+    stmts.push(
+      ctx.db
+        .prepare("UPDATE transactions SET inr_minor = ?, fx_rate = ?, updated_at = ? WHERE id = ? AND tenant_id = ?")
+        .bind(inrMinor, rate, now, row.id, String(row.tenant_id))
+    );
+    converted++;
+    touchedTenants.add(String(row.tenant_id));
+    if (row.card_message_id && row.occurred_on >= recentCutoff) {
+      recentCardsToRefresh.push(row);
     }
   }
 
+  for (let i = 0; i < stmts.length; i += 40) {
+    await ctx.db.batch(stmts.slice(i, i + 40));
+  }
+
+  for (const row of recentCardsToRefresh.slice(0, 5)) {
+    await refreshCardMessage(ctx, row.tenant_id, row.id).catch(() => {});
+  }
   for (const tid of touchedTenants) {
     await refreshPersonalPin(ctx, tid).catch(() => {});
+  }
+  if (pending.length >= limit && converted > 0) {
+    await enqueueFxSweep(ctx, { tenantId });
   }
   return { converted, failed };
 }

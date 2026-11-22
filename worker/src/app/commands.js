@@ -8,7 +8,7 @@ import { BOT_INBOX_EMAIL } from "./constants.js";
 import { escapeMarkdown, money, formatDayMonth, formatLongDate } from "./format.js";
 import { isUsable, gateText } from "./onboarding.js";
 import { ensurePersonalPin, refreshPersonalPin } from "./personalPin.js";
-import { sweepPendingFxConversions } from "./fx.js";
+import { enqueueFxSweep, sweepPendingFxConversions } from "./fx.js";
 import { syncMemberGroupTitles } from "./groups.js";
 import { normalizeTenantMerchants } from "./merchants.js";
 import { callAppsScript } from "./appsScript.js";
@@ -20,7 +20,10 @@ export async function handleStart(ctx, chatId, username) {
   if (isUsable(tenant)) {
     const rules = await getMerchantRules(ctx.db, chatId);
     await normalizeTenantMerchants(ctx.db, chatId, rules, ctx.now()).catch(() => {});
-    await sweepPendingFxConversions(ctx, { tenantId: chatId }).catch(() => {});
+    const queuedSweep = await enqueueFxSweep(ctx, { tenantId: chatId });
+    if (!queuedSweep) {
+      await sweepPendingFxConversions(ctx, { tenantId: chatId }).catch(() => {});
+    }
     await syncMemberGroupTitles(ctx, chatId);
     await ensurePersonalPin(ctx, chatId);
     return sendWelcomeGuide(ctx, chatId);
