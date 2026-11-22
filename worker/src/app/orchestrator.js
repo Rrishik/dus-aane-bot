@@ -22,7 +22,7 @@ import { ANALYTICS_TOOLS, LEDGER_TOOLS, GROUP_TOOLS, ACCOUNT_TOOLS, askToolExecu
 
 const ASK_MAX_ITERATIONS = 6;
 const ASK_MAX_TURNS = 5;
-const CONVO_TTL_SEC = 600;
+const CONVO_TTL_SEC = 86400;
 const ERROR_TEXT = "❌ Something went wrong. Tap your pinned summary for recent spends, or try again in a moment.";
 
 const convoKey = (chatId, messageId) => "ask:" + chatId + ":" + messageId;
@@ -82,7 +82,10 @@ function buildOrchestratorGraph(executeTool) {
   return { rootAgent: triage, agents: { triage, analytics, ledger, groups, account } };
 }
 
-async function runTurn(ctx, { chatId, username = "", tenantStatus = "active", activeAgent = null, messages, turn }) {
+async function runTurn(
+  ctx,
+  { chatId, username = "", tenantStatus = "active", activeAgent = null, stepperMessageId = null, messages, turn }
+) {
   if (turn > ASK_MAX_TURNS) {
     await ctx.tg.sendMessage(
       chatId,
@@ -92,7 +95,7 @@ async function runTurn(ctx, { chatId, username = "", tenantStatus = "active", ac
     return;
   }
 
-  const runMeta = { username, suppressFinalText: false };
+  const runMeta = { username, suppressFinalText: false, stepperMessageId };
   const executor = askToolExecutor(ctx, chatId, runMeta);
   const { rootAgent, agents } = buildOrchestratorGraph(executor);
   const startAgent = (activeAgent && agents[activeAgent]) || rootAgent;
@@ -202,13 +205,36 @@ export async function handleOrchestrator(ctx, m, tenant) {
     return;
   }
   const tenantStatus = (tenant && tenant.status) || "active";
-  const fastAgent = classifyFastAgent(stripped, tenantStatus);
+  let fastAgent = classifyFastAgent(stripped, tenantStatus);
+  let stepperMessageId = null;
   let userContent = stripped;
   if (m.replyTo && m.replyTo.message_id) {
     let repliedTxn = await findTransactionByCardMessage(ctx.db, m.chatId, m.replyTo.message_id);
-    if (!repliedTxn) {
-      const step = await getEphemeral(ctx.db, stepperKey(m.chatId, m.replyTo.message_id), ctx.now());
-      if (step && step.txnId) repliedTxn = await getTransaction(ctx.db, m.chatId, step.txnId);
+    const step = repliedTxn ? null : await getEphemeral(ctx.db, stepperKey(m.chatId, m.replyTo.message_id), ctx.now());
+    if (step) {
+      stepperMessageId = m.replyTo.message_id;
+      if (!fastAgent) fastAgent = "ledger";
+      if (step.txnId) {
+        repliedTxn = await getTransaction(ctx.db, m.chatId, step.txnId);
+      } else if (Array.isArray(step.items) && step.items.length > 0) {
+        const batchRows = await Promise.all(step.items.map((it) => getTransaction(ctx.db, m.chatId, it.id)));
+        const lines = [];
+        batchRows.forEach((r, idx) => {
+          if (!r || r.status === "deleted") return;
+          const it = step.items[idx] || {};
+          const parts = [
+            r.occurred_on + (it.displayTime ? " " + it.displayTime : ""),
+            r.merchant || "Unknown",
+            r.currency + " " + fromMinor(r.amount_minor),
+            r.category || "Uncategorized"
+          ];
+          if (r.account_last4) parts.push("*" + r.account_last4);
+          lines.push(idx + 1 + ". transaction_id=" + r.id + " (" + parts.join(", ") + ")");
+        });
+        if (lines.length > 0) {
+          userContent = "[Replied to batch tagging card:\n" + lines.join("\n") + "]\n" + stripped;
+        }
+      }
     }
     if (repliedTxn) {
       userContent =
@@ -226,6 +252,14 @@ export async function handleOrchestrator(ctx, m, tenant) {
         repliedTxn.direction +
         ")]\n" +
         stripped;
+    } else if (!step && m.replyTo.text) {
+      const quoted = String(m.replyTo.text).trim().slice(0, 800);
+      if (quoted) {
+        if (!fastAgent && /\b(?:unknown|untagged|uncategorized|share merchant|categorize)\b/i.test(quoted)) {
+          fastAgent = "ledger";
+        }
+        userContent = "[Replying to earlier message:\n" + quoted + "]\n" + stripped;
+      }
     }
   }
   await runTurn(ctx, {
@@ -233,6 +267,7 @@ export async function handleOrchestrator(ctx, m, tenant) {
     username: m.username || "",
     tenantStatus,
     activeAgent: fastAgent,
+    stepperMessageId,
     messages: [{ role: "user", content: userContent }],
     turn: 1
   });

@@ -59,18 +59,13 @@ export function ledgerSystemPrompt(today) {
     "\n- Credit categories: " +
     CREDIT_CATEGORIES.join(", ") +
     "\n- 'Untagged' means missing category; 'unknown' / 'unnamed' means missing merchant name (even if already categorized).\n" +
-    "- Call list_untagged_transactions (passing start_date and end_date when a timeframe is asked, e.g. 'past 2 days' = " +
-    shiftIsoDate(today, -2) +
-    " to " +
-    today +
-    ", 'this month' = " +
+    "- PREFERRED UI FOR TAGGING LISTS: Whenever the user asks to view, tag, categorize, or name untagged or unknown/unnamed transactions WITHOUT providing the tag names in the same message (e.g. 'I want to tag the 4 unknown transactions this month', 'show untagged spends', 'categorize recent transactions'), call `open_tagging_card` (passing start_date/end_date when a timeframe is given, e.g. 'this month' = " +
     today.slice(0, 8) +
     "01 to " +
     today +
-    ").\n" +
-    "- IMPORTANT: Whenever the user asks to tag, name, or see 'unknown' or 'unnamed' transactions, pass `include_unnamed: true` (and `spend_only: true` when referring to unknown spends/merchants). Also, if the user asks to tag transactions for a period and `list_untagged_transactions` returns 0 missing-category rows, re-call `list_untagged_transactions` with `include_unnamed: true, spend_only: true` before saying nothing needs tagging!\n" +
-    "- When listing untagged or unknown transactions for the user to tag/name, call ask_user with a numbered list showing date, time_ist (if present), amount, current category, and card/account (*account_last4 or card_label if present), asking what merchant/category names to set (e.g. '1 Swiggy, 2 Chai').\n" +
-    "- Never guess transaction_id: find it via list_untagged_transactions or search_transactions first.\n" +
+    ', and `include_unnamed: true, spend_only: true` when referring to unknown/unnamed spends). When `open_tagging_card` returns `already_sent_to_chat: true`, return an empty reply (`""`). Only reply in text if `count: 0`.\n' +
+    "- When the user ALREADY provides tags/edits (e.g. 'Rahul is Food', '1 Medplus, 3 HP Petrol', or replying to `[Replied to batch tagging card: ...]` or `[Replying to earlier message: ...]`), resolve `transaction_id`s from the provided card context (or via `list_untagged_transactions` / `search_transactions` if needed) and call `update_transaction`, `batch_update_transactions`, or `delete_transaction` directly.\n" +
+    "- Never guess transaction_id: use the IDs from `[Replied to ...]` or find them via list_untagged_transactions (`include_unnamed: true` for unknown rows) or search_transactions.\n" +
     "- When multiple plausible rows match, call ask_user to disambiguate before mutating or deleting.\n" +
     "- Use delete_transaction when the user asks to delete/remove/discard a specific transaction (if >1 match, disambiguate with ask_user first).\n" +
     "- When the user categorizes multiple items in one message (e.g. 'Rahul is Food, Kirana is Groceries'), call batch_update_transactions.\n" +

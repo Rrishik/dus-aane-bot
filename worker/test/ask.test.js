@@ -83,12 +83,27 @@ describe("/ask", () => {
     expect(q.args[1]).toBe("Which month?");
     expect(q.args[2].reply_markup.force_reply).toBe(true);
 
-    // Replying WITHOUT swipe-to-reply still resumes the open ask_user prompt!
+    // Replying 20 minutes later (past old 10m TTL) WITHOUT swipe-to-reply still resumes the open ask_user prompt!
+    ctx.advance(20 * 60 * 1000);
     replies.push("Food in October: ₹900.");
     await handleUpdate(ctx, msg("October"));
     const resumed = ctx.llm.calls.at(-1);
     expect(resumed.at(-1)).toMatchObject({ role: "tool", content: "October" });
     expect(lastSent(ctx).args[1]).toBe("Food in October: ₹900.");
+
+    // Even past 24h expiry, swipe-replying to an old bot message passes quoted `reply_to_message.text` into context!
+    replies.push("Done from quoted context.");
+    await handleUpdate(ctx, {
+      message: {
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "1 Medplus",
+        reply_to_message: { message_id: 99999, text: "Please share merchant names:\n1. 2026-10-07 ₹104 Health" }
+      }
+    });
+    expect(ctx.llm.calls.at(-1).at(-1).content).toContain(
+      "[Replying to earlier message:\nPlease share merchant names:"
+    );
 
     // Once answered, a later plain message starts a fresh turn 1 (not a tool reply).
     replies.push("Fresh turn.");

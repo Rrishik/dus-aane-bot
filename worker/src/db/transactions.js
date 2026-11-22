@@ -205,6 +205,14 @@ export function isUntaggedTransaction(r) {
   return !c || c === "uncategorized";
 }
 
+export function isUnnamedTransaction(r) {
+  if (!r) return false;
+  const m = String(r.merchant || "")
+    .trim()
+    .toLowerCase();
+  return !m || m === "unknown";
+}
+
 const UNTAGGED_WHERE_CLAUSE = "(category IS NULL OR TRIM(category) = '' OR LOWER(TRIM(category)) = 'uncategorized')";
 const UNNAMED_WHERE_CLAUSE = "(merchant IS NULL OR TRIM(merchant) = '' OR LOWER(TRIM(merchant)) = 'unknown')";
 const SOURCE_SIGNALS_SELECT =
@@ -249,9 +257,19 @@ export async function listUntaggedTransactions(
   ).results;
 }
 
-export async function countUntaggedTransactions(db, tenantId, { from, to } = {}) {
-  const where = ["tenant_id = ?", "status = 'confirmed'", UNTAGGED_WHERE_CLAUSE];
+export async function countUntaggedTransactions(
+  db,
+  tenantId,
+  { from, to, includeUnnamed = false, spendOnly = false } = {}
+) {
+  const clause = includeUnnamed
+    ? "(" + UNTAGGED_WHERE_CLAUSE + " OR " + UNNAMED_WHERE_CLAUSE + ")"
+    : UNTAGGED_WHERE_CLAUSE;
+  const where = ["tenant_id = ?", "status = 'confirmed'", clause];
   const params = [String(tenantId)];
+  if (spendOnly) {
+    where.push("kind = 'spend'");
+  }
   if (from) {
     where.push("occurred_on >= ?");
     params.push(from);
@@ -267,9 +285,19 @@ export async function countUntaggedTransactions(db, tenantId, { from, to } = {})
   return Number(n) || 0;
 }
 
-export async function listUntaggedWithSignals(db, tenantId, { from, to, excludeIds = [], limit = 8 } = {}) {
-  const where = ["tenant_id = ?", "status = 'confirmed'", UNTAGGED_WHERE_CLAUSE];
+export async function listUntaggedWithSignals(
+  db,
+  tenantId,
+  { from, to, includeUnnamed = false, spendOnly = false, excludeIds = [], limit = 8 } = {}
+) {
+  const clause = includeUnnamed
+    ? "(" + UNTAGGED_WHERE_CLAUSE + " OR " + UNNAMED_WHERE_CLAUSE + ")"
+    : UNTAGGED_WHERE_CLAUSE;
+  const where = ["tenant_id = ?", "status = 'confirmed'", clause];
   const params = [String(tenantId)];
+  if (spendOnly) {
+    where.push("kind = 'spend'");
+  }
   if (from) {
     where.push("occurred_on >= ?");
     params.push(from);

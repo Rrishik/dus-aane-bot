@@ -381,5 +381,193 @@ describe("LLM + precedent batch tag suggestions & confirmation UX", () => {
         { index: 2, skip: true }
       ]
     });
+    // Conversational / delete phrases must return null so Tier-2 LLM fallback handles them.
+    expect(parseBatchStepperReply("1 was probably Medplus, delete 2", items, rowsById)).toBeNull();
+  });
+
+  it("Unified Interactive Card for unknown spends: 1-by-1 quick-merchant chips, 0-LLM batch auto-commit, and Tier-2 LLM fallback", async () => {
+    const EVENING = istAt("2026-10-07", 21, 0);
+    const replies = [];
+    const ctx = testContext({ now: EVENING, llmReplies: replies });
+    await seedTenant(ctx, "111");
+
+    const id1 = await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-07",
+        amountMinor: 10400,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        category: "Health",
+        accountLast4: "1425"
+      },
+      { source: "email", sourceRef: "u1", receivedAt: istAt("2026-10-07", 8, 16) },
+      EVENING
+    );
+    const id2 = await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-06",
+        amountMinor: 5000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        category: "Shopping",
+        accountLast4: "1264"
+      },
+      { source: "email", sourceRef: "u2", receivedAt: istAt("2026-10-06", 20, 37) },
+      EVENING
+    );
+    const id3 = await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-05",
+        amountMinor: 231800,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        category: "Shopping",
+        accountLast4: "1264"
+      },
+      { source: "email", sourceRef: "u3", receivedAt: istAt("2026-10-05", 15, 39) },
+      EVENING
+    );
+    const id4 = await insertTransaction(
+      ctx.db,
+      "111",
+      {
+        occurredOn: "2026-10-04",
+        amountMinor: 30000,
+        currency: "INR",
+        direction: "debit",
+        kind: "spend",
+        merchant: null,
+        category: "Food",
+        accountLast4: "1264"
+      },
+      { source: "email", sourceRef: "u4", receivedAt: istAt("2026-10-04", 13, 32) },
+      EVENING
+    );
+
+    // 1. User asks to tag unknown spends -> `open_tagging_card` posts interactive card (0 suggester LLM calls!).
+    replies.push(
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "tc-open",
+            type: "function",
+            function: {
+              name: "open_tagging_card",
+              arguments: JSON.stringify({
+                start_date: "2026-10-01",
+                end_date: "2026-10-07",
+                include_unnamed: true,
+                spend_only: true
+              })
+            }
+          }
+        ]
+      },
+      ""
+    );
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 500,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "I want to tag the 4 unknown transactions for this month"
+      }
+    });
+    const cardMsg = ctx.tg.of("sendMessage").at(-1);
+    const cardMsgId = cardMsg.result.message_id;
+    expect(cardMsg.args[1]).toContain("🏷 *Name unknown transactions* _(4 left)_");
+    expect(cardMsg.args[1]).toContain("*1425 · 💊 Health");
+
+    // 2. Toggle to [🎯 1-by-1] -> shows quick-merchant chips for Health (`Pharmacy`, `Doctor`, `Lab Test`).
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb-s",
+        data: "tagq_msingle",
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: cardMsgId }
+      }
+    });
+    const singleEdit = ctx.tg.of("editMessageText").at(-1);
+    expect(singleEdit.args[3].reply_markup.inline_keyboard[0].map((b) => b.text)).toEqual([
+      "Pharmacy",
+      "Doctor",
+      "Lab Test"
+    ]);
+    // Toggle back to [✨ Batch].
+    await handleUpdate(ctx, {
+      callback_query: {
+        id: "cb-b",
+        data: "tagq_mbatch",
+        from: { id: 111 },
+        message: { chat: { id: 111 }, message_id: cardMsgId }
+      }
+    });
+
+    // 3. Tier-2 LLM fallback: conversational reply ("1 was Medplus, not sure about the rest") falls through to LLM and refreshes card!
+    const llmCallsBeforeFallback = ctx.llm.calls.length;
+    replies.push(
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "tc-upd1",
+            type: "function",
+            function: {
+              name: "update_transaction",
+              arguments: JSON.stringify({ transaction_id: id1, merchant: "MedPlus" })
+            }
+          }
+        ]
+      },
+      "Tagged #1 as MedPlus."
+    );
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 501,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "1 was Medplus, not sure about the rest",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect(ctx.llm.calls.length).toBeGreaterThan(llmCallsBeforeFallback);
+    expect(ctx.llm.calls.at(-2).at(-1).content).toContain("[Replied to batch tagging card:");
+    expect(ctx.llm.calls.at(-2).at(-1).content).toContain("1. transaction_id=" + id1);
+    expect(await getTransaction(ctx.db, "111", id1)).toMatchObject({ merchant: "MedPlus", category: "Health" });
+    // Batch card refreshed in-place to 3 left!
+    expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("3 left · ✓ 1 done");
+
+    // 4. Tier-1 deterministic batch reply (even 30 minutes later, with trailing comma): 0 LLM calls + auto-commits!
+    ctx.advance(30 * 60 * 1000);
+    const llmCallsBeforeTier1 = ctx.llm.calls.length;
+    await handleUpdate(ctx, {
+      message: {
+        message_id: 502,
+        chat: { id: 111, type: "private" },
+        from: { id: 111, first_name: "Alice" },
+        text: "1 lenskart, 2 fuel HP, 3 avocado vendor,",
+        reply_to_message: { message_id: cardMsgId }
+      }
+    });
+    expect(ctx.llm.calls.length).toBe(llmCallsBeforeTier1);
+    expect(await getTransaction(ctx.db, "111", id2)).toMatchObject({ merchant: "Lenskart", category: "Shopping" });
+    expect(await getTransaction(ctx.db, "111", id3)).toMatchObject({ merchant: "HP Petrol", category: "Travel" });
+    expect(await getTransaction(ctx.db, "111", id4)).toMatchObject({ merchant: "Avocado Vendor", category: "Food" });
+    expect(ctx.tg.of("editMessageText").at(-1).args[2]).toContain("✅ *All caught up!* Tagged 4 transactions.");
   });
 });

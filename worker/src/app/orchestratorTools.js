@@ -14,6 +14,7 @@ import { registerEmailForChat, sendSetupEmail } from "./commands.js";
 import { handleBackfill } from "./backfill.js";
 import { handleExport, handleDeleteMyData } from "./data.js";
 import { handleSmsPaste } from "./sms.js";
+import { openUntaggedCard, refreshStepperMessage } from "./tagStepper.js";
 import { extractIstTimeInfo } from "./tagSuggester.js";
 import { fromMinor, toMinor } from "../util/money.js";
 
@@ -137,7 +138,25 @@ export const ANALYTICS_TOOLS = [
   ASK_USER_TOOL
 ];
 
+const OPEN_TAGGING_CARD_TOOL = fn(
+  "open_tagging_card",
+  "Post an interactive tagging card in chat (with [🎯 1-by-1] quick-merchant/category chips, 0-LLM batch swipe-reply, and 24h persistence) for untagged or unknown/unnamed transactions.",
+  {
+    ...DATE_PARAMS,
+    include_unnamed: {
+      type: "boolean",
+      description:
+        "Set true when the user wants to tag, name, or view unknown/unnamed transactions (even if already categorized)."
+    },
+    spend_only: {
+      type: "boolean",
+      description: "Set true when naming unknown spend transactions (excludes Transfer and Invest)."
+    }
+  }
+);
+
 export const LEDGER_TOOLS = [
+  OPEN_TAGGING_CARD_TOOL,
   LIST_UNTAGGED_TOOL,
   SEARCH_TOOL,
   fn(
@@ -502,6 +521,25 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       };
     },
 
+    async open_tagging_card(args) {
+      const card = await openUntaggedCard(ctx, tid, {
+        windowFrom: args.start_date,
+        windowTo: args.end_date,
+        includeUnnamed: Boolean(args.include_unnamed),
+        spendOnly: Boolean(args.spend_only)
+      });
+      if (!card.sent) {
+        return { ok: true, count: 0, already_sent_to_chat: false };
+      }
+      runMeta.suppressFinalText = true;
+      return {
+        ok: true,
+        count: card.count,
+        include_unnamed: card.include_unnamed,
+        already_sent_to_chat: true
+      };
+    },
+
     async update_transaction(args) {
       const res = await mutateTransaction(ctx, tid, args.transaction_id, {
         merchant: args.merchant,
@@ -511,12 +549,20 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       });
       if (!res.ok) return res;
       invalidateCache();
+      if (runMeta.stepperMessageId) {
+        await refreshStepperMessage(ctx, tid, runMeta.stepperMessageId, 1);
+      }
       return { ok: true, transaction_id: res.transaction_id, changes: res.changes };
     },
 
     async batch_update_transactions(args) {
       const res = await batchMutateTransactions(ctx, tid, args.items);
-      if (res.updated > 0) invalidateCache();
+      if (res.updated > 0) {
+        invalidateCache();
+        if (runMeta.stepperMessageId) {
+          await refreshStepperMessage(ctx, tid, runMeta.stepperMessageId, res.updated);
+        }
+      }
       return res;
     },
 
@@ -524,6 +570,9 @@ export function askToolExecutor(ctx, tenantId, runMeta = {}) {
       const res = await removeTransaction(ctx, tid, args.transaction_id);
       if (!res.ok) return res;
       invalidateCache();
+      if (runMeta.stepperMessageId) {
+        await refreshStepperMessage(ctx, tid, runMeta.stepperMessageId, 0);
+      }
       return { ok: true, transaction_id: res.transaction_id, card_deleted: res.cardRemoved };
     },
 

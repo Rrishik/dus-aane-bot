@@ -369,7 +369,7 @@ const SPLIT_ALL_RE = /^split\s+all$/i;
 const FLIP_REPLY_RE = /^(?:flip|money\s+in|money\s+out|credit|debit)$/i;
 
 const CONVERSATIONAL_REPLY_RE =
-  /[?]|^(?:split|settle|undo|unsplit|flip|amt|amount|make|change|set|fix|how|what|why|when|where|who|show|list|export|cancel)\b/i;
+  /[?]|^(?:split|settle|undo|unsplit|flip|amt|amount|make|change|set|fix|how|what|why|when|where|who|show|list|export|cancel|delete|remove|discard|maybe|probably)\b|\b(?:not\s+sure|don'?t\s+know|except|instead)\b/i;
 
 // Descriptive aliases that also double as a clean merchant label when the
 // transaction has no merchant name yet (e.g. "cc bill" -> "CC Bill" + Transfer).
