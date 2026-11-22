@@ -88,12 +88,19 @@ export function formatBatchSuggestionsSection(rows, items, totalLeft, doneCount 
       );
     } else {
       const exIdx = i + 1;
-      const hint = curName ? "`" + exIdx + " Food`" : "`" + exIdx + " Chai Food`";
+      const hint =
+        r.direction === "credit"
+          ? curName
+            ? "`" + exIdx + " Refund`"
+            : "`" + exIdx + " Dividend`"
+          : curName
+            ? "`" + exIdx + " Food`"
+            : "`" + exIdx + " Chai Food`";
       lines.push(i + 1 + ". ❓ " + dot + " " + baseLabel + " · " + when + " → _reply_ " + hint);
     }
   });
 
-  lines.push("", "_Swipe-reply overrides (e.g. `1 Food, 2 CC Bill`), or tap:_");
+  lines.push("", "💡 *Swipe-reply* overrides (e.g. `1 Food, 2 CC Bill`), or tap:");
   return lines.join("\n");
 }
 

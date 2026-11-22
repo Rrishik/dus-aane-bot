@@ -198,6 +198,7 @@ describe("LLM + precedent batch tag suggestions & confirmation UX", () => {
     expect(batchSend.args[1]).not.toContain("Swiggy"); // Hallucination stripped!
     expect(batchSend.args[1]).toContain("4. ✓ 🟢 *₹100*");
     expect(batchSend.args[1]).toContain("*Dividend* · 💼 *Income*");
+    expect(batchSend.args[1]).not.toMatch(/_[^_\n]*`[^`\n]+`[^_\n]*_/);
     expect(batchSend.args[2].reply_markup.inline_keyboard[0][0].text).toBe("✅ Accept 3 suggestions");
 
     // Verify timing was sent in LLM prompt payload.
